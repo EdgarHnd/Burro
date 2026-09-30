@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         .commands {
             CommandGroup(after: .newItem) {
                 Button("Add Repository…") { store.addRepository() }.keyboardShortcut("o", modifiers: [.command, .shift])
-                Button("Refresh Worktrees") { Task { await store.refresh() } }.keyboardShortcut("r").disabled(store.scanning)
+                Button(store.filter == .usage ? "Refresh Usage" : "Refresh Worktrees") { Task { if store.filter == .usage { await store.refreshUsage(force: true) } else { await store.refresh() } } }.keyboardShortcut("r").disabled(store.filter == .usage ? store.checkingUsage : store.scanning)
                 Button("Show Agent Notch") { notch.show() }.keyboardShortcut("b", modifiers: [.command, .shift])
             }
         }
@@ -67,6 +67,7 @@ struct MonitorMenu: View {
         Divider()
         Button("Show Agent Notch") { notch.show() }
         Toggle("Enable Notch", isOn: $store.notchEnabled)
+        Button("Open Usage") { store.filter = .usage; notch.openDashboardWindow() }
         Button("Open Burro") { notch.openDashboardWindow() }
         Button("Refresh") { Task { await store.refreshAgents(); await store.refreshRemotes(); await store.refresh() } }.disabled(store.scanning)
         SettingsLink()

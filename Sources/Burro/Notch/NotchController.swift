@@ -11,6 +11,7 @@ import BurroCore
     var includeIdle = false
     var holdingList = false
     var visibleRows = 3
+    var navigation = NotchNavigation()
     var compactGeometry = NotchGeometry.layout(screen: CGRect(x: 0, y: 0, width: 1440, height: 900),
         visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 875), safeTop: 0, hardwareWidth: 0, expanded: false)
     var expandedGeometry = NotchGeometry.layout(screen: CGRect(x: 0, y: 0, width: 1440, height: 900),
@@ -33,6 +34,7 @@ import BurroCore
     private var keyMonitor: Any?
     private var pointerMonitors: [Any] = []
     private var trackingMenus: Set<ObjectIdentifier> = []
+    private(set) var navigationBounds: [NotchPage: CGRect] = [:]
     private let pointerLocation: () -> NSPoint
     private let reduceMotion: () -> Bool
     private let hoverLog = Logger(subsystem: "local.burro.worktrees", category: "Notch")
@@ -62,6 +64,8 @@ import BurroCore
                 onSelect: { [weak self] in self?.select($0) },
                 onInspect: { [weak self] in self?.inspect($0) },
                 onOpenDashboard: { [weak self] in self?.openDashboardWindow() },
+                onSelectPage: { [weak self] in self?.selectPage($0) },
+                onNavigationBounds: { [weak self] in self?.setNavigationBounds($0) },
                 onContentChange: { [weak self] in self?.configure(animate: true) }, compact: compact)
         }
         let surface = NotchSurfaceView(compact: content(compact: true), expanded: content(compact: false))
@@ -124,10 +128,12 @@ import BurroCore
         else { show() }
     }
     func collapse() {
+        presentation.navigation.endPreview()
         hoverState.dismiss(pointerInside: containsPointer())
         applyInteraction()
     }
     func stop() {
+        presentation.navigation.endPreview(); navigationBounds = [:]
         hoverTimer?.invalidate(); transitionID = nil
         scheduledDeadline = nil
         for observer in observers { NotificationCenter.default.removeObserver(observer); NSWorkspace.shared.notificationCenter.removeObserver(observer) }
@@ -155,7 +161,27 @@ import BurroCore
         }
         hoverState.updatePointer(inside: inside, now: now)
         hoverState.advance(now: now)
+        var navigation = presentation.navigation
+        if hoverState.expanded && trackingMenus.isEmpty {
+            let frame = presentation.expandedGeometry.frame
+            let pointer = pointerLocation()
+            let local = CGPoint(x: pointer.x - frame.minX, y: frame.maxY - pointer.y)
+            let page = NotchPage.allCases.first { navigationBounds[$0]?.contains(local) == true }
+            navigation.updatePointer(over: page, now: now)
+            navigation.advance(now: now)
+        } else { navigation.endPreview() }
+        // Pointer events are frequent; publish only actual navigation changes to SwiftUI.
+        if navigation != presentation.navigation { presentation.navigation = navigation }
         applyInteraction()
+    }
+    func setNavigationBounds(_ bounds: [NotchPage: CGRect]) {
+        guard bounds != navigationBounds else { return }
+        navigationBounds = bounds
+        samplePointer(source: "tab layout")
+    }
+    func selectPage(_ page: NotchPage) {
+        presentation.navigation.select(page)
+        armHoverDeadline()
     }
     private func updateListHold() {
         presentation.holdingList = hoverState.expanded && (hoverState.pointerInside || panel?.isKeyWindow == true)
@@ -171,16 +197,17 @@ import BurroCore
         armHoverDeadline()
     }
     private func armHoverDeadline() {
-        guard scheduledDeadline != hoverState.deadline else { return }
+        let next = [hoverState.deadline, presentation.navigation.deadline].compactMap { $0 }.min()
+        guard scheduledDeadline != next else { return }
         hoverTimer?.invalidate()
-        scheduledDeadline = hoverState.deadline
+        scheduledDeadline = next
         guard let deadline = scheduledDeadline else { return }
         // A common-mode timer continues to fire while AppKit is in a mouse-tracking loop.
         let timer = Timer(timeInterval: max(0, deadline - ProcessInfo.processInfo.systemUptime), repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.scheduledDeadline = nil
-                self.samplePointer(source: "exit deadline")
+                self.samplePointer(source: "hover deadline")
             }
         }
         timer.tolerance = 0.002
@@ -215,6 +242,7 @@ import BurroCore
             hoverTimer?.invalidate(); transitionID = nil; scheduledDeadline = nil; surface?.cancel()
             hoverState.dismiss(pointerInside: false)
             presentation.expanded = false; presentation.pinned = false; presentation.holdingList = false
+            presentation.navigation.endPreview()
             panel.orderOut(nil); return
         }
         let screens = NSScreen.screens

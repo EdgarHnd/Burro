@@ -61,7 +61,22 @@ if [[ ! -f "$RESOURCE_BUNDLE/remote_probe.py" && ! -f "$RESOURCE_BUNDLE/Contents
   exit 1
 fi
 cp -R "$RESOURCE_BUNDLE" "$APP_CONTENTS/Resources/"
-codesign --force --deep --sign - "$APP_BUNDLE"
+# Keep the designated identity stable across local builds so Keychain approvals
+# survive executable changes. CI/source-only builds without a certificate stay ad hoc.
+# Set BURRO_SIGNING_IDENTITY to an explicit identity (or '-' for ad hoc).
+signing_identity="${BURRO_SIGNING_IDENTITY:-}"
+if [[ -z "$signing_identity" ]]; then
+  identities="$(/usr/bin/security find-identity -v -p codesigning 2>/dev/null || true)"
+  saved_identity="$(cat "$ROOT_DIR/dist/.signing-identity" 2>/dev/null || true)"
+  if [[ "$saved_identity" =~ ^[[:xdigit:]]{40}$ && "$identities" == *"$saved_identity"* ]]; then
+    signing_identity="$saved_identity"
+  else
+    signing_identity="$(echo "$identities" | sed -nE 's/.* ([[:xdigit:]]{40}) "Apple Development:.*$/\1/p' | head -1)"
+  fi
+  signing_identity="${signing_identity:--}"
+fi
+codesign --force --deep --sign "$signing_identity" "$APP_BUNDLE"
+printf '%s\n' "$signing_identity" > "$ROOT_DIR/dist/.signing-identity"
 codesign --verify --deep --strict "$APP_BUNDLE"
 open_app() { /usr/bin/open -n "$APP_BUNDLE"; }
 verify_app() {

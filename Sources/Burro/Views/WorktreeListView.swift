@@ -13,12 +13,17 @@ struct WorktreeListView: View {
                     Text("\(store.visibleWorktrees.count) worktrees").font(.subheadline).foregroundStyle(.secondary)
                 }
                 HStack(spacing: 28) {
-                    metric("Working", value: store.snapshot.worktrees.filter(\.isWorking).count, color: .green)
-                    metric("In use", value: store.snapshot.worktrees.filter(\.isInUse).count, color: .primary)
-                    metric("Inactive", value: store.snapshot.worktrees.filter { !$0.isInUse }.count, color: .secondary)
-                    metric("Safe candidates", value: store.snapshot.worktrees.filter { $0.assessment.level == .candidate }.count, color: .green)
+                    metric("Working", value: metricWorktrees.filter(\.isWorking).count, color: .green)
+                    metric("In use", value: metricWorktrees.filter(\.isInUse).count, color: .primary)
+                    metric("Inactive", value: metricWorktrees.filter { !$0.isInUse }.count, color: .secondary)
+                    metric("Ready to remove", value: metricWorktrees.filter { store.cleanupEligibility($0).allowed }.count, color: .green)
                 }
             }.padding(Layout.inset)
+            if store.filter == .cleanup || store.filter == .candidates {
+                Text("Remove unused folders while keeping their branches. Local changes and active chats need attention first.")
+                    .font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Layout.inset).padding(.bottom, Layout.gap)
+            }
             Divider()
             if !store.didScan {
                 skeleton
@@ -36,10 +41,10 @@ struct WorktreeListView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 5) {
                                 Image(systemName: tree.isPrimary ? "house" : "arrow.triangle.branch").foregroundStyle(.secondary)
-                                Text(tree.branch).font(.body.weight(.medium)).lineLimit(1)
+                                Text(URL(fileURLWithPath: tree.path).lastPathComponent).font(.body.weight(.medium)).lineLimit(1)
                                 if tree.protectedByUser { Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary) }
                             }
-                            Text(tree.repository + " / " + URL(fileURLWithPath: tree.path).lastPathComponent)
+                            Text("Branch: " + tree.branch)
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                         }.padding(.vertical, 7).help(tree.path)
                     }.width(min: 180, ideal: 280)
@@ -54,7 +59,13 @@ struct WorktreeListView: View {
                                 .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }.width(min: 100, ideal: 115, max: 150)
-                    TableColumn("Cleanup") { tree in SafetyBadge(level: tree.assessment.level) }.width(min: 110, ideal: 120, max: 140)
+                    TableColumn("Cleanup") { tree in
+                        VStack(alignment: .leading, spacing: 4) {
+                            CleanupBadge(status: store.cleanupEligibility(tree).status)
+                            Text(store.cleanupEligibility(tree).allowed ? tree.facts.integrationSummary : store.cleanupEligibility(tree).summary)
+                                .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                        }.help(store.cleanupEligibility(tree).reasons.joined(separator: "\n") + "\n" + tree.facts.integrationSummary)
+                    }.width(min: 155, ideal: 190, max: 240)
                 }
                 .contextMenu(forSelectionType: String.self) { paths in
                     if let path = paths.first, let tree = store.snapshot.worktrees.first(where: { $0.id == path }) {
@@ -62,7 +73,9 @@ struct WorktreeListView: View {
                         Button("Open in Terminal") { store.openTerminal(tree) }
                         Button("Copy Path") { store.copyPath(tree) }
                         Divider()
-                        Button(tree.protectedByUser ? "Remove Protection" : "Protect Worktree") { store.protect(tree) }
+                        Button(tree.protectedByUser ? "Remove Protection" : "Protect Worktree") { store.protect(tree) }.disabled(store.cleaningWorktree)
+                        Button(store.cleanupEligibility(tree).allowed ? "Move to Trash…" : "Show blockers…") { store.selection = tree.id; store.cleanupTarget = tree }
+                            .disabled(store.cleaningWorktree)
                     }
                 }
             }
@@ -75,13 +88,14 @@ struct WorktreeListView: View {
                 }
                 HStack {
                     Image(systemName: "eye").foregroundStyle(.secondary)
-                    Text("Read-only monitoring").foregroundStyle(.secondary)
+                    Text("Monitoring is read-only · cleanup requires confirmation").foregroundStyle(.secondary)
                     Spacer()
                     if store.didScan { Text(store.snapshot.scannedAt, style: .time).foregroundStyle(.tertiary) }
                 }.font(.caption)
             }.padding(.horizontal, Layout.inset).padding(.vertical, Layout.gap)
         }
     }
+    private var metricWorktrees: [Worktree] { store.visibleWorktrees }
     private var title: String {
         if case .repository(let path) = store.filter { return URL(fileURLWithPath: path).lastPathComponent }
         return store.filter.title

@@ -6,6 +6,7 @@ struct WorktreeDetailView: View {
     var store: AppStore
     var tree: Worktree
     @State private var showHistory = false
+    @State private var comparisonBranches: [String] = []
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -18,7 +19,8 @@ struct WorktreeDetailView: View {
                         }.buttonStyle(.borderless).help(tree.protectedByUser ? "Remove your protection" : "Protect this worktree")
                             .accessibilityLabel(tree.protectedByUser ? "Remove protection" : "Protect worktree")
                     }
-                    Text(tree.branch).font(.title3.weight(.semibold)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    Text(URL(fileURLWithPath: tree.path).lastPathComponent).font(.title3.weight(.semibold)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    Label("Branch: " + tree.branch, systemImage: "arrow.triangle.branch").font(.callout).textSelection(.enabled)
                     Text(tree.path.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~"))
                         .font(.caption).foregroundStyle(.secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     HStack {
@@ -29,27 +31,44 @@ struct WorktreeDetailView: View {
                 }
                 Divider()
                 VStack(alignment: .leading, spacing: Layout.gap) {
-                    HStack { sectionLabel("CLEANUP"); Spacer(); SafetyBadge(level: tree.assessment.level) }
-                    ForEach(Array(tree.assessment.reasons.enumerated()), id: \.offset) { _, reason in
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: tree.assessment.level == .candidate ? "checkmark" : "minus").font(.caption).foregroundStyle(tree.assessment.level.color).frame(width: 12)
-                            Text(reason).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        }
+                    let eligibility = store.cleanupEligibility(tree)
+                    HStack { sectionLabel("CLEANUP"); Spacer(); CleanupBadge(status: eligibility.status) }
+                    ForEach(eligibility.reasons, id: \.self) { reason in
+                        Text(reason).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
-                    if tree.assessment.level != .candidate {
-                        Text("Inactive does not mean disposable.").font(.caption).foregroundStyle(.tertiary)
+                    if eligibility.managedByCodex {
+                        Text("Use Archive in Codex for this checkout; it preserves a recoverable snapshot.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
+                    Button(eligibility.allowed ? "Move to Trash…" : "Show blockers…", systemImage: "trash") { store.cleanupTarget = tree }
+                        .disabled(store.cleaningWorktree)
+
                 }
                 Divider()
                 agents
                 Divider()
                 VStack(alignment: .leading, spacing: Layout.gap) {
-                    sectionLabel("GIT STATUS")
+                    sectionLabel("CODE & COMMITS")
+                    Text(tree.facts.integrationSummary).font(.callout).textSelection(.enabled)
+                    if let branch = tree.facts.retainedBranchName {
+                        fact("Commits retained on", branch)
+                    }
+                    Text("Removing the folder keeps the branch. Whether its code has landed is shown separately above.")
+                        .font(.caption).foregroundStyle(.secondary)
                     fact("Tracked changes", "\(tree.facts.changed)")
                     fact("Untracked", "\(tree.facts.untracked)")
+                    if !(tree.facts.changedPaths ?? []).isEmpty { paths("Modified or staged files", tree.facts.changedPaths ?? [], total: tree.facts.changed) }
+                    if !(tree.facts.untrackedPaths ?? []).isEmpty { paths("Untracked files", tree.facts.untrackedPaths ?? [], total: tree.facts.untracked) }
                     fact("Ignored", "\(tree.facts.ignoredCount)")
                     fact("Unpushed", tree.facts.unpushed.map(String.init) ?? "Unknown")
-                    fact("Compared with", tree.facts.base ?? "Unavailable")
+                    Picker("Compare with", selection: Binding(
+                        get: { store.baseOverrides[tree.repositoryPath] ?? "" },
+                        set: { store.baseOverrides[tree.repositoryPath] = $0; Task { await store.refresh() } })) {
+                        Text("Automatic (\(tree.facts.base ?? "unavailable"))").tag("")
+                        ForEach(Array(Set(comparisonBranches + [store.baseOverrides[tree.repositoryPath]].compactMap { $0 }).sorted()), id: \.self) { Text($0).tag($0) }
+                    }.controlSize(.small).disabled(store.scanning || store.cleaningWorktree)
+                    Text("Applies to this repository. Uses local Git refs; choose your integration branch, such as origin/staging.")
+                        .font(.caption2).foregroundStyle(.secondary)
                     fact("HEAD", String(tree.head.prefix(9)))
                     if let commit = tree.facts.lastCommit { HStack { Text("Last commit"); Spacer(); Text(commit, style: .relative) }.font(.caption).foregroundStyle(.secondary) }
                     if !tree.facts.ignored.isEmpty {
@@ -68,10 +87,14 @@ struct WorktreeDetailView: View {
                         ForEach(tree.processes, id: \.pid) { process in fact(process.name, "PID \(process.pid)") }
                     }
                 }
-                Text("A local snapshot, not a deletion guarantee. Burro does not fetch, remove worktrees, or change agent settings.")
+                Text("Cleanup rechecks activity and Git evidence, then preserves the folder in Trash and keeps the branch. Emptying Trash is permanent. Git refs are not fetched automatically.")
                     .font(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }.padding(Layout.inset)
         }.frame(minWidth: 280, idealWidth: Layout.inspector)
+        .task(id: tree.repositoryPath) {
+            let branches = await store.comparisonBranches(tree)
+            if !Task.isCancelled { comparisonBranches = branches }
+        }
         .onChange(of: tree.id) { _, _ in showHistory = false }
     }
     private var agents: some View {
@@ -90,6 +113,14 @@ struct WorktreeDetailView: View {
                 }.font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+    private func paths(_ label: String, _ entries: [String], total: Int) -> some View {
+        DisclosureGroup(label) {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(entries, id: \.self) { Text($0).font(.caption.monospaced()).textSelection(.enabled) }
+                if total > entries.count { Text("More entries not shown").font(.caption).foregroundStyle(.tertiary) }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
+        }.font(.caption).foregroundStyle(.secondary)
     }
     private func sectionLabel(_ label: String) -> some View { Text(label).font(.caption2.weight(.semibold)).tracking(1).foregroundStyle(.secondary) }
     private func fact(_ label: String, _ value: String) -> some View {

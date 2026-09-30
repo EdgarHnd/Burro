@@ -54,6 +54,25 @@ public struct GitFacts: Codable, Sendable {
     public var unpushed: Int?
     public var base: String?
     public var lastCommit: Date?
+    public var retainedBranch: String?
+    public var retentionChecked: Bool?
+    public var includedIn: [String]?
+    public var equivalentPatchIn: String?
+    public var changedPaths: [String]?
+    public var untrackedPaths: [String]?
+    public var integrationSummary: String {
+        if let refs = includedIn, !refs.isEmpty {
+            let ref = base.flatMap { refs.contains($0) ? $0 : nil } ?? refs[0]
+            return "Included in " + ref
+        }
+        if let ref = equivalentPatchIn { return "Equivalent changes in " + ref }
+        if merged == true { return "Included in " + (base ?? "comparison branch") }
+        return "Integration not confirmed" + (base.map { " in " + $0 } ?? "")
+    }
+    public var retainedBranchName: String? {
+        guard let retainedBranch, retainedBranch.hasPrefix("refs/heads/"), retainedBranch.count > "refs/heads/".count else { return nil }
+        return String(retainedBranch.dropFirst("refs/heads/".count))
+    }
     public var operationInProgress = false
     public var errors: [String] = []
     public init() {}
@@ -108,7 +127,16 @@ public struct ScanConfiguration: Sendable {
 }
 public enum Paths {
     public static func canonical(_ path: String) -> String {
-        URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.resolvingSymlinksInPath().path
+        var url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL
+        var missing: [String] = []
+        // Foundation leaves /private aliases unresolved for missing paths. Resolve the
+        // nearest existing parent so a moved worktree keeps its registration identity.
+        while url.path != "/" && !FileManager.default.fileExists(atPath: url.path) {
+            missing.append(url.lastPathComponent); url.deleteLastPathComponent()
+        }
+        url = url.resolvingSymlinksInPath()
+        for component in missing.reversed() { url.appendPathComponent(component) }
+        return url.path
     }
     public static func contains(_ root: String, _ child: String) -> Bool {
         child == root || child.hasPrefix(root == "/" ? root : root + "/")

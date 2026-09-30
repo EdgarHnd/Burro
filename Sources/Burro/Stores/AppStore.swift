@@ -8,7 +8,42 @@ import BurroCore
     var snapshot = ScanSnapshot.empty
     var scanning = false
     var didScan = false
+    var cleanupTarget: Worktree?
+    var cleaningWorktree = false
+    var cleanupMessage: String?
+    private let cleanup = WorktreeCleanup()
+    var scanConfiguration: ScanConfiguration {
+        ScanConfiguration(repositories: repositories, discover: discover,
+            protectedPaths: protectedPaths, baseOverrides: baseOverrides)
+    }
+    func cleanupEligibility(_ tree: Worktree) -> CleanupEligibility {
+        WorktreeCleanup.eligibility(tree, home: scanConfiguration.home, warnings: snapshot.warnings, registeredPaths: snapshot.worktrees.map(\.path))
+    }
+    func removeWorktree(_ tree: Worktree) async {
+        guard !cleaningWorktree else { return }
+        cleaningWorktree = true
+        let config = scanConfiguration
+        do {
+            let destination = try await cleanup.remove(tree, configuration: config)
+            cleanupTarget = nil
+            let recovery = tree.branch == "Detached HEAD" ? "commit \(tree.head)" : "branch \(tree.branch)"
+            cleanupMessage = "Moved to Trash. Ignored files and all other folder contents are preserved at \(destination.path). To restore, create a new worktree at \(recovery) and copy back local files from Trash. No Git branches were deleted."
+        } catch { cleanupMessage = error.localizedDescription; cleanupTarget = nil }
+        cleaningWorktree = false
+        await refresh()
+    }
+    func comparisonBranches(_ tree: Worktree) async -> [String] {
+        await Task.detached(priority: .utility) {
+            let result = CommandRunner().git(tree.repositoryPath, ["for-each-ref", "--format=%(refname:short)", "refs/remotes", "refs/heads"])
+            guard result.succeeded else { return [] }
+            return result.output.split(separator: "\n").map(String.init).filter { !$0.hasSuffix("/HEAD") }.sorted()
+        }.value
+    }
     var agentActivity = AgentActivitySnapshot.empty
+    var usage: UsageStore
+    var providerUsage: ProviderUsageSnapshot { usage.snapshot }
+    var checkingUsage: Bool { usage.checking }
+    var usageEnabled: Bool { get { usage.enabled } set { usage.enabled = newValue } }
     var remoteHosts: [RemoteHost] { didSet { save(); rebuildAgentActivity() } }
     var remoteSnapshots: [UUID: RemoteHostSnapshot] = [:]
     var checkingRemotes = false
@@ -33,6 +68,7 @@ import BurroCore
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        usage = UsageStore(defaults: defaults)
         remoteHosts = defaults.data(forKey: "remoteHosts").flatMap { try? JSONDecoder().decode([RemoteHost].self, from: $0) } ?? []
         PreferencesMigration.migrate(into: defaults, legacy: defaults.persistentDomain(forName: "local.grove.worktrees") ?? [:])
         notchEnabled = defaults.object(forKey: "notchEnabled") as? Bool ?? true
@@ -42,10 +78,23 @@ import BurroCore
         discover = defaults.object(forKey: "discover") as? Bool ?? true
         baseOverrides = defaults.dictionary(forKey: "baseOverrides") as? [String: String] ?? [:]
     }
+    func matches(_ filter: WorktreeFilter, tree: Worktree) -> Bool {
+        if filter == .candidates { return cleanupEligibility(tree).allowed }
+        if filter == .protected { return cleanupEligibility(tree).status == .protected }
+        return filter.matches(tree)
+    }
     var visibleWorktrees: [Worktree] {
-        snapshot.worktrees.filter { tree in
-            filter.matches(tree) && (search.isEmpty || [tree.branch, tree.repository, tree.path] .contains { $0.localizedCaseInsensitiveContains(search) } || tree.agents.contains { $0.title.localizedCaseInsensitiveContains(search) })
+        let trees = snapshot.worktrees.filter { tree in
+            matches(filter, tree: tree) && (search.isEmpty || [tree.branch, tree.repository, tree.path] .contains { $0.localizedCaseInsensitiveContains(search) } || tree.agents.contains { $0.title.localizedCaseInsensitiveContains(search) })
         }
+        if filter == .cleanup {
+            return trees.sorted { a, b in
+                let left = cleanupEligibility(a).allowed, right = cleanupEligibility(b).allowed
+                if left != right { return left }
+                return a.path.localizedStandardCompare(b.path) == .orderedAscending
+            }
+        }
+        return trees
     }
     var notchNotices: [NotchNotice] {
         var notices: [NotchNotice] = []
@@ -81,6 +130,7 @@ import BurroCore
     func start() {
         guard monitorTask == nil else { return }
         // Owned by the app store so closing the window keeps the menu-bar monitor alive.
+        usage.start()
         agentMonitorTask = Task {
             while !Task.isCancelled {
                 await refreshAgents()
@@ -100,6 +150,10 @@ import BurroCore
             }
         }
     }
+    func refreshUsage(force: Bool = false, allowClaudePrompt: Bool = false) async {
+        await usage.refresh(force: force, allowClaudePrompt: allowClaudePrompt)
+    }
+    func connectClaudeUsage() { usage.connectClaude() }
     func refreshAgents() async {
         guard !checkingAgents else { return }
         checkingAgents = true
@@ -108,9 +162,25 @@ import BurroCore
         rebuildAgentActivity()
     }
     func workspaceLabel(for session: AgentSession) -> String {
-        if let remote = session.remote { return "\(remote.hostName) · \(URL(fileURLWithPath: session.cwd).lastPathComponent)" }
-        if let tree = worktree(for: session) { return tree.branch }
-        return URL(fileURLWithPath: session.cwd).lastPathComponent
+        if let tree = worktree(for: session) {
+            return "Worktree: \(URL(fileURLWithPath: tree.path).lastPathComponent) · Branch: \(tree.branch)"
+        }
+        return "\(session.remote?.hostName ?? "This Mac") · Folder: \(URL(fileURLWithPath: session.cwd).lastPathComponent)"
+    }
+    func workspacePath(for session: AgentSession) -> String {
+        worktree(for: session)?.path ?? session.cwd
+    }
+    func workspaceBranch(for session: AgentSession) -> String? {
+        worktree(for: session)?.branch
+    }
+    func workspaceDelivery(for session: AgentSession) -> String? {
+        guard let tree = worktree(for: session) else { return nil }
+        let facts = tree.facts
+        if !facts.errors.isEmpty || facts.merged == nil || facts.unpushed == nil { return "Git unknown" }
+        if facts.operationInProgress { return "Git operation" }
+        if facts.changed > 0 || facts.untracked > 0 { return "Uncommitted" }
+        if let count = facts.unpushed, count > 0 { return "Unpushed" }
+        return facts.integrationSummary
     }
     func selectAgent(_ session: AgentSession) {
         search = ""
@@ -184,7 +254,7 @@ import BurroCore
         agentActivity = AgentActivitySnapshot(sessions: sessions, warnings: warnings, sampledAt: localActivity.sampledAt)
     }
     func refresh() async {
-        guard !scanning else { return }
+        guard !scanning && !cleaningWorktree else { return }
         scanning = true
         let config = ScanConfiguration(repositories: repositories, discover: discover, protectedPaths: protectedPaths, baseOverrides: baseOverrides)
         var result = await Task.detached(priority: .utility) { await Scanner().scan(config) }.value
@@ -202,6 +272,7 @@ import BurroCore
         if selection == nil || !result.worktrees.contains(where: { $0.id == selection }) { selection = visibleWorktrees.first?.id }
     }
     func protect(_ tree: Worktree) {
+        guard !cleaningWorktree else { return }
         if protectedPaths.contains(tree.path) { protectedPaths.remove(tree.path) } else { protectedPaths.insert(tree.path) }
         // Apply protection immediately, then rescan all other evidence.
         if let i = snapshot.worktrees.firstIndex(where: { $0.id == tree.id }) {

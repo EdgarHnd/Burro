@@ -25,6 +25,16 @@ public enum GitParser {
         if let current { records.append(current) }
         return records
     }
+    public static func changePaths(_ output: String) -> (tracked: [String], untracked: [String]) {
+        let entries = output.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
+        var tracked: [String] = [], untracked: [String] = [], index = 0
+        while index < entries.count {
+            let code = String(entries[index].prefix(2)), path = String(entries[index].dropFirst(3))
+            if code == "??" { untracked.append(path) } else { tracked.append(path) }
+            index += code.contains("R") || code.contains("C") ? 2 : 1
+        }
+        return (tracked, untracked)
+    }
     public static func changes(_ output: String) -> (tracked: Int, untracked: Int) {
         let entries = output.split(separator: "\0", omittingEmptySubsequences: true)
         var tracked = 0, untracked = 0, index = 0
@@ -56,6 +66,8 @@ public struct GitReader: Sendable {
         let status = runner.git(record.path, ["status", "--porcelain=v1", "-z", "--untracked-files=normal", "--ignore-submodules=none"])
         if status.succeeded {
             let changes = GitParser.changes(status.output); facts.changed = changes.tracked; facts.untracked = changes.untracked
+            let paths = GitParser.changePaths(status.output)
+            facts.changedPaths = Array(paths.tracked.prefix(12)); facts.untrackedPaths = Array(paths.untracked.prefix(12))
         } else { facts.errors.append(status.timedOut ? "Git status timed out" : "Git status failed") }
         let ignored = runner.git(record.path, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"])
         if ignored.succeeded {
@@ -68,6 +80,19 @@ public struct GitReader: Sendable {
         }
         let unpushed = runner.git(record.path, ["rev-list", "--count", "HEAD", "--not", "--remotes"])
         if unpushed.succeeded { facts.unpushed = Int(unpushed.output.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        let retained = runner.git(record.path, ["for-each-ref", "--contains=HEAD", "--format=%(refname)", "refs/heads", "refs/remotes"])
+        if retained.succeeded {
+            facts.retentionChecked = true
+            let refs = retained.output.split(separator: "\n").map(String.init)
+            let local = refs.filter { $0.hasPrefix("refs/heads/") }
+            let preferred = ["refs/heads/" + record.branch, "refs/heads/staging", "refs/heads/main", "refs/heads/master", "refs/heads/develop"]
+            facts.retainedBranch = preferred.first { local.contains($0) } ?? local.first
+            let candidates = Array(Set(([base].compactMap { $0 }) + ["origin/main", "origin/staging", "origin/master", "origin/develop"]))
+            facts.includedIn = candidates.filter { refs.contains("refs/remotes/" + $0) || refs.contains("refs/heads/" + $0) }.sorted()
+            if facts.includedIn?.isEmpty == true, facts.changed == 0, facts.untracked == 0, let base {
+                facts.equivalentPatchIn = GitIntegrationEvidence(runner: runner).equivalentRef(record.path, base: base)
+            }
+        } else { facts.errors.append("Branches preserving this worktree’s commits could not be verified") }
         let timestamp = runner.git(record.path, ["log", "-1", "--format=%ct"])
         if let seconds = Double(timestamp.output.trimmingCharacters(in: .whitespacesAndNewlines)) { facts.lastCommit = Date(timeIntervalSince1970: seconds) }
         let gitDir = runner.git(record.path, ["rev-parse", "--absolute-git-dir"])

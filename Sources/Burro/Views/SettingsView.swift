@@ -12,6 +12,12 @@ struct SettingsView: View {
                 Text("Hover to expand and move away to collapse. Use the pin button to keep it open. Agent status refreshes about every 3 seconds. Automatic placement prefers a display with a camera notch.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Usage limits") {
+                Toggle("Show usage limits", isOn: $store.usageEnabled)
+                Text("Connects directly to Codex, Claude, and Grok. Open Usage in the sidebar for accounts, refresh settings, history and display controls.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Connect Claude", action: store.connectClaudeUsage).disabled(store.checkingUsage || !store.usageEnabled)
+            }
             RemoteHostsSection(store: store)
             Section("Discovery") {
                 Toggle("Discover repositories automatically", isOn: $store.discover)
@@ -37,7 +43,7 @@ struct SettingsView: View {
                 }
             }
             Section("Privacy & cleanup") {
-                Text("No provider accounts, hooks, or analytics. Remote machines you add are read through SSH; session titles stay on this Mac. Safety labels are advice based on the most recent scan; no deletion action is provided.")
+                Text("No hooks or analytics. Optional Usage reads your selected provider sign-ins. Remote machines you add are read through SSH; session titles stay on this Mac. Cleanup requires confirmation and a fresh check. Eligible local worktrees move to Trash with their data preserved and branches kept.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Apply & refresh") { Task { await store.refresh() } }.disabled(store.scanning)
             }

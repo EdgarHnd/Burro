@@ -13,13 +13,14 @@ Early-stage software. Provider metadata formats are private and may change; Burr
 ## What it does
 
 - **Agent notch:** hover to expand, pin when needed, and see needs-input, unread Done, and running chats in that order. Background workers stay grouped under their parent when the relationship is known.
+- **Usage dashboard:** compact notch quotas and full desktop controls for Codex, Claude, and Grok. See account/plan labels, model limits (including Fable), resets, pace, history, and local token/cost estimates. Connect directly using coding-app sign-ins; no CodexBar dependency.
 - **Open the conversation:** click a chat to open it in Codex or Claude when the provider exposes a usable link.
 - **One view across machines:** add another laptop or server through your existing SSH connection. Disconnected machines show their last-seen state.
 - **Worktree inventory:** find registered, detached, inactive, locked, and missing worktrees; inspect branches, changes, processes, and agent activity.
-- **Conservative cleanup advice:** Keep, Review, or Safe candidate, with the evidence behind each assessment and manual protection for important worktrees.
-- **Local by default:** no Burro account, analytics service, provider hooks, or third-party dependencies. Native SwiftUI and AppKit, Swift 6, system SQLite, Git, and OpenSSH.
+- **Actionable cleanup:** Ready to remove, Local changes, In use, or a specific blocker. Code integration is shown separately from checkout removal. Confirmed Move to Trash preserves folder contents and keeps commits on a verified local branch.
+- **Local by default:** no Burro account, analytics service, provider hooks, or third-party build dependencies. Native SwiftUI and AppKit, Swift 6, system SQLite, Git, and OpenSSH.
 
-Burro does **not delete worktrees**. Safe candidate is a point-in-time recommendation based on local evidence, not a guarantee. It does not fetch Git refs, change provider settings, or mark chats read.
+Background monitoring is read-only. **Move to Trash** is an explicit, confirmed action that rechecks Git and activity, preserves the whole checkout in Trash, unregisters only that worktree, and retains its branch. Codex-managed worktrees use Codex’s archive flow. Readiness is a point-in-time observation, not a guarantee. Burro does not automatically fetch Git refs or mark chats read. See [cleanup and recovery](docs/usage.md#cleanup-and-recovery).
 
 ## Build and run
 
@@ -39,7 +40,7 @@ For an optimized local build without launching:
 CONFIGURATION=release ./script/build_and_run.sh --build-only
 ```
 
-This release is **source-only**. Local builds are ad-hoc signed, not Developer ID signed or notarized; there is no prebuilt download or automatic updater. The build targets the architecture of the Mac that runs it.
+This release is **source-only**. Local builds reuse an available Apple Development signing identity for stable Keychain access, or fall back to ad-hoc signing without one. Set `BURRO_SIGNING_IDENTITY` to select an identity (`-` forces ad-hoc). Builds are not Developer ID signed or notarized; there is no prebuilt download or automatic updater. The build targets the architecture of the Mac that runs it.
 
 ## First run
 
@@ -51,7 +52,7 @@ See the [usage guide](docs/usage.md) for status meanings, provider compatibility
 
 ## Privacy and limitations
 
-Burro reads local Git state, same-user process metadata, and provider session files. Chat titles and paths are shown in memory; configuration and protections are saved in macOS preferences. Transcript tails are inspected for lifecycle events, but message bodies are not retained or exported. No provider authentication files are read.
+Burro reads local Git state, same-user process metadata, and provider session files. Chat titles and paths are shown in memory; configuration and protections are saved in macOS preferences. Transcript tails are inspected for lifecycle events, but message bodies are not retained or exported. The optional Usage dashboard asks the installed Codex app server for limits and reads selected Claude/Grok coding-app sign-ins in memory for fixed provider usage endpoints. Account-scoped quota history is stored locally; an on-demand scanner reads local token counters without retaining message text. It does not copy credentials to disk or import browser cookies; background Keychain reads never prompt. See the [usage guide](docs/usage.md#usage-limits) for setup and access details.
 
 Remote monitoring sends a fixed inspection script to hosts you explicitly add and returns session metadata over SSH. It does not inherit Codex/Claude desktop pairings or monitor cloud-hosted tasks. The dashboard's cleanup advice covers local worktrees only.
 

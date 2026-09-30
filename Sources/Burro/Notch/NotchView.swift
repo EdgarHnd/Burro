@@ -11,14 +11,21 @@ struct NotchView: View {
     var onSelect: (AgentSession) -> Void
     var onInspect: (AgentSession) -> Void
     var onOpenDashboard: () -> Void
+    var onSelectPage: (NotchPage) -> Void
+    var onNavigationBounds: ([NotchPage: CGRect]) -> Void
     var onContentChange: () -> Void
     var compact = false
     @State private var list = NotchListState()
     @State private var expandedGroups: Set<String> = []
     @State private var showingHealth = false
+    @State private var workspacePaths: [String: String] = [:]
+    private var workspaces: [NotchWorkspace] {
+        NotchWorkspace.grouped(list.groups) { workspacePaths[$0.id] ?? store.workspacePath(for: $0) }
+    }
+    private var showingUsage: Bool { presentation.navigation.visible == .usage }
     private var activity: AgentActivitySnapshot { store.agentActivity }
     private var rowCount: Int {
-        list.groups.reduce(0) { $0 + 1 + (expandedGroups.contains($1.id) ? $1.workers.count : 0) }
+        list.groups.reduce(0) { $0 + 1 + (expandedGroups.contains($1.id) ? $1.workers.count : 0) } + workspaces.filter { !$0.path.isEmpty }.count
     }
 
     var body: some View {
@@ -36,6 +43,11 @@ struct NotchView: View {
                 }
             }
         }
+        .coordinateSpace(name: "NotchNavigationRoot")
+        .onPreferenceChange(NotchTabBoundsKey.self) { bounds in
+            guard !compact else { return }
+            Task { @MainActor in onNavigationBounds(bounds) }
+        }
         .accessibilityHidden(compact == presentation.expanded)
         .preferredColorScheme(.dark)
         .transaction { $0.animation = nil }
@@ -47,18 +59,26 @@ struct NotchView: View {
             reconcile(force: !expanded)
         }
         .onChange(of: presentation.includeIdle) { _, _ in reconcile(force: true) }
+        .onChange(of: presentation.navigation.visible) { _, page in
+            updateGeometry()
+            if page == .usage { Task { await store.refreshUsage() } }
+        }
+        .onChange(of: presentation.navigation.isPreviewing) { _, _ in updateGeometry() }
         .onChange(of: rowCount) { _, _ in updateGeometry() }
         .onChange(of: store.didCheckAgents) { _, _ in updateGeometry() }
     }
     private func reconcile(force: Bool = false) {
         guard !compact else { return }
-        list.reconcile(NotchFeed(sessions: activity.sessions, includeIdle: presentation.includeIdle),
-            holding: !force && presentation.expanded && presentation.holdingList)
+        let holding = !force && presentation.expanded && presentation.holdingList
+        list.reconcile(NotchFeed(sessions: activity.sessions, includeIdle: presentation.includeIdle), holding: holding)
+        if !holding || workspacePaths.isEmpty {
+            workspacePaths = Dictionary(list.groups.flatMap(\.members).map { ($0.id, store.workspacePath(for: $0)) }, uniquingKeysWith: { first, _ in first })
+        }
         updateGeometry()
     }
     private func updateGeometry() {
         guard !compact else { return }
-        presentation.visibleRows = rowCount
+        presentation.visibleRows = showingUsage || presentation.navigation.isPreviewing ? max(5, rowCount) : rowCount
         onContentChange()
     }
     private var compactStatus: some View {
@@ -99,34 +119,49 @@ struct NotchView: View {
     private var expandedBody: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                if activity.waitingCount > 0 { count(activity.waitingCount, "need you", NotchStyle.attention) }
-                if activity.doneCount > 0 { count(activity.doneCount, "done", .blue) }
-                count(activity.workingCount, "running", AgentState.working.color)
-                if activity.scheduledCount > 0 { count(activity.scheduledCount, "scheduled", AgentState.scheduled.color) }
-                Spacer(minLength: 0)
+                navigationTabs
+                Spacer(minLength: 4)
+                if presentation.navigation.isPreviewing {
+                    Label("Preview", systemImage: "eye").foregroundStyle(.secondary)
+                        .help("Move away to return; click the tab to keep this view")
+                } else if !showingUsage {
+                    if activity.waitingCount > 0 { count(activity.waitingCount, "need you", NotchStyle.attention) }
+                    if activity.doneCount > 0 { count(activity.doneCount, "done", .blue) }
+                    if activity.workingCount == 0 && activity.scheduledCount > 0 {
+                        count(activity.scheduledCount, "scheduled", AgentState.scheduled.color)
+                    } else { count(activity.workingCount, "running", AgentState.working.color) }
+                }
                 Menu {
                     Toggle("Include idle chats", isOn: $presentation.includeIdle)
                     Button("Refresh status") { Task { await store.refreshAgents(); await store.refreshRemotes() } }
-                    Button("Monitoring details") { showingHealth = true }
+                    Button("Usage limits") { onSelectPage(.usage); showingHealth = false; Task { await store.refreshUsage() } }
+                    Button("Monitoring details") { onSelectPage(.agents); showingHealth = true }
                 } label: { Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold)) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .accessibilityLabel("Agent list options")
+                    .accessibilityLabel("Notch options")
             }.font(.system(size: 10, weight: .medium)).frame(height: 32).padding(.horizontal, 22)
             Rectangle().fill(.white.opacity(0.07)).frame(height: 1).padding(.horizontal, 22)
-            if showingHealth { NotchHealthView(store: store) }
+            if showingUsage {
+                NotchUsageView(snapshot: store.providerUsage, enabled: store.usageEnabled,
+                    onEnable: { store.usageEnabled = true }, onConnectClaude: store.connectClaudeUsage, checking: store.checkingUsage)
+            }
+            else if showingHealth && !presentation.navigation.isPreviewing { NotchHealthView(store: store) }
             else if !store.didCheckAgents { loading }
             else if list.groups.isEmpty { empty }
             else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(list.groups) { group in
-                            groupRow(group)
-                            if expandedGroups.contains(group.id) {
-                                ForEach(group.workers) { worker in
-                                    NotchAgentRow(session: worker, workspace: store.workspaceLabel(for: worker),
-                                        available: !group.unavailableIDs.contains(worker.id),
-                                        select: { onSelect(worker) }, inspect: { onInspect(worker) })
-                                        .padding(.leading, 18)
+                        ForEach(workspaces) { workspace in
+                            if !workspace.path.isEmpty { workspaceHeader(workspace) }
+                            ForEach(workspace.groups) { group in
+                                groupRow(group)
+                                if expandedGroups.contains(group.id) {
+                                    ForEach(group.workers) { worker in
+                                        NotchAgentRow(session: worker, workspace: store.workspaceLabel(for: worker),
+                                            available: !group.unavailableIDs.contains(worker.id),
+                                            select: { onSelect(worker) }, inspect: { onInspect(worker) })
+                                            .padding(.leading, 18)
+                                    }
                                 }
                             }
                         }
@@ -136,10 +171,59 @@ struct NotchView: View {
             footer
         }.frame(maxHeight: .infinity)
     }
+    private func workspaceHeader(_ workspace: NotchWorkspace) -> some View {
+        let session = workspace.sessions.first
+        let branch = session.flatMap { store.workspaceBranch(for: $0) }
+        return HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "folder").foregroundStyle(NotchStyle.accent)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(workspace.path.isEmpty ? "Background workers" : "Folder: " + URL(fileURLWithPath: workspace.path).lastPathComponent)
+                    .lineLimit(1).truncationMode(.middle)
+                Text("\(session?.remote?.hostName ?? "This Mac") · Branch: \(branch ?? "unavailable")")
+                    .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            Spacer(minLength: 4)
+            VStack(alignment: .trailing, spacing: 3) {
+                Text("\(workspace.groups.count) \(workspace.groups.count == 1 ? "chat" : "chats")")
+                if let session, let delivery = store.workspaceDelivery(for: session) {
+                    Text(delivery).font(.system(size: 9))
+                        .help("Checkout status from local Git refs; not a per-chat delivery or cleanup guarantee")
+                }
+            }.foregroundStyle(.secondary)
+        }.font(.system(size: 10, weight: .medium)).padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 4)
+            .help(workspace.path.isEmpty ? "Workers without a known parent chat" : workspace.path)
+    }
+    private var navigationTabs: some View {
+        HStack(spacing: 2) {
+            ForEach(NotchPage.allCases, id: \.self) { page in
+                let selected = presentation.navigation.selected == page
+                let preview = presentation.navigation.preview == page
+                Button { showingHealth = false; onSelectPage(page) } label: {
+                    Label(page.title, systemImage: page.symbol)
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 9).frame(height: 24)
+                        .foregroundStyle(selected || preview ? .white : .gray)
+                        .background(.white.opacity(selected ? 0.12 : (preview ? 0.06 : 0)), in: Capsule())
+                        .overlay { Capsule().strokeBorder(.white.opacity(preview ? 0.28 : 0), lineWidth: 1) }
+                        .contentShape(Capsule())
+                }.buttonStyle(.plain)
+                    .accessibilityLabel(page.title)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityValue(preview ? "Preview" : (selected ? "Selected" : ""))
+                    .help("Hover to preview \(page.title.lowercased()); click to keep it open")
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(key: NotchTabBoundsKey.self,
+                                value: [page: geometry.frame(in: .named("NotchNavigationRoot"))])
+                        }
+                    }
+            }
+        }.fixedSize()
+    }
     @ViewBuilder private func groupRow(_ group: NotchGroup) -> some View {
         if let session = group.root {
             HStack(spacing: 0) {
-                NotchAgentRow(session: session, workspace: store.workspaceLabel(for: session),
+                NotchAgentRow(session: session, workspace: session.remote?.hostName ?? "This Mac",
                     available: !group.unavailableIDs.contains(session.id), workerState: workerState(group),
                     select: { onSelect(session) }, inspect: { onInspect(session) })
                 if !group.workers.isEmpty { workerDisclosure(group) }
@@ -187,8 +271,10 @@ struct NotchView: View {
     }
     private var footer: some View {
         HStack(spacing: 10) {
-            if showingHealth {
-                Button { showingHealth = false } label: { Label("Agents", systemImage: "chevron.left") }
+            if showingUsage {
+                Text("Remaining · all machines").foregroundStyle(.secondary)
+            } else if showingHealth {
+                Button { showingHealth = false; onSelectPage(.agents) } label: { Label("Agents", systemImage: "chevron.left") }
             } else if let notice = store.notchNotices.first {
                 Button { showingHealth = true } label: {
                     Label(store.notchNotices.count == 1 ? notice.summary : "\(store.notchNotices.count) monitoring notices", systemImage: "info.circle")
@@ -200,12 +286,17 @@ struct NotchView: View {
                     .help("Last local check: \(activity.sampledAt.formatted())")
             }
             Spacer(minLength: 0)
-            if list.pendingChanges > 0 && !showingHealth {
+            if showingUsage {
+                Button(store.checkingUsage ? "Refreshing…" : "Refresh") { Task { await store.refreshUsage(force: true) } }
+                    .disabled(store.checkingUsage).help("Fetch current limits from your connected accounts")
+            }
+            if list.pendingChanges > 0 && !showingHealth && !showingUsage {
                 Button("Update list") { reconcile(force: true) }.foregroundStyle(NotchStyle.accent)
                     .help("Apply pending list changes; rows stay still while you interact")
             }
-            Button(action: onOpenDashboard) { Image(systemName: "arrow.up.right") }
-                .help("Open worktrees in Burro").accessibilityLabel("Open worktrees in Burro")
+            Button { if showingUsage { store.filter = .usage }; onOpenDashboard() } label: { Image(systemName: "arrow.up.right") }
+                .help(showingUsage ? "Open usage dashboard in Burro" : "Open worktrees in Burro")
+                .accessibilityLabel(showingUsage ? "Open usage dashboard in Burro" : "Open worktrees in Burro")
         }.buttonStyle(.plain).font(.system(size: 10, weight: .medium))
             .padding(.horizontal, 22).frame(height: 37).background(.white.opacity(0.035))
     }
@@ -233,6 +324,12 @@ struct NotchView: View {
             }
             Spacer(minLength: 0)
         }.padding(22).accessibilityElement(children: .ignore).accessibilityLabel("Loading agent status")
+    }
+}
+private struct NotchTabBoundsKey: PreferenceKey {
+    static let defaultValue: [NotchPage: CGRect] = [:]
+    static func reduce(value: inout [NotchPage: CGRect], nextValue: () -> [NotchPage: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
 private struct NotchIconButtonStyle: ButtonStyle {

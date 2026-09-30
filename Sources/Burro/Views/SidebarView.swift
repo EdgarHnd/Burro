@@ -8,11 +8,11 @@ struct SidebarView: View {
         VStack(spacing: 0) {
             List(selection: $store.filter) {
                 Section("Workspace") {
-                    ForEach([WorktreeFilter.all, .working, .inUse, .inactive, .candidates, .protected], id: \.self) { filter in
+                    ForEach([WorktreeFilter.all, .working, .inUse, .inactive, .candidates, .cleanup, .protected], id: \.self) { filter in
                         HStack {
                             Label(filter.title, systemImage: filter.icon)
                             Spacer()
-                            Text("\(store.snapshot.worktrees.filter { filter.matches($0) }.count)")
+                            Text("\(store.snapshot.worktrees.filter { store.matches(filter, tree: $0) }.count)")
                                 .font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
                         }.tag(filter)
                     }
@@ -23,6 +23,9 @@ struct SidebarView: View {
                         Spacer()
                         Text("\(store.remoteSessions.count)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
                     }.tag(WorktreeFilter.remote)
+                }
+                Section("Accounts") {
+                    Label("Usage", systemImage: WorktreeFilter.usage.icon).tag(WorktreeFilter.usage)
                 }
                 Section("Repositories") {
                     ForEach(store.repositoriesFound, id: \.path) { repository in

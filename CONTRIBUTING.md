@@ -22,10 +22,10 @@ Add a targeted regression test for behavioral fixes. For visual changes, describ
 
 ## Boundaries to preserve
 
-- Monitoring is read-only. Never infer a disposable worktree from an error, stale sample, or missing provider data.
+- Background monitoring is read-only. Confirmed cleanup follows the [cleanup and recovery contract](docs/usage.md#cleanup-and-recovery). Never infer a disposable worktree from an error, stale sample, or missing provider data.
 - Run fixed executables with argument arrays. Session titles, paths, branch names, and SSH settings are untrusted input.
 - Keep remote and local session identities distinct. SSH must remain noninteractive, forwarding-free, and strict about known host keys.
-- Do not acknowledge provider unread markers or read authentication files.
+- Do not acknowledge provider unread markers. Agent/session readers never read authentication files; optional usage readers may access only the selected provider sign-in as described in [SECURITY.md](SECURITY.md). Keep credentials in memory and prohibit background authentication prompts.
 - Avoid adding background services, telemetry, provider hooks, or dependencies without discussion.
 
 Use synthetic fixtures. Never submit live session databases, transcripts, SSH configuration, tokens, machine addresses, personal paths, or unredacted screenshots. `burro-inspect` produces private metadata and is not a safe bug-report attachment by default.

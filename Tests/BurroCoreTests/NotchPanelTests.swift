@@ -6,6 +6,43 @@ import XCTest
 import BurroCore
 
 final class NotchPanelTests: XCTestCase {
+    @MainActor func testTabPreviewUsesScreenCoordinatesAndCommonModeDeadline() async throws {
+        try await withController(reduceMotion: true) { controller, move in
+            controller.show()
+            try await Task.sleep(for: .milliseconds(100))
+            let frame = controller.presentation.expandedGeometry.frame
+            let usage = try XCTUnwrap(controller.navigationBounds[.usage])
+            move(NSPoint(x: frame.minX + usage.midX, y: frame.maxY - usage.midY))
+            controller.samplePointer()
+            XCTAssertEqual(controller.presentation.navigation.visible, .agents)
+            runMouseTrackingLoop(for: 0.20)
+            XCTAssertEqual(controller.presentation.navigation.visible, .usage)
+            XCTAssertEqual(controller.presentation.navigation.selected, .agents)
+            move(NSPoint(x: frame.minX + 300, y: frame.maxY - 100))
+            controller.samplePointer()
+            runMouseTrackingLoop(for: 0.11)
+            XCTAssertEqual(controller.presentation.navigation.visible, .agents)
+            XCTAssertTrue(controller.presentation.expanded)
+        }
+    }
+    @MainActor func testClickedTabSurvivesCollapseAndPendingPreviewCannotReopenPanel() async throws {
+        try await withController(reduceMotion: true) { controller, move in
+            controller.selectPage(.usage)
+            controller.show()
+            try await Task.sleep(for: .milliseconds(100))
+            let frame = controller.presentation.expandedGeometry.frame
+            let agents = try XCTUnwrap(controller.navigationBounds[.agents])
+            move(NSPoint(x: frame.minX + agents.midX, y: frame.maxY - agents.midY))
+            controller.samplePointer()
+            controller.collapse()
+            runMouseTrackingLoop(for: 0.20)
+            XCTAssertFalse(controller.presentation.expanded)
+            XCTAssertEqual(controller.presentation.navigation.visible, .usage)
+            move(NSPoint(x: -100_000, y: -100_000)); controller.samplePointer()
+            controller.show()
+            XCTAssertEqual(controller.presentation.navigation.visible, .usage)
+        }
+    }
     @MainActor private func runMouseTrackingLoop(for seconds: TimeInterval) {
         let until = Date().addingTimeInterval(seconds)
         while Date() < until { _ = RunLoop.main.run(mode: .eventTracking, before: until) }
@@ -104,6 +141,7 @@ final class NotchPanelTests: XCTestCase {
         let defaults = UserDefaults(suiteName: name)!
         defaults.set(true, forKey: "notchEnabled")
         defaults.set(false, forKey: "discover")
+        defaults.set(false, forKey: "usageEnabled") // Native interaction tests never contact provider accounts.
         defer { defaults.removePersistentDomain(forName: name) }
         let store = AppStore(defaults: defaults)
         var pointer = NSPoint(x: -100_000, y: -100_000)
