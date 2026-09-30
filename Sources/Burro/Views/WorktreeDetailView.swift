@@ -68,7 +68,7 @@ struct WorktreeDetailView: View {
                         ForEach(tree.processes, id: \.pid) { process in fact(process.name, "PID \(process.pid)") }
                     }
                 }
-                Text("A local snapshot, not a deletion guarantee. Burro does not fetch, remove worktrees, or change agent settings.")
+                Text("A local snapshot, not a deletion guarantee. The notch can remove local merged worktrees after confirmation and a fresh safety check. Origin refs refresh periodically; agent settings remain unchanged.")
                     .font(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }.padding(Layout.inset)
         }.frame(minWidth: 280, idealWidth: Layout.inspector)

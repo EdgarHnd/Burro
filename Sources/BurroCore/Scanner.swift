@@ -4,7 +4,7 @@ import Foundation
 public struct Scanner: Sendable {
     public init() {}
     public func scan(_ configuration: ScanConfiguration) async -> ScanSnapshot {
-        let start = Date(), runner = CommandRunner(), git = GitReader()
+        let start = Date(), runner = CommandRunner(deadline: configuration.inspectionDeadline), git = GitReader(deadline: configuration.inspectionDeadline)
         let processes = ProcessReader.snapshot()
         let agents = AgentReader().read(home: configuration.home, processes: processes, now: start)
         var candidates = configuration.repositories
@@ -14,6 +14,7 @@ public struct Scanner: Sendable {
             candidates += discover(in: configuration.home + "/.codex/worktrees", depth: 3)
         }
         var groups: [(path: String, records: [WorktreeRecord], base: String?)] = []
+        var refreshErrors: [String: String] = [:]
         var seen: Set<String> = [], warnings = processes.warnings + agents.warnings
         for path in Set(candidates.map(Paths.canonical)).sorted() {
             guard FileManager.default.fileExists(atPath: path) else {
@@ -32,12 +33,18 @@ public struct Scanner: Sendable {
             let records = GitParser.worktrees(listing.output)
             guard let first = records.first else { continue }
             let repository = first.path
+            if configuration.refreshReferences,
+               let error = await GitReferenceRefresh.shared.refresh(path, identity: identity) {
+                refreshErrors[repository] = error
+                warnings.append("\(repository): \(error)")
+            }
             let base = git.comparisonBase(path, override: configuration.baseOverrides[repository])
             groups.append((repository, records, base))
         }
+        let referenceErrors = refreshErrors
         let roots = groups.flatMap { $0.records.map(\.path) }
         let coverageWarnings = Array(Set(agents.warnings + processes.warnings)).sorted()
-        let jobs = groups.flatMap { group in group.records.enumerated().filter { !$0.element.bare }.map { (group.path, group.base, $0.offset == 0, $0.element) } }
+        let jobs = groups.flatMap { group in group.records.enumerated().filter { !$0.element.bare && (configuration.onlyWorktree == nil || configuration.onlyWorktree == $0.element.path) }.map { (group.path, group.base, $0.offset == 0, $0.element) } }
         var worktrees: [Worktree] = []
         // Four bounded Git lanes prevent one slow repository from freezing the interface.
         await withTaskGroup(of: Worktree.self) { tasks in
@@ -52,7 +59,8 @@ public struct Scanner: Sendable {
                         return lhs.updatedAt > rhs.updatedAt
                     }
                     let local = processes.processes.filter { !$0.cwd.isEmpty && Paths.owner(of: $0.cwd, in: roots) == record.path }
-                    let facts = git.facts(record, base: base)
+                    var facts = git.facts(record, base: base, includeDiff: configuration.onlyWorktree == nil)
+                    if let error = referenceErrors[repository] { facts.errors.append(error); facts.merged = nil }
                     let protected = configuration.protectedPaths.contains(record.path)
                     let missing = !FileManager.default.fileExists(atPath: record.path)
                     let assessment = SafetyPolicy.assess(primary: primary, locked: record.locked, missing: missing,

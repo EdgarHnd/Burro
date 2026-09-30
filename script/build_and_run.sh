@@ -61,6 +61,7 @@ if [[ ! -f "$RESOURCE_BUNDLE/remote_probe.py" && ! -f "$RESOURCE_BUNDLE/Contents
   exit 1
 fi
 cp -R "$RESOURCE_BUNDLE" "$APP_CONTENTS/Resources/"
+cp -R "$(dirname "$BUILD_BINARY")/Burro_Burro.bundle" "$APP_CONTENTS/Resources/"
 codesign --force --deep --sign - "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"
 open_app() { /usr/bin/open -n "$APP_BUNDLE"; }

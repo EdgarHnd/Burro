@@ -76,7 +76,7 @@ Provider documentation: [Codex remote connections](https://developers.openai.com
 | **Review** | Missing/prunable registration, ignored files, declared submodules, incomplete provider visibility, or a failed/timed-out/unknown Git check. |
 | **Safe candidate** | No observed activity or protection; successful clean/untracked/ignored checks; HEAD contained in the comparison branch; all commits covered by local remote-tracking refs. |
 
-A safe candidate is advisory, never a deletion guarantee. The scan is a point-in-time local observation; refs may be stale and processes may start after it. Burro does **not** fetch, delete, prune, archive, force-remove, or change agent configuration. Remove Codex-managed worktrees through Codex's archive flow to preserve its managed snapshots and attachments. Ignored files are deliberately reviewed, including environments and dependencies.
+A safe candidate is advisory, never a deletion guarantee. The scan is a point-in-time local observation; refs may be stale and processes may start after it. Monitoring refreshes origin remote-tracking refs at most every five minutes without changing local branches or files. The notch’s red Delete button offers explicit, confirmed local worktree removal after a fresh safety scan; it uses `git worktree remove` without force and keeps the branch. Active, protected, dirty, ignored-file, and uncertain cases are blocked. Burro does not prune, archive, force-remove, or change agent configuration. Remove Codex-managed worktrees through Codex's archive flow to preserve its managed snapshots and attachments. Ignored files are deliberately reviewed, including environments and dependencies.
 
 ## Agent detection and limits
 
@@ -88,3 +88,41 @@ A safe candidate is advisory, never a deletion guarantee. The scan is a point-in
 - Session titles and filesystem paths remain in memory/UI. Burro persists selected roots, comparison refs, discovery preference, manual protections, notch preferences, and explicit remote host configurations in `local.burro.worktrees` UserDefaults. On first launch after the Grove rename, it imports only the four original preference keys from `local.grove.worktrees` once, without overwriting existing Burro values. CLI JSON contains titles/paths and should be treated as local data. No telemetry is sent. Configured remote hosts receive only the fixed inspection script over SSH.
 
 See [architecture](../MODULE.md) for implementation boundaries.
+
+### Completed chat delivery badges
+
+Git delivery labels describe the checkout shared by chats, not edits attributable to each chat:
+
+- **Uncommitted changes**: tracked or untracked changes are present.
+- **Needs push**: commits are ahead of the configured upstream, or a feature branch has no upstream.
+- **Needs pull**: the checkout is behind its upstream; the subtitle also shows the behind count when other changes take priority.
+- **Needs to merge**: a clean, published feature branch is not contained in its comparison branch.
+- **Merged** (purple): a clean, published feature branch is contained in its comparison branch.
+- **Done** (blue): an integration branch is synchronized with its upstream, or a completed chat lacks sufficient Git evidence for a delivery label.
+- **Git operation**: a merge, rebase, or other Git operation is underway.
+
+Shared integration branches (`main`, `master`, `staging`, `develop`, `development`, or a branch whose upstream is the configured comparison base) are checked against their own upstream, rather than being labeled unmerged into main. Changes take priority over push, pull, and merge status. Local app scans refresh origin refs at most every five minutes using a bounded, noninteractive fetch; Refresh status forces a fresh attempt. A fetch failure marks merge evidence unverified. Remote probes still use cached refs. Squash/rebase merges may require manual inspection.
+
+Completed, still-open chats with pending delivery work remain visible after being read. Inactive historical chats are not revived merely because they share a dirty checkout. Live states and stale remote evidence retain priority. Local Git evidence refreshes on the worktree scan (about 30 seconds); remote checks share a bounded two-second Git budget.
+
+### Worktree groups in the notch
+
+The notch separates projects into bordered sections with bold folder headers, machine names, worktree totals, and spacing between repositories. Project identity uses the repository root locally and the common Git directory remotely, so linked worktrees stay together; separate machines remain labeled sections. Within each project, the notch groups visible chats by machine and checkout path. Rows show the actual branch when known, machine, folder name, chat count, and upstream behind count. Hover only over the far-right chevron to preview up to five chats; a “+N more” action expands the full list. Hovering the rest of the row does not open a preview. Click a row to expand it inline. Full checkout paths appear in previews and tooltips. Different hosts and paths remain separate even with matching branch names; discovered local ownership and remotely probed Git roots resolve nested working directories.
+
+Header and compact-notch counts represent worktree groups, not chats. Each group contributes to exactly one status: needs input, running, scheduled, unknown, or its completed Git/done state. A checkout with multiple running chats counts as one running worktree. Chat counts remain in group subtitles. The total describes the visible checkout groups, not the entire Git worktree inventory.
+
+Provider icons are bundled from official OpenAI Developers and Claude websites; see `Sources/Burro/Resources/PROVIDER_ICONS.md`.
+
+Running worktree rows use a subtle green pulse (static with Reduce Motion). The blue trash count in the compact notch and “need deletion” summary count show verified merged linked checkouts that still exist, including local checkouts with no chats. Primary, missing, protected, locked, dirty, or actively running checkouts are excluded. Remote cleanup evidence is limited to successfully probed chat checkouts, and stale/unknown evidence is excluded. This is a cleanup review indicator, not a promise that deletion is safe; nothing is removed automatically. Local entries have a red Delete button with confirmation and a fresh safety scan; remote deletion is not supported. Scrolling remains enabled with hidden indicators. The expanded panel covers menu-bar items within its bounds and restores its regular window level on collapse.
+
+The notch shows chats with recorded file-edit activity, filtering confirmed conversation-only chats without altering the full monitoring/safety inventory. Running, waiting, and scheduled chats remain visible when their edit history is missing or incomplete; a partial scan does not establish that no code was edited. Each chat shows green/red counts from successful structured edit events; worktree subtext shows the net Git diff against the comparison branch’s merge base, including readable untracked text files. Chat counts are cumulative edit-operation totals; worktree counts are net Git changes. Successful shell write commands establish edit activity but do not provide reliable line counts: missing counts are hidden rather than displayed as placeholder text. Logs are read on their own host, bounded to 16 MB, and only derived counts are returned; truncated/missing logs never imply a verified zero. Edits through unrecognized tools may not appear.
+
+Merged checkout rows show **Review** and their scan blockers when removal is not eligible (for example an open chat or ignored `.env.local` files). **Delete** appears only for a current safe candidate and still performs a fresh check after confirmation. The blue total is a cleanup queue, not a count of checkouts guaranteed safe to delete.
+
+The Delete action now explicitly allows idle attached chats and ignored files, as requested. Its confirmation states that ignored files (including local environment files) are removed. Running, waiting, scheduled, uncertain, or pinned sessions, local processes, tracked/untracked changes, and protection still block deletion. The dashboard’s general safety assessment remains conservative; Delete uses this explicit cleanup policy and rechecks Git immediately before removal.
+
+Deletion checks only the selected checkout, without a repository-wide diff calculation or network fetch. Its progress is shared across notch views, so only one deletion runs at once. Background scans do not produce remote-machine errors; actual remote targets are reported separately. Git inspection has a deadline, and successful removals cannot be resurrected by an older background scan result.
+
+Chat activity and worktree Git delivery are separate. Finished chat rows stay blue and never inherit shared “Uncommitted changes”, push, or merge warnings. Those warnings remain on the worktree (including alongside Running). A finished chat with no verified reference says “Delivery unverified”. If its latest assistant reply explicitly cites exactly one commit, Burro resolves it in that checkout, verifies it is contained in HEAD, and checks cached remote refs. The detail says “Reported commit verified” or “Reported commit on remote”; it does not claim all of the chat’s edits belong to that commit. Ambiguous/missing references remain unverified. Extraction and verification run on the same host as the log, without sending messages to an external model. Local reference evidence is rechecked at least every minute while the chat is inspected.
+
+Projects in the notch rank by running worktree count, then running chat count, then most recent session activity. Worktrees within each project rank by running chat count and then most recent activity. Old completed projects fall below active projects; stale remote sessions do not count as running.

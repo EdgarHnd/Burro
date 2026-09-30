@@ -13,7 +13,7 @@ public struct NotchGeometry: Sendable {
         let hasNotch = safeTop > 0
         let gap = hasNotch ? (hardwareWidth > 0 ? hardwareWidth : 210) + 12 : 0
         let header: CGFloat = hasNotch ? max(32, safeTop) + (expanded ? 5 : 2) : (expanded ? 36 : 26)
-        let compactWidth = hasNotch ? gap + 96 : 108
+        let compactWidth = hasNotch ? gap + 144 : 156
         let width = min(expanded ? max(480, compactWidth) : compactWidth, max(1, screen.width - 24))
         let bodyHeight: CGFloat = visibleAgents == 0 ? 148 : 78 + CGFloat(min(visibleAgents, 5)) * 56
         let desiredHeight = expanded ? header + bodyHeight : header

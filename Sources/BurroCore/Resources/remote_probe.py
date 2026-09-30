@@ -19,6 +19,254 @@ TAIL_LIMIT = 512 * 1024
 
 
 
+def reported_commit(objects, deadline=None):
+    """Verify only an explicitly cited commit, never infer ownership of all checkout changes."""
+    cwd = None
+    latest = ''
+    for obj in objects:
+        p = obj.get('payload', {})
+        cwd = obj.get('cwd') or p.get('cwd') or cwd
+        item = p.get('item', {})
+        if p.get('type') in ('task_started', 'turn_started'):
+            latest = ''
+        message = None
+        if p.get('type') == 'message' and p.get('role') == 'assistant' and p.get('phase') != 'commentary':
+            message = p
+        elif item.get('type') == 'AgentMessage' and item.get('phase') != 'commentary':
+            message = item
+        elif obj.get('type') == 'assistant':
+            message = obj.get('message', {})
+        if message is not None:
+            content = message.get('content', [])
+            if isinstance(content, str):
+                latest = content
+            else:
+                latest = '\n'.join(part.get('text', '') for part in content if isinstance(part, dict))
+    if not cwd or not re.search(r'\b(commit(?:ted)?|pushed|merged)\b', latest, re.I):
+        return None
+    hashes = list(dict.fromkeys(re.findall(r'(?<![a-zA-Z0-9])[a-fA-F0-9]{7,40}(?![a-zA-Z0-9])', latest)))
+    # Multiple references may mean comparisons or a multi-commit delivery. Do not pick one arbitrarily.
+    if len(hashes) != 1:
+        return None
+    deadline = min(deadline or float('inf'), time.monotonic() + 0.6)
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    env.update(GIT_OPTIONAL_LOCKS='0', GIT_TERMINAL_PROMPT='0')
+    def git(*args):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError()
+        return subprocess.run(['git', '--no-optional-locks', '-C', cwd, *args], env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=remaining)
+    try:
+        resolved = git('rev-parse', '--verify', '--end-of-options', hashes[0] + '^{commit}')
+        if resolved.returncode != 0:
+            return None
+        sha = resolved.stdout.strip()
+        if git('merge-base', '--is-ancestor', sha, 'HEAD').returncode != 0:
+            return None
+        refs = git('for-each-ref', '--format=%(refname)', '--contains=' + sha, 'refs/remotes/')
+        if refs.returncode != 0:
+            return None
+        return dict(sha=sha, onRemote=bool(refs.stdout.strip()))
+    except (OSError, ValueError, subprocess.TimeoutExpired, TimeoutError):
+        return None
+
+
+def chat_edit_stats(path, deadline=None):
+    """Count recorded successful edit operations, never shared working-tree diffs."""
+    added = removed = 0
+    edited = False
+    exact = True
+    seen = set()
+    try:
+        with open(path, 'rb') as handle:
+            size = os.fstat(handle.fileno()).st_size
+            limit = 16 * 1024 * 1024
+            if size > limit:
+                handle.seek(size - limit)
+                handle.readline()
+                exact = False
+            lines = handle.read(limit).decode('utf-8', errors='replace').splitlines()
+        objects = []
+        for index, line in enumerate(lines):
+            if deadline is not None and index % 100 == 0 and time.monotonic() > deadline:
+                exact = False
+                break
+            try:
+                objects.append(json.loads(line))
+            except (ValueError, TypeError):
+                exact = False
+        has_patch_events = any(o.get('payload', {}).get('type') == 'patch_apply_end' for o in objects)
+        for obj in objects:
+            p = obj.get('payload', {})
+            item = p.get('item', {}) if p.get('type') == 'item_completed' else {}
+            patches = []
+            key = p.get('call_id') if p.get('type') == 'patch_apply_end' else item.get('id') if item.get('type') == 'FileChange' else obj.get('uuid') if isinstance(obj.get('toolUseResult'), dict) else None
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            if p.get('type') == 'patch_apply_end' and p.get('success') is True:
+                key = p.get('call_id')
+                changes = p.get('changes', {})
+                for change in changes.values():
+                    edited = True
+                    if 'unified_diff' in change:
+                        patches.append(change['unified_diff'].splitlines())
+                    elif change.get('type') == 'add':
+                        added += len(change.get('content', '').splitlines())
+                    elif change.get('type') == 'delete' and 'content' in change:
+                        removed += len(change['content'].splitlines())
+                    else:
+                        exact = False
+            elif not has_patch_events and item.get('type') == 'FileChange' and item.get('status') == 'completed':
+                key = item.get('id')
+                changes = item.get('changes', [])
+                if isinstance(changes, dict):
+                    changes = list(changes.values())
+                for change in changes:
+                    edited = True
+                    diff = change.get('diff', change.get('unified_diff'))
+                    if isinstance(diff, str):
+                        patches.append(diff.splitlines())
+                    else:
+                        exact = False
+            elif item.get('type') == 'CommandExecution' and item.get('status') == 'completed' and item.get('exit_code') == 0:
+                command = item.get('command', [])
+                command = '\n'.join(command) if isinstance(command, list) else str(command)
+                if re.search(r'\.write_text\(|\.write_bytes\(|\bopen\([^\n]*,[ ]*[\x27\x22][wax]|\bapply_patch\b|\bsed\s+-i|\bperl\s+-[a-z]*i|\b(?:cat|tee)\s+[^\n]*>|\bgit\s+apply\b', command):
+                    edited = True
+                    exact = False
+            result = obj.get('toolUseResult')
+            if isinstance(result, dict) and not obj.get('message', {}).get('is_error'):
+                if isinstance(result.get('structuredPatch'), list):
+                    edited = True
+                    key = obj.get('uuid')
+                    for hunk in result['structuredPatch']:
+                        patches.append(hunk.get('lines', []))
+                elif result.get('type') == 'create' and isinstance(result.get('content'), str):
+                    edited = True
+                    added += len(result['content'].splitlines())
+                elif 'oldString' in result and 'newString' in result:
+                    import difflib
+                    edited = True
+                    patches.append(list(difflib.unified_diff(result['oldString'].splitlines(), result['newString'].splitlines())))
+            for patch in patches:
+                for line in patch:
+                    if line.startswith('+') and not line.startswith('+++'):
+                        added += 1
+                    elif line.startswith('-') and not line.startswith('---'):
+                        removed += 1
+        return dict(hasEdits=edited, added=added, removed=removed, exact=exact, commit=reported_commit(objects, deadline))
+    except (OSError, TypeError, ValueError):
+        return dict(hasEdits=False, added=0, removed=0, exact=False)
+
+
+def claude_edit_path(home, cwd, sid):
+    if not isinstance(sid, str) or '/' in sid or '..' in sid:
+        return ''
+    folder = re.sub(r'[^a-zA-Z0-9]', '-', cwd)
+    return str(home / '.claude/projects' / folder / (sid + '.jsonl'))
+
+
+def delivery_details(path, deadline):
+    """Inspect the checkout and its upstream, without fetching or attributing changes to chats."""
+    result = {}
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0", LC_ALL="C")
+    def git(*args):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError()
+        return subprocess.run(["git", "--no-optional-locks", "-C", path, *args],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              timeout=min(remaining, 1), text=True, env=environment)
+    def value(*args):
+        response = git(*args)
+        return response.stdout.strip() if response.returncode == 0 else None
+    def finish(status):
+        if status is not None:
+            result["deliveryStatus"] = status
+        return result
+    try:
+        root = value("rev-parse", "--show-toplevel")
+        if not root:
+            return result
+        result["checkoutPath"] = root
+        common = value("rev-parse", "--git-common-dir")
+        if common:
+            common = (Path(path) / common).resolve()
+            result["repositoryPath"] = str(common.parent if common.name == ".git" else common)
+        branch = value("symbolic-ref", "--quiet", "--short", "HEAD")
+        if branch:
+            result["checkoutBranch"] = branch
+        upstream = value("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+        ahead, behind = None, None
+        if upstream:
+            counts = value("rev-list", "--left-right", "--count", "HEAD...@{upstream}")
+            if counts:
+                ahead, behind = map(int, counts.split())
+                result["upstreamBehind"] = behind
+        symbolic = value("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+        choices = ([symbolic] if symbolic else []) + ["origin/main", "origin/master", "origin/staging"]
+        base = next((candidate for candidate in choices
+                     if value("rev-parse", "--verify", "--end-of-options", candidate + "^{commit}")), None)
+        if base:
+            diff = value("diff", "--numstat", "--no-renames", "--merge-base", base, "--")
+            if diff is not None:
+                added = removed = 0
+                for line in diff.splitlines():
+                    fields = line.split('\t')
+                    if len(fields) >= 2 and fields[0].isdigit() and fields[1].isdigit():
+                        added += int(fields[0]); removed += int(fields[1])
+                untracked = value("ls-files", "--others", "--exclude-standard", "-z")
+                if untracked is not None:
+                    for name in untracked.split('\0'):
+                        if not name or time.monotonic() > deadline:
+                            continue
+                        file = Path(root) / name
+                        try:
+                            if file.is_symlink() or not file.is_file() or file.stat().st_size >= 8 * 1024 * 1024:
+                                continue
+                            data = file.read_bytes()
+                            if b'\0' not in data:
+                                added += len(data.decode('utf-8').splitlines())
+                        except (OSError, UnicodeError):
+                            pass
+                result["workspaceDiff"] = dict(hasEdits=added + removed > 0, added=added, removed=removed, exact=True)
+        status = git("status", "--porcelain=v1", "--untracked-files=normal", "--ignore-submodules=none")
+        directory = value("rev-parse", "--absolute-git-dir")
+        if directory and common:
+            result["checkoutIsLinked"] = Path(directory).resolve() != common and not (Path(directory) / "locked").exists()
+        if directory and any((Path(directory) / name).exists() for name in
+               ("index.lock", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "BISECT_LOG")):
+            return finish("Git operation")
+        if status.returncode != 0:
+            return result
+        if status.stdout.strip():
+            return finish("Uncommitted changes")
+        unpushed = value("rev-list", "--count", "HEAD", "--not", "--remotes")
+        unpublished = int(unpushed) if unpushed is not None else None
+        if (ahead if ahead is not None else unpublished or 0) > 0:
+            return finish("Needs push")
+        if branch and (branch in ("main", "master", "staging", "develop", "development") or (base is not None and base == upstream)):
+            return finish(("Needs pull" if behind > 0 else "Done") if upstream and ahead == 0 and behind is not None else None)
+        if branch and not upstream:
+            return finish("Needs push")
+        if behind is not None and behind > 0:
+            return finish("Needs pull")
+        if base and (ahead == 0 or (not upstream and unpublished == 0)):
+            merged = git("merge-base", "--is-ancestor", "HEAD", base)
+            return finish("Merged" if merged.returncode == 0 else "Needs to merge" if merged.returncode == 1 else None)
+    except (OSError, ValueError, subprocess.TimeoutExpired, TimeoutError):
+        pass
+    return result
+
+
+def delivery_status(path, deadline):
+    return delivery_details(path, deadline).get("deliveryStatus")
+
+
 def held_lock(path):
     try:
         with open(path, "rb") as handle:
@@ -450,6 +698,7 @@ def collect(home):
                         sessions[-1]["turnCompleted"] = completed
                         sessions[-1]["isSubagent"] = is_subagent
                         sessions[-1]["parentSessionID"] = codex_parent_id(source)
+                        sessions[-1]["edits"] = chat_edit_stats(rollout, min(time.monotonic() + 0.15, deadline - 3)) if state != "Inactive" else dict(hasEdits=False, added=0, removed=0, exact=False)
         except (OSError, sqlite3.Error, ValueError, TypeError):
             warnings.append("Codex session metadata could not be read on this host.")
     claude = home / ".claude/sessions"
@@ -495,6 +744,7 @@ def collect(home):
                         sessions.append(session("claude:" + sid, "Claude Code", record.get("name") or "Claude Code session",
                                                 cwd, state, updated, "Remote PID/start-time identity and reported session status.", pid=pid if live else None))
                         sessions[-1]["turnCompleted"] = has_result
+                        sessions[-1]["edits"] = chat_edit_stats(claude_edit_path(home, cwd, sid), min(time.monotonic() + 0.15, deadline - 1))
                         if delegated == "Working" and state == "Working":
                             sessions[-1]["evidence"] = "Verified Claude process with %d active delegated task(s); parent reports idle." % delegated_count
                         elif delegated == "Scheduled" and state == "Scheduled":
@@ -512,6 +762,16 @@ def collect(home):
             warnings.append("Claude session metadata could not be read on this host.")
     elif (home / ".claude").exists():
         warnings.append("Claude session registry is unavailable on this host.")
+    # Share results across chats in one checkout, with a two-second total budget.
+    delivery_deadline = min(deadline, time.monotonic() + 2)
+    deliveries = {}
+    # Inspect live checkouts first so retained history cannot consume the Git budget.
+    for item in sorted(sessions, key=lambda row: row["state"] == "Inactive"):
+        if item["state"] != "Inactive" or item.get("turnCompleted"):
+            path = item["cwd"]
+            if path not in deliveries:
+                deliveries[path] = delivery_details(path, delivery_deadline)
+            item.update(deliveries[path])
     sessions.sort(key=lambda item: item["state"] == "Inactive")
     if len(sessions) > LIMIT:
         warnings.append("Remote sessions exceed the inspection limit.")
@@ -521,4 +781,7 @@ def collect(home):
 if __name__ == "__main__":
     # An explicit home is used by isolated fixture tests; SSH invokes this script without arguments.
     home = Path(sys.argv[2]) if len(sys.argv) == 3 and sys.argv[1] == "--home" else Path.home()
-    print(json.dumps(collect(home), ensure_ascii=True, allow_nan=False))
+    if len(sys.argv) > 1 and sys.argv[1] == '--edit-stats':
+        print(json.dumps({path: chat_edit_stats(path) for path in json.load(sys.stdin)}))
+    else:
+        print(json.dumps(collect(home), ensure_ascii=True, allow_nan=False))

@@ -19,7 +19,7 @@ Early-stage software. Provider metadata formats are private and may change; Burr
 - **Conservative cleanup advice:** Keep, Review, or Safe candidate, with the evidence behind each assessment and manual protection for important worktrees.
 - **Local by default:** no Burro account, analytics service, provider hooks, or third-party dependencies. Native SwiftUI and AppKit, Swift 6, system SQLite, Git, and OpenSSH.
 
-Burro does **not delete worktrees**. Safe candidate is a point-in-time recommendation based on local evidence, not a guarantee. It does not fetch Git refs, change provider settings, or mark chats read.
+Safe candidate is a point-in-time recommendation, not a guarantee. The notch offers confirmed local worktree deletion after fresh safety checks, without force and keeping the branch. Local app scans refresh origin refs every five minutes; they do not modify working files, change provider settings, or mark chats read.
 
 ## Build and run
 

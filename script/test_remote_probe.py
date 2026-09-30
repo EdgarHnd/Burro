@@ -21,6 +21,118 @@ spec.loader.exec_module(probe)
 
 
 class ProbeTests(unittest.TestCase):
+    def test_delivery_git_evidence(self):
+        with tempfile.TemporaryDirectory() as path:
+            def git(*args):
+                subprocess.run(['git', '-C', path, *args], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            git('init', '-b', 'main')
+            git('config', 'user.name', 'Test')
+            git('config', 'user.email', 'test@example.invalid')
+            git('config', 'remote.origin.url', path)
+            git('config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*')
+            git('-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'initial')
+            check = lambda: probe.delivery_status(path, time.monotonic() + 5)
+            self.assertEqual(check(), 'Needs push')
+            git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+            git('branch', '--set-upstream-to=origin/main')
+            self.assertEqual(check(), 'Done')
+            git('checkout', '-b', 'feature')
+            git('update-ref', 'refs/remotes/origin/feature', 'HEAD')
+            git('branch', '--set-upstream-to=origin/feature')
+            self.assertEqual(check(), 'Merged')
+            Path(path, 'draft').write_text('change')
+            self.assertEqual(check(), 'Uncommitted changes')
+            git('add', 'draft')
+            git('-c', 'commit.gpgsign=false', 'commit', '-m', 'feature')
+            self.assertEqual(check(), 'Needs push')
+            git('update-ref', 'refs/remotes/origin/feature', 'HEAD')
+            self.assertEqual(check(), 'Needs to merge')
+            git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+            self.assertEqual(check(), 'Merged')
+            git('checkout', '-b', 'staging', 'HEAD~1')
+            git('update-ref', 'refs/remotes/origin/staging', 'feature')
+            git('branch', '--set-upstream-to=origin/staging')
+            self.assertEqual(check(), 'Needs pull')
+            Path(path, 'draft-two').write_text('uncommitted')
+            details = probe.delivery_details(path, time.monotonic() + 5)
+            self.assertEqual(details['deliveryStatus'], 'Uncommitted changes')
+            self.assertEqual(details['checkoutBranch'], 'staging')
+            self.assertEqual(details['workspaceDiff']['added'], 1)
+            self.assertEqual(details['workspaceDiff']['removed'], 0)
+            self.assertFalse(details['checkoutIsLinked'])
+            linked = path + '-linked'
+            try:
+                git('worktree', 'add', '--detach', linked, 'HEAD')
+                self.assertTrue(probe.delivery_details(linked, time.monotonic() + 5)['checkoutIsLinked'])
+            finally:
+                git('worktree', 'remove', '--force', linked)
+            self.assertEqual(Path(details['repositoryPath']).resolve(), Path(path).resolve())
+            self.assertEqual(details['upstreamBehind'], 1)
+            self.assertEqual(Path(details['checkoutPath']).resolve(), Path(path).resolve())
+            self.assertIsNone(probe.delivery_status(path, time.monotonic() - 1))
+        self.assertIsNone(probe.delivery_status(path, time.monotonic() + 5))
+
+    def test_reported_commit_is_verified_without_claiming_chat_ownership(self):
+        with tempfile.TemporaryDirectory() as path:
+            def git(*args):
+                return subprocess.check_output(['git', '-C', path, *args], stderr=subprocess.DEVNULL, text=True).strip()
+            git('init', '-b', 'main')
+            git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'initial')
+            sha = git('rev-parse', 'HEAD')
+            rows = [dict(type='session_meta', payload=dict(cwd=path)),
+                    dict(type='response_item', payload=dict(type='message', role='assistant', phase='final', content=[dict(text='Committed in ' + sha[:9])]))]
+            self.assertEqual(probe.reported_commit(rows), dict(sha=sha, onRemote=False))
+            git('update-ref', 'refs/remotes/origin/main', sha)
+            self.assertEqual(probe.reported_commit(rows), dict(sha=sha, onRemote=True))
+            rows[-1]['payload']['content'][0]['text'] = 'Committed deadbeef12345678'
+            self.assertIsNone(probe.reported_commit(rows))
+            rows[-1]['payload']['content'][0]['text'] = 'Committed ' + sha[:9] + ' compared to abc12345'
+            self.assertIsNone(probe.reported_commit(rows))
+            rows[-1]['payload']['content'][0]['text'] = 'Committed ' + sha[:9]
+            rows.append(dict(type='event_msg', payload=dict(type='task_started')))
+            self.assertIsNone(probe.reported_commit(rows))
+
+    def test_chat_edit_counts_ignore_conversation_and_failed_edits(self):
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.jsonl') as log:
+            def check(rows):
+                log.seek(0); log.truncate()
+                for row in rows:
+                    log.write(json.dumps(row) + '\n')
+                log.flush()
+                return probe.chat_edit_stats(log.name)
+            self.assertFalse(check([dict(type='response_item', payload=dict(type='message', content='edit code please'))])['hasEdits'])
+            patch = dict(type='event_msg', payload=dict(type='patch_apply_end', call_id='a', success=True,
+                changes={'file.py': dict(type='update', unified_diff='@@\n-old\n+new\n+extra')}))
+            result = check([patch, patch])
+            self.assertEqual((result['added'], result['removed']), (2, 1))
+            patch['payload']['success'] = False
+            self.assertFalse(check([patch])['hasEdits'])
+            claude = dict(uuid='a', toolUseResult=dict(structuredPatch=[dict(lines=[' context', '-before', '+after'])]))
+            result = check([claude, claude])
+            self.assertEqual((result['added'], result['removed']), (1, 1))
+            shell = dict(payload=dict(type='item_completed', item=dict(type='CommandExecution', status='completed', exit_code=0,
+                command=['python3', '-c', 'p.write_text("new")'])))
+            result = check([shell])
+            self.assertTrue(result['hasEdits']); self.assertFalse(result['exact'])
+            shell['payload']['item']['exit_code'] = 1
+            self.assertFalse(check([shell])['hasEdits'])
+
+    def test_incomplete_edit_scan_never_confirms_no_edits(self):
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.jsonl') as log:
+            log.write(json.dumps(dict(type='assistant', message=dict(content='conversation'))) + '\n')
+            log.flush()
+            result = probe.chat_edit_stats(log.name, time.monotonic() - 1)
+            self.assertFalse(result['hasEdits'])
+            self.assertFalse(result['exact'])
+            # An old edit can fall outside the bounded tail of a large active transcript.
+            log.seek(0); log.truncate()
+            log.write(json.dumps(dict(toolUseResult=dict(structuredPatch=[dict(lines=['+code'])]))) + '\n')
+            log.write(' ' * (16 * 1024 * 1024) + '\n')
+            log.write('{}\n'); log.flush()
+            result = probe.chat_edit_stats(log.name)
+            self.assertFalse(result['hasEdits'])
+            self.assertFalse(result['exact'])
+
     def worker_event(self, sid, agent='worker-a', age=0, stop='tool_use', started=None):
         from datetime import datetime, timezone
         stamp = time.time() - age if started is None else started

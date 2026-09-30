@@ -11,6 +11,16 @@ final class NotchPanelTests: XCTestCase {
         while Date() < until { _ = RunLoop.main.run(mode: .eventTracking, before: until) }
     }
 
+    @MainActor func testExpandedPanelCoversMenuBarAndRestoresLevelOnCollapse() async throws {
+        try await withController(reduceMotion: true) { controller, _ in
+            let panel = try XCTUnwrap(controller.panel)
+            controller.toggle()
+            XCTAssertEqual(panel.level, .popUpMenu)
+            controller.collapse()
+            XCTAssertEqual(panel.level.rawValue, NSWindow.Level.statusBar.rawValue + 1)
+        }
+    }
+
     @MainActor func testNativeMenuTrackingKeepsNotchOpenOutsidePanelUntilMenuEnds() async throws {
         try await withController(reduceMotion: true) { controller, move in
             let frame = try XCTUnwrap(controller.panel).frame

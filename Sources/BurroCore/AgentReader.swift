@@ -130,6 +130,11 @@ public struct AgentReader: Sendable {
                     }
                 }
             }
+            let editCounts = ChatEditReader.shared.read(threads.filter {
+                let id = $0["id"] ?? ""
+                return burro_lock_held(directory.appendingPathComponent("thread-writer-locks/\(id).lock").path) != 0 || unread.contains(id)
+                    || now.timeIntervalSince(Date(timeIntervalSince1970: Double($0["updated_at"] ?? "0") ?? 0)) < 600
+            }.compactMap { $0["rollout_path"] })
             for row in threads {
                 guard let id = row["id"], let cwd = row["cwd"] else { result.warnings.append("A Codex session is missing its workspace"); continue }
                 let lock = directory.appendingPathComponent("thread-writer-locks/\(id).lock").path
@@ -156,6 +161,7 @@ public struct AgentReader: Sendable {
                     attachedPaths: attachments[id] ?? [], state: state, updatedAt: updated,
                     pinned: row["is_pinned"] == "1", evidence: evidence, turnCompleted: completed, isSubagent: isSubagent,
                     parentSessionID: AgentParsing.codexParentID(source: row["source"])))
+                result.sessions[result.sessions.count - 1].edits = editCounts[row["rollout_path"] ?? ""]
                 if held != 0 { result.roots.append(cwd) }
             }
         } catch { result.warnings.append(error.localizedDescription) }
@@ -198,6 +204,13 @@ public struct AgentReader: Sendable {
                     claudeDesktopSessionID: object["hostSessionId"] as? String,
                     claudeBridgeSessionID: object["bridgeSessionId"] as? String,
                     turnCompleted: completed.contains(object["hostSessionId"] as? String ?? "") && object["status"] as? String == "idle" && (state == .idle || state == .inactive)))
+                if state != .inactive {
+                    let folder = cwd.replacingOccurrences(of: "[^a-zA-Z0-9]", with: "-", options: .regularExpression)
+                    if !id.contains("/"), !id.contains("..") {
+                        let log = home + "/.claude/projects/" + folder + "/" + id + ".jsonl"
+                        result.sessions[result.sessions.count - 1].edits = ChatEditReader.shared.read([log])[log]
+                    }
+                }
                 result.roots.append(cwd)
             }
         } catch { result.warnings.append("Claude session directory could not be read") }

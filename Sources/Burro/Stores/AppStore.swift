@@ -7,6 +7,9 @@ import BurroCore
 @MainActor @Observable final class AppStore {
     var snapshot = ScanSnapshot.empty
     var scanning = false
+    var deletingWorktreeID: String?
+    var deletionPhase = "Checking…"
+    private var removedWorktreePaths: Set<String> = []
     var didScan = false
     var agentActivity = AgentActivitySnapshot.empty
     var remoteHosts: [RemoteHost] { didSet { save(); rebuildAgentActivity() } }
@@ -107,10 +110,25 @@ import BurroCore
         localActivity = result; checkingAgents = false; didCheckAgents = true
         rebuildAgentActivity()
     }
-    func workspaceLabel(for session: AgentSession) -> String {
-        if let remote = session.remote { return "\(remote.hostName) · \(URL(fileURLWithPath: session.cwd).lastPathComponent)" }
+    func workspacePath(for session: AgentSession) -> String {
+        if session.remote == nil { return worktree(for: session)?.path ?? session.cwd }
+        // Remote paths must never be resolved against this Mac's filesystem.
+        return ((session.checkoutPath ?? session.cwd) as NSString).standardizingPath
+    }
+    func projectPath(for session: AgentSession) -> String {
+        if let tree = worktree(for: session) { return tree.repositoryPath }
+        return session.repositoryPath ?? workspacePath(for: session)
+    }
+    func workspaceTitle(for session: AgentSession) -> String {
         if let tree = worktree(for: session) { return tree.branch }
-        return URL(fileURLWithPath: session.cwd).lastPathComponent
+        return session.checkoutBranch ?? URL(fileURLWithPath: workspacePath(for: session)).lastPathComponent
+    }
+    func workspaceLabel(for session: AgentSession) -> String {
+        let path = workspacePath(for: session)
+        let folder = URL(fileURLWithPath: path).lastPathComponent
+        let host = session.remote?.hostName ?? "This Mac"
+        if let tree = worktree(for: session) { return "\(host) · \(folder) · \(tree.branch)" }
+        return "\(host) · \(folder)" + (session.checkoutBranch.map { " · " + $0 } ?? "")
     }
     func selectAgent(_ session: AgentSession) {
         search = ""
@@ -171,12 +189,21 @@ import BurroCore
         rebuildAgentActivity()
     }
     private func rebuildAgentActivity() {
-        var sessions = localActivity.sessions
+        var sessions = localActivity.sessions.map { source in
+            var session = source
+            if let tree = worktree(for: session) {
+                session.deliveryStatus = DeliveryStatus.evaluate(tree.facts)
+                session.checkoutPath = tree.path; session.checkoutBranch = tree.branch
+                session.upstreamBehind = tree.facts.upstreamBehind
+                session.workspaceDiff = tree.facts.workspaceDiff
+            }
+            return session
+        }
         var warnings = localActivity.warnings
         for host in remoteHosts where host.enabled {
             guard var result = remoteSnapshots[host.id] else { continue }
             result.host = host
-            result.sessions = result.sessions.filter { $0.state != .inactive || localActivity.readState.applying(to: $0).isDone }
+            result.sessions = result.sessions.filter { $0.state != .inactive || localActivity.readState.applying(to: $0).showsCompletion }
             sessions += result.displaySessions().map { localActivity.readState.applying(to: $0) }
             if result.state == .offline { warnings.append("\(host.name): connection unavailable") }
             warnings += result.warnings.map { "\(host.name): \($0)" }
@@ -186,7 +213,7 @@ import BurroCore
     func refresh() async {
         guard !scanning else { return }
         scanning = true
-        let config = ScanConfiguration(repositories: repositories, discover: discover, protectedPaths: protectedPaths, baseOverrides: baseOverrides)
+        let config = ScanConfiguration(repositories: repositories, discover: discover, protectedPaths: protectedPaths, baseOverrides: baseOverrides, refreshReferences: true)
         var result = await Task.detached(priority: .utility) { await Scanner().scan(config) }.value
         for i in result.worktrees.indices {
             let tree = result.worktrees[i]
@@ -198,9 +225,37 @@ import BurroCore
                     agents: tree.agents, processes: tree.processes, protected: protected, coverageWarnings: result.warnings)
             }
         }
+        result.worktrees.removeAll { removedWorktreePaths.contains($0.path) }
         snapshot = result; scanning = false; didScan = true
+        rebuildAgentActivity()
         if selection == nil || !result.worktrees.contains(where: { $0.id == selection }) { selection = visibleWorktrees.first?.id }
     }
+    func deleteMergedWorktree(_ item: NotchCleanup) async -> String? {
+        guard item.id.hasPrefix("local:") else { return "Remote removal is not supported yet." }
+        guard deletingWorktreeID == nil else { return "Another worktree deletion is already in progress." }
+        guard let existing = snapshot.worktrees.first(where: { $0.path == item.path }) else { return "This worktree is no longer registered." }
+        deletingWorktreeID = item.id; deletionPhase = "Checking…"
+        defer { deletingWorktreeID = nil }
+        var config = ScanConfiguration(repositories: [existing.repositoryPath], discover: false,
+            protectedPaths: protectedPaths, baseOverrides: baseOverrides)
+        config.onlyWorktree = item.path
+        config.inspectionDeadline = Date().addingTimeInterval(20)
+        let fresh = await Task.detached(priority: .userInitiated) { [config] in await Scanner().scan(config) }.value
+        guard var tree = fresh.worktrees.first(where: { $0.path == item.path }) else {
+            return "Could not finish checking this worktree. Please retry."
+        }
+        tree.protectedByUser = protectedPaths.contains(tree.path)
+        if let index = snapshot.worktrees.firstIndex(where: { $0.path == item.path }) { snapshot.worktrees[index] = tree }
+        deletionPhase = "Deleting…"
+        let error = await Task.detached(priority: .userInitiated) { [tree] in WorktreeRemoval.remove(tree) }.value
+        if error == nil {
+            removedWorktreePaths.insert(item.path)
+            snapshot.worktrees.removeAll { $0.path == item.path }
+        }
+        rebuildAgentActivity()
+        return error
+    }
+
     func protect(_ tree: Worktree) {
         if protectedPaths.contains(tree.path) { protectedPaths.remove(tree.path) } else { protectedPaths.insert(tree.path) }
         // Apply protection immediately, then rescan all other evidence.

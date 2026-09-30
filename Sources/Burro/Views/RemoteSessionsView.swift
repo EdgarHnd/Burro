@@ -53,7 +53,7 @@ struct RemoteSessionsView: View {
                                     }
                                     Spacer()
                                     Text(session.remote?.stale == true ? "Last seen" : session.statusLabel)
-                                        .font(.caption).foregroundStyle(session.isDone ? .blue : session.state.color)
+                                        .font(.caption).foregroundStyle(session.statusColor)
                                 }.padding(.vertical, 5).tag(session.id)
                             }
                             if let error = connection.error, host.enabled {
@@ -101,7 +101,7 @@ struct RemoteSessionDetailView: View {
                     Text(session.title).font(.title2.weight(.semibold)).textSelection(.enabled)
                     Label(session.remote?.stale == true ? "Last seen · connection unavailable" : session.statusLabel,
                           systemImage: origin.stale ? "wifi.slash" : "circle.fill")
-                        .font(.callout).foregroundStyle(session.isDone ? .blue : session.state.color)
+                        .font(.callout).foregroundStyle(session.statusColor)
                     LabeledContent("Agent", value: session.provider.rawValue)
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Remote workspace").font(.caption).foregroundStyle(.secondary)

@@ -10,8 +10,11 @@ public struct CommandResult: Sendable {
     public var succeeded: Bool { code == 0 && !timedOut }
 }
 public struct CommandRunner: Sendable {
-    public init() {}
+    private let deadline: Date?
+    public init(deadline: Date? = nil) { self.deadline = deadline }
     public func run(_ executable: String, _ arguments: [String], timeout: Double = 20, input: Data? = nil) -> CommandResult {
+        let timeout = min(timeout, deadline?.timeIntervalSinceNow ?? timeout)
+        guard timeout > 0 else { return CommandResult(code: -1, output: "", error: "Inspection timed out", timedOut: true) }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("burro-\(UUID().uuidString)")
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])

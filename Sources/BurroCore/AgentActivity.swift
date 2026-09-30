@@ -18,14 +18,17 @@ public struct AgentActivitySnapshot: Sendable {
     public var workingCount: Int { uniqueSessions.filter { $0.state == .working }.count }
     public var scheduledCount: Int { uniqueSessions.filter { $0.state == .scheduled }.count }
     public var waitingCount: Int { uniqueSessions.filter { $0.state == .waiting }.count }
-    public var idleCount: Int { uniqueSessions.filter { $0.state == .idle && !$0.isDone }.count }
-    public var doneCount: Int { uniqueSessions.filter(\.isDone).count }
+    public var idleCount: Int { uniqueSessions.filter { $0.state == .idle && !$0.showsCompletion }.count }
+    public var needsMergeCount: Int { uniqueSessions.filter { $0.showsCompletion && $0.deliveryStatus == .needsMerge }.count }
+    public var mergedCount: Int { uniqueSessions.filter { $0.showsCompletion && $0.deliveryStatus == .merged }.count }
+    public var unknownDeliveryCount: Int { uniqueSessions.filter { $0.showsCompletion && $0.deliveryStatus == nil }.count }
+    public var doneCount: Int { uniqueSessions.filter(\.showsCompletion).count }
     public func visibleSessions(includeIdle: Bool) -> [AgentSession] {
         var seen: Set<String> = []
         return sessions.filter {
-            ($0.isDone || ($0.state != .inactive && (includeIdle || $0.state != .idle))) && seen.insert($0.id).inserted
+            ($0.showsCompletion || ($0.state != .inactive && (includeIdle || $0.state != .idle))) && seen.insert($0.id).inserted
         }.sorted {
-            let a = $0.isDone ? 1 : Self.priority($0.state), b = $1.isDone ? 1 : Self.priority($1.state)
+            let a = $0.showsCompletion ? 1 : Self.priority($0.state), b = $1.showsCompletion ? 1 : Self.priority($1.state)
             if a != b { return a < b }
             if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
             return $0.id < $1.id

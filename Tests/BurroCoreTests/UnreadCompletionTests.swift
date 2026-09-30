@@ -18,7 +18,7 @@ final class UnreadCompletionTests: XCTestCase {
         read.codexUnread = []
         let seen = read.applying(to: done)
         XCTAssertFalse(seen.isDone)
-        XCTAssertTrue(AgentActivitySnapshot(sessions: [seen], warnings: [], sampledAt: Date()).visibleSessions(includeIdle: false).isEmpty)
+        XCTAssertEqual(AgentActivitySnapshot(sessions: [seen], warnings: [], sampledAt: Date()).visibleSessions(includeIdle: false).count, 1, "Reading clears unread, not a live chat’s verified finished state")
         read.codexUnread = [id]
         XCTAssertTrue(read.applying(to: seen).isDone, "A later unread completion can reappear")
     }

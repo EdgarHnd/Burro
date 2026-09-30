@@ -194,12 +194,15 @@ import BurroCore
         destinationFrame = frame
         let id = UUID(); transitionID = id
         presentation.expanded = expanded
+        // Menu extras can sit above status-bar windows. Raise only the expanded surface.
+        if expanded { panel.level = .popUpMenu; panel.orderFrontRegardless() }
         let animated = animate && panel.isVisible && !reduceMotion()
         setPanelFrame(animated ? panel.frame.union(frame) : frame)
         surface.transition(size: frame.size, expanded: expanded, animated: animated) { [weak self] in
             guard let self, self.transitionID == id else { return }
             self.transitionID = nil
             self.setPanelFrame(frame)
+            if !expanded { panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1) }
             self.samplePointer()
         }
     }

@@ -9,7 +9,7 @@ let package = Package(
     targets: [
         .target(name: "CSystem", linkerSettings: [.linkedLibrary("proc"), .linkedLibrary("sqlite3")]),
         .target(name: "BurroCore", dependencies: ["CSystem"], resources: [.copy("Resources/remote_probe.py")]),
-        .executableTarget(name: "Burro", dependencies: ["BurroCore"]),
+        .executableTarget(name: "Burro", dependencies: ["BurroCore"], exclude: ["Resources/PROVIDER_ICONS.md"], resources: [.copy("Resources/codex.png"), .copy("Resources/claude.png")]),
         .executableTarget(name: "BurroInspect", dependencies: ["BurroCore"]),
         .testTarget(name: "BurroCoreTests", dependencies: ["BurroCore", "Burro"])
     ]

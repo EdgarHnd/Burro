@@ -100,9 +100,9 @@ final class NotchHoverTests: XCTestCase {
     func testCompactFootprintLeavesOnlySmallStatusWings() {
         let screen = CGRect(x: 0, y: 0, width: 1728, height: 1117)
         let camera = NotchGeometry.layout(screen: screen, visibleFrame: screen, safeTop: 32, hardwareWidth: 185, expanded: false)
-        XCTAssertEqual(camera.frame.size, CGSize(width: 293, height: 34))
+        XCTAssertEqual(camera.frame.size, CGSize(width: 341, height: 34))
         XCTAssertEqual(camera.frame.maxY, screen.maxY)
         let flat = NotchGeometry.layout(screen: screen, visibleFrame: screen, safeTop: 0, hardwareWidth: 0, expanded: false)
-        XCTAssertEqual(flat.frame.size, CGSize(width: 108, height: 26))
+        XCTAssertEqual(flat.frame.size, CGSize(width: 156, height: 26))
     }
 }
