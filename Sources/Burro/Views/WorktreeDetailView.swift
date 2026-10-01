@@ -40,7 +40,7 @@ struct WorktreeDetailView: View {
                         Text("Use Archive in Codex for this checkout; it preserves a recoverable snapshot.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    Button(eligibility.allowed ? "Move to Trash…" : "Show blockers…", systemImage: "trash") { store.cleanupTarget = tree }
+                    Button(eligibility.allowed ? "Move to Trash…" : "Show blockers…", systemImage: "trash") { store.reviewCleanup([tree]) }
                         .disabled(store.cleaningWorktree)
 
                 }

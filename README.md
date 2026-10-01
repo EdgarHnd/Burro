@@ -17,7 +17,7 @@ Early-stage software. Provider metadata formats are private and may change; Burr
 - **Open the conversation:** click a chat to open it in Codex or Claude when the provider exposes a usable link.
 - **One view across machines:** add another laptop or server through your existing SSH connection. Disconnected machines show their last-seen state.
 - **Worktree inventory:** find registered, detached, inactive, locked, and missing worktrees; inspect branches, changes, processes, and agent activity.
-- **Actionable cleanup:** Ready to remove, Local changes, In use, or a specific blocker. Code integration is shown separately from checkout removal. Confirmed Move to Trash preserves folder contents and keeps commits on a verified local branch.
+- **Actionable cleanup:** Ready to remove, Local changes, In use, or a specific blocker. Code integration is shown separately from checkout removal. Multi-select or Select ready, confirm once, and keep browsing while folders move to Trash. Per-item rechecks preserve contents and keep commits on a verified local branch; failed items return with a reason.
 - **Local by default:** no Burro account, analytics service, provider hooks, or third-party build dependencies. Native SwiftUI and AppKit, Swift 6, system SQLite, Git, and OpenSSH.
 
 Background monitoring is read-only. **Move to Trash** is an explicit, confirmed action that rechecks Git and activity, preserves the whole checkout in Trash, unregisters only that worktree, and retains its branch. Codex-managed worktrees use Codex’s archive flow. Readiness is a point-in-time observation, not a guarantee. Burro does not automatically fetch Git refs or mark chats read. See [cleanup and recovery](docs/usage.md#cleanup-and-recovery).

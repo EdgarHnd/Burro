@@ -4,6 +4,7 @@ import BurroCore
 
 struct WorktreeListView: View {
     @Bindable var store: AppStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: Layout.inset) {
@@ -19,24 +20,33 @@ struct WorktreeListView: View {
                     metric("Ready to remove", value: metricWorktrees.filter { store.cleanupEligibility($0).allowed }.count, color: .green)
                 }
             }.padding(Layout.inset)
-            if store.filter == .cleanup || store.filter == .candidates {
-                Text("Remove unused folders while keeping their branches. Local changes and active chats need attention first.")
-                    .font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, Layout.inset).padding(.bottom, Layout.gap)
-            }
+            HStack(spacing: Layout.gap) {
+                Button("Select ready (\(store.readyWorktrees.count))") { store.selectReadyWorktrees() }
+                    .disabled(store.readyWorktrees.isEmpty || store.cleaningWorktree)
+                if !store.worktreeSelection.isEmpty {
+                    Text("\(store.selectedWorktrees.count) selected").font(.caption).foregroundStyle(.secondary)
+                    Button("Clear") { store.worktreeSelection = [] }.buttonStyle(.link)
+                }
+                Spacer(minLength: 4)
+                Button(store.selectedReadyCount > 1 ? "Move \(store.selectedReadyCount) to Trash…" : "Move to Trash…", systemImage: "trash") {
+                    store.reviewCleanup(store.selectedWorktrees)
+                }.disabled(store.selectedReadyCount == 0 || store.cleaningWorktree)
+                    .help("Move selected ready worktrees to Trash (⌘⌫)")
+                    .keyboardShortcut(.delete, modifiers: .command)
+            }.controlSize(.small).padding(.horizontal, Layout.inset).padding(.bottom, Layout.gap)
             Divider()
             if !store.didScan {
                 skeleton
             } else if store.visibleWorktrees.isEmpty {
                 ContentUnavailableView {
-                    Label(store.snapshot.worktrees.isEmpty ? "Add your first repository" : "No matching worktrees", systemImage: "arrow.triangle.branch")
+                    Label(store.cleaningWorktree ? "Cleanup is running" : (store.snapshot.worktrees.isEmpty ? "Add your first repository" : "No matching worktrees"), systemImage: "arrow.triangle.branch")
                 } description: {
-                    Text(store.snapshot.worktrees.isEmpty ? "Burro discovers local Codex and Claude workspaces. You can also choose a repository." : "Try another filter or search.")
+                    Text(store.cleaningWorktree ? "You can keep browsing while Burro rechecks and moves the selected folders." : (store.snapshot.worktrees.isEmpty ? "Burro discovers local Codex and Claude workspaces. You can also choose a repository." : "Try another filter or search."))
                 } actions: {
                     if store.snapshot.worktrees.isEmpty { Button("Add repository…") { store.addRepository() } }
                 }
             } else {
-                Table(store.visibleWorktrees, selection: $store.selection) {
+                Table(store.visibleWorktrees, selection: $store.worktreeSelection) {
                     TableColumn("Worktree") { tree in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 5) {
@@ -61,24 +71,33 @@ struct WorktreeListView: View {
                     }.width(min: 100, ideal: 115, max: 150)
                     TableColumn("Cleanup") { tree in
                         VStack(alignment: .leading, spacing: 4) {
-                            CleanupBadge(status: store.cleanupEligibility(tree).status)
-                            Text(store.cleanupEligibility(tree).allowed ? tree.facts.integrationSummary : store.cleanupEligibility(tree).summary)
+                            if store.cleanupBatch.failure(for: tree.id) != nil {
+                                Label("Needs attention", systemImage: "exclamationmark.circle").font(.caption.weight(.medium)).foregroundStyle(.orange)
+                            } else { CleanupBadge(status: store.cleanupEligibility(tree).status) }
+                            Text(store.cleanupBatch.failure(for: tree.id) ?? (store.cleanupEligibility(tree).allowed ? tree.facts.integrationSummary : store.cleanupEligibility(tree).summary))
                                 .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                         }.help(store.cleanupEligibility(tree).reasons.joined(separator: "\n") + "\n" + tree.facts.integrationSummary)
                     }.width(min: 155, ideal: 190, max: 240)
                 }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.cleanupBatch.hiddenPaths)
                 .contextMenu(forSelectionType: String.self) { paths in
-                    if let path = paths.first, let tree = store.snapshot.worktrees.first(where: { $0.id == path }) {
+                    let trees = store.visibleWorktrees.filter { paths.contains($0.id) }
+                    if trees.count == 1, let tree = trees.first {
                         Button("Reveal in Finder") { store.reveal(tree) }
                         Button("Open in Terminal") { store.openTerminal(tree) }
                         Button("Copy Path") { store.copyPath(tree) }
                         Divider()
                         Button(tree.protectedByUser ? "Remove Protection" : "Protect Worktree") { store.protect(tree) }.disabled(store.cleaningWorktree)
-                        Button(store.cleanupEligibility(tree).allowed ? "Move to Trash…" : "Show blockers…") { store.selection = tree.id; store.cleanupTarget = tree }
+                    }
+                    if !trees.isEmpty {
+                        let count = trees.filter { store.cleanupEligibility($0).allowed }.count
+                        Button(count == 0 ? "Show blockers…" : "Move \(count) to Trash…") { store.reviewCleanup(trees) }
                             .disabled(store.cleaningWorktree)
                     }
                 }
+                .onDeleteCommand { store.reviewCleanup(store.selectedWorktrees) }
             }
+            if !store.cleanupBatch.items.isEmpty { CleanupStatusView(store: store) }
             Divider()
             VStack(alignment: .leading, spacing: 5) {
                 if !store.snapshot.warnings.isEmpty {

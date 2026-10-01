@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.3 — Unreleased
+
+- Add native worktree multi-selection, Select ready, one batch confirmation, and keyboard/context-menu cleanup actions.
+- Hide queued rows immediately while preserving per-item safety rechecks. Show nonmodal progress, stop remaining work, restore failed/skipped rows, and retain recovery details without success alerts.
+- Discard pre-cleanup background scans so older results cannot bring removed rows back.
+
 ## 0.6.2 — Unreleased
 
 - Replace generic cleanup Keep/Review labels with Ready to remove, Local changes, In use, and specific blockers. Use one decision for filters, counts, rows and confirmation.

@@ -35,18 +35,17 @@ struct ContentView: View {
                 }
             }
         }
-        .sheet(item: $store.cleanupTarget) { tree in
-            WorktreeCleanupSheet(store: store, tree: tree)
+        .sheet(item: $store.cleanupTarget) { request in
+            WorktreeCleanupSheet(store: store, request: request)
         }
-        .alert("Worktree cleanup", isPresented: Binding(get: { store.cleanupMessage != nil }, set: { if !$0 { store.cleanupMessage = nil } })) {
-            Button("OK") { store.cleanupMessage = nil }
-        } message: { Text(store.cleanupMessage ?? "") }
+        .sheet(isPresented: $store.cleanupDetailsPresented) {
+            CleanupResultsView(batch: store.cleanupBatch)
+        }
         .frame(minWidth: 1000, minHeight: 590)
         .onChange(of: store.filter) { _, filter in
-            if filter != .usage && !store.visibleWorktrees.contains(where: { $0.id == store.selection }) {
-                store.selection = store.visibleWorktrees.first?.id
-            }
+            if filter != .usage { store.reconcileSelection(selectFirst: true) }
         }
+        .onChange(of: store.search) { _, _ in store.reconcileSelection() }
     }
     private var sidebar: some View {
         SidebarView(store: store).navigationSplitViewColumnWidth(min: 180, ideal: Layout.sidebar, max: 260)
@@ -61,6 +60,7 @@ struct ContentView: View {
             }.navigationSplitViewColumnWidth(min: 440, ideal: 650)
         } detail: {
             if store.filter == .remote { RemoteSessionDetailView(store: store) }
+            else if store.selectedWorktrees.count > 1 { WorktreeSelectionView(store: store) }
             else if let tree = store.selected { WorktreeDetailView(store: store, tree: tree) }
             else { ContentUnavailableView("Select a worktree", systemImage: "arrow.triangle.branch", description: Text("Agent activity and cleanup checks appear here.")) }
         }

@@ -12,7 +12,7 @@ struct SidebarView: View {
                         HStack {
                             Label(filter.title, systemImage: filter.icon)
                             Spacer()
-                            Text("\(store.snapshot.worktrees.filter { store.matches(filter, tree: $0) }.count)")
+                            Text("\(store.availableWorktrees.filter { store.matches(filter, tree: $0) }.count)")
                                 .font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
                         }.tag(filter)
                     }

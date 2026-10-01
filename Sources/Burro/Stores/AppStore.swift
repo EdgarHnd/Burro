@@ -8,10 +8,13 @@ import BurroCore
     var snapshot = ScanSnapshot.empty
     var scanning = false
     var didScan = false
-    var cleanupTarget: Worktree?
+    var cleanupTarget: CleanupRequest?
     var cleaningWorktree = false
-    var cleanupMessage: String?
-    private let cleanup = WorktreeCleanup()
+    var cleanupDetailsPresented = false
+    let cleanupBatch: CleanupBatchStore
+    typealias Scan = @Sendable (ScanConfiguration) async -> ScanSnapshot
+    @ObservationIgnored private let scan: Scan
+    private var scanGeneration = 0
     var scanConfiguration: ScanConfiguration {
         ScanConfiguration(repositories: repositories, discover: discover,
             protectedPaths: protectedPaths, baseOverrides: baseOverrides)
@@ -19,18 +22,42 @@ import BurroCore
     func cleanupEligibility(_ tree: Worktree) -> CleanupEligibility {
         WorktreeCleanup.eligibility(tree, home: scanConfiguration.home, warnings: snapshot.warnings, registeredPaths: snapshot.worktrees.map(\.path))
     }
-    func removeWorktree(_ tree: Worktree) async {
-        guard !cleaningWorktree else { return }
-        cleaningWorktree = true
-        let config = scanConfiguration
-        do {
-            let destination = try await cleanup.remove(tree, configuration: config)
-            cleanupTarget = nil
-            let recovery = tree.branch == "Detached HEAD" ? "commit \(tree.head)" : "branch \(tree.branch)"
-            cleanupMessage = "Moved to Trash. Ignored files and all other folder contents are preserved at \(destination.path). To restore, create a new worktree at \(recovery) and copy back local files from Trash. No Git branches were deleted."
-        } catch { cleanupMessage = error.localizedDescription; cleanupTarget = nil }
-        cleaningWorktree = false
-        await refresh()
+    func reviewCleanup(_ trees: [Worktree]) {
+        guard !cleaningWorktree, !trees.isEmpty else { return }
+        cleanupTarget = CleanupRequest(trees: trees)
+    }
+    func cleanupBlocker(_ tree: Worktree) -> String? {
+        guard let current = availableWorktrees.first(where: { $0.id == tree.id }),
+              current.head == tree.head, current.branch == tree.branch,
+              current.repositoryPath == tree.repositoryPath, current.facts.base == tree.facts.base else {
+            return "This checkout changed. Select it again to review the latest state."
+        }
+        let eligibility = cleanupEligibility(current)
+        return eligibility.allowed ? nil : eligibility.reasons.joined(separator: "\n")
+    }
+    @discardableResult func confirmCleanup(_ request: CleanupRequest) -> Task<Void, Never>? {
+        guard !cleaningWorktree else { return nil }
+        let trees = request.trees.filter { cleanupBlocker($0) == nil }
+        guard cleanupBatch.begin(trees) else { return nil }
+        cleaningWorktree = true; cleanupTarget = nil
+        scanGeneration += 1; scanning = false // Discard any older scan before hiding rows.
+        worktreeSelection.subtract(cleanupBatch.hiddenPaths)
+        let configuration = scanConfiguration
+        return Task {
+            await cleanupBatch.run(configuration: configuration)
+            await refresh(afterCleanup: true)
+            cleanupBatch.settle()
+            cleaningWorktree = false
+        }
+    }
+    var availableWorktrees: [Worktree] { snapshot.worktrees.filter { !cleanupBatch.hiddenPaths.contains($0.id) } }
+    var selectedWorktrees: [Worktree] { visibleWorktrees.filter { worktreeSelection.contains($0.id) } }
+    var readyWorktrees: [Worktree] { visibleWorktrees.filter { cleanupEligibility($0).allowed } }
+    var selectedReadyCount: Int { selectedWorktrees.filter { cleanupEligibility($0).allowed }.count }
+    func selectReadyWorktrees() { worktreeSelection = Set(readyWorktrees.map(\.id)) }
+    func reconcileSelection(selectFirst: Bool = false) {
+        worktreeSelection.formIntersection(Set(visibleWorktrees.map(\.id)))
+        if selectFirst && worktreeSelection.isEmpty { selection = visibleWorktrees.first?.id }
     }
     func comparisonBranches(_ tree: Worktree) async -> [String] {
         await Task.detached(priority: .utility) {
@@ -55,7 +82,11 @@ import BurroCore
     var notchPreferMainDisplay: Bool { didSet { save(); onNotchPreferenceChange?() } }
     @ObservationIgnored var onNotchPreferenceChange: (() -> Void)?
     var search = ""
-    var selection: String?
+    var worktreeSelection: Set<String> = []
+    var selection: String? {
+        get { worktreeSelection.count == 1 ? worktreeSelection.first : nil }
+        set { worktreeSelection = Set([newValue].compactMap { $0 }) }
+    }
     var filter: WorktreeFilter = .all
     var repositories: [String] { didSet { save() } }
     var protectedPaths: Set<String> { didSet { save() } }
@@ -66,8 +97,11 @@ import BurroCore
     private var agentMonitorTask: Task<Void, Never>?
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, cleanupBatch: CleanupBatchStore? = nil,
+         scan: @escaping Scan = { await Scanner().scan($0) }) {
         self.defaults = defaults
+        self.scan = scan
+        self.cleanupBatch = cleanupBatch ?? CleanupBatchStore()
         usage = UsageStore(defaults: defaults)
         remoteHosts = defaults.data(forKey: "remoteHosts").flatMap { try? JSONDecoder().decode([RemoteHost].self, from: $0) } ?? []
         PreferencesMigration.migrate(into: defaults, legacy: defaults.persistentDomain(forName: "local.grove.worktrees") ?? [:])
@@ -84,7 +118,7 @@ import BurroCore
         return filter.matches(tree)
     }
     var visibleWorktrees: [Worktree] {
-        let trees = snapshot.worktrees.filter { tree in
+        let trees = availableWorktrees.filter { tree in
             matches(filter, tree: tree) && (search.isEmpty || [tree.branch, tree.repository, tree.path] .contains { $0.localizedCaseInsensitiveContains(search) } || tree.agents.contains { $0.title.localizedCaseInsensitiveContains(search) })
         }
         if filter == .cleanup {
@@ -122,7 +156,7 @@ import BurroCore
         }
         return notices.sorted { $0.connectionIssue && !$1.connectionIssue }
     }
-    var selected: Worktree? { snapshot.worktrees.first { $0.id == selection } }
+    var selected: Worktree? { selectedWorktrees.count == 1 ? selectedWorktrees.first : nil }
     var activeAgents: [AgentSession] { agentActivity.sessions.filter { $0.state == .working } }
     var repositoriesFound: [(path: String, name: String)] {
         Dictionary(grouping: snapshot.worktrees, by: \.repositoryPath).map { (path: $0.key, name: $0.value.first?.repository ?? $0.key) }.sorted { $0.name < $1.name }
@@ -253,11 +287,14 @@ import BurroCore
         }
         agentActivity = AgentActivitySnapshot(sessions: sessions, warnings: warnings, sampledAt: localActivity.sampledAt)
     }
-    func refresh() async {
-        guard !scanning && !cleaningWorktree else { return }
+    func refresh(afterCleanup: Bool = false) async {
+        guard !scanning && (!cleaningWorktree || afterCleanup) else { return }
         scanning = true
+        let generation = scanGeneration
         let config = ScanConfiguration(repositories: repositories, discover: discover, protectedPaths: protectedPaths, baseOverrides: baseOverrides)
-        var result = await Task.detached(priority: .utility) { await Scanner().scan(config) }.value
+        let scan = self.scan
+        var result = await Task.detached(priority: .utility) { await scan(config) }.value
+        guard generation == scanGeneration else { return }
         for i in result.worktrees.indices {
             let tree = result.worktrees[i]
             let protected = protectedPaths.contains(tree.path)
@@ -269,7 +306,8 @@ import BurroCore
             }
         }
         snapshot = result; scanning = false; didScan = true
-        if selection == nil || !result.worktrees.contains(where: { $0.id == selection }) { selection = visibleWorktrees.first?.id }
+        if afterCleanup { cleanupBatch.settle() }
+        reconcileSelection(selectFirst: !afterCleanup && worktreeSelection.isEmpty)
     }
     func protect(_ tree: Worktree) {
         guard !cleaningWorktree else { return }
