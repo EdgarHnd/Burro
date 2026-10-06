@@ -69,6 +69,28 @@ final class ClaudeDelegatedActivityTests: XCTestCase {
     func state(_ tail: String) -> AgentState? {
         ClaudeDelegatedActivity.workerTailState(tail, sessionID: sid, agentID: "worker", started: now.addingTimeInterval(-600), now: now, modified: now)
     }
+    func handback(flag: Any = true, time: Date? = nil, content: [[String: Any]] = [["type": "tool_result"]]) throws -> String {
+        let object: [String: Any] = ["sessionId": sid, "agentId": "worker", "isSidechain": true,
+            "type": "user", "timestamp": ISO8601DateFormatter().string(from: time ?? now),
+            "toolEndsTurn": flag, "message": ["role": "user", "content": content]]
+        return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+    }
+    func testHandbackCompletesWorkerWithoutAssistantStopReason() throws {
+        let finished = try handback(time: now.addingTimeInterval(-300))
+        XCTAssertNil(state(finished), "A completed handback must not age into Unknown")
+        XCTAssertNil(state(try event(time: now.addingTimeInterval(-400)) + "\n" + finished))
+        XCTAssertEqual(state(try finished + "\n" + event()), .working, "A resumed worker can run again")
+        XCTAssertEqual(state(try finished + "\n" + event(time: now.addingTimeInterval(-121))), .unknown)
+    }
+    func testHandbackRequiresBooleanTerminalFlagAndToolResultEnvelope() throws {
+        for flag: Any in [false, 1, "true", NSNull()] {
+            XCTAssertEqual(state(try handback(flag: flag, time: now.addingTimeInterval(-300))), .unknown)
+        }
+        XCTAssertEqual(state(try handback(time: now.addingTimeInterval(-300), content: [["type": "text", "text": "toolEndsTurn: true"]])), .unknown)
+        XCTAssertNil(state(try handback().replacingOccurrences(of: sid, with: UUID().uuidString)))
+        XCTAssertNil(state(try handback().replacingOccurrences(of: "worker", with: "different-worker")))
+        XCTAssertNil(state(try handback(time: now.addingTimeInterval(-900))))
+    }
     func testWorkersRequireFreshMatchingUnfinishedLifecycle() throws {
         XCTAssertEqual(state(try event()), .working)
         XCTAssertNil(state(try event(stop: "end_turn")))
@@ -94,6 +116,9 @@ final class ClaudeDelegatedActivityTests: XCTestCase {
             try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
             XCTAssertEqual(read(), expected)
         }
+        try handback(time: now.addingTimeInterval(-300)).write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-300)], ofItemAtPath: file.path)
+        XCTAssertEqual(read(), .scheduled, "A finished worker must not hide a verified scheduled command")
         try event(time: now.addingTimeInterval(-200)).write(to: file, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
         XCTAssertEqual(read(), .unknown)

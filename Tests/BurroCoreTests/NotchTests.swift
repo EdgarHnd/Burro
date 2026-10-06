@@ -16,6 +16,32 @@ final class NotchTests: XCTestCase {
         XCTAssertEqual(feed.visibleSessions(includeIdle: true).last?.id, "idle")
         XCTAssertEqual(feed.workingCount, 1); XCTAssertEqual(feed.waitingCount, 1); XCTAssertEqual(feed.idleCount, 1)
     }
+    func testAttentionPrioritizesInputAndClearsAfterProviderRead() {
+        var done = session("done", .idle)
+        done.hasUnreadResult = true
+        var feed = AgentActivitySnapshot(sessions: [done], warnings: [], sampledAt: Date())
+        XCTAssertEqual(feed.attention, .done)
+        feed.sessions.append(session("waiting-worker", .waiting))
+        feed.sessions[1].isSubagent = true
+        XCTAssertEqual(feed.attention, .waiting)
+        feed.sessions.removeLast()
+        feed.sessions[0].hasUnreadResult = false
+        XCTAssertEqual(feed.attention, .none)
+        feed.sessions = [session("working", .working), session("scheduled", .scheduled), session("unknown", .unknown)]
+        XCTAssertEqual(feed.attention, .none)
+    }
+    func testStaleRemoteAndCompletedWorkersDoNotLightAttention() {
+        var done = session("done", .inactive); done.hasUnreadResult = true
+        var wait = session("wait", .waiting)
+        let origin = RemoteOrigin(hostID: UUID(), hostName: "Fixture", sampledAt: Date(), stale: true)
+        done.remote = origin; wait.remote = origin
+        var worker = session("worker", .idle); worker.hasUnreadResult = true; worker.isSubagent = true
+        var feed = AgentActivitySnapshot(sessions: [done, wait, worker], warnings: [], sampledAt: Date())
+        XCTAssertEqual(feed.attention, .none)
+        XCTAssertEqual(feed.attentionCount, 0)
+        feed.sessions[1].remote?.stale = false
+        XCTAssertEqual(feed.attention, .waiting)
+    }
     func testDuplicateSessionIsNotShownTwice() {
         let feed = AgentActivitySnapshot(sessions: [session("same", .working), session("same", .working)], warnings: [], sampledAt: Date())
         XCTAssertEqual(feed.visibleSessions(includeIdle: false).count, 1)

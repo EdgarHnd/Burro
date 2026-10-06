@@ -3,9 +3,104 @@ import AppKit
 import QuartzCore
 import XCTest
 @testable import Burro
-import BurroCore
+@testable import BurroCore
 
 final class NotchPanelTests: XCTestCase {
+    @MainActor func testAttentionUpdatesWithoutExpansionAndSurvivesUsageAndSpaceChanges() async throws {
+        _ = NSApplication.shared
+        let name = "burro-attention-test-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.set(true, forKey: "notchEnabled")
+        defaults.set(false, forKey: "usageEnabled")
+        defaults.set(false, forKey: "discover")
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = AppStore(defaults: defaults)
+        let controller = NotchController(pointerLocation: { NSPoint(x: -100_000, y: -100_000) }, reduceMotion: { true })
+        controller.start(store: store, openDashboard: {})
+        defer { controller.stop() }
+        let surface = try XCTUnwrap(controller.surface)
+        let panel = try XCTUnwrap(controller.panel)
+        let compactFrame = panel.frame
+        var done = AgentSession(id: "fixture", provider: .codex, title: "Completed fixture", cwd: "/fixture", state: .idle,
+                                updatedAt: Date(), evidence: "fixture", hasUnreadResult: true)
+        store.agentActivity = AgentActivitySnapshot(sessions: [done], warnings: [], sampledAt: Date())
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(surface.attention, .done)
+        XCTAssertEqual(surface.attentionGlow.opacity, 1)
+        XCTAssertFalse(controller.presentation.expanded)
+        XCTAssertEqual(panel.frame, compactFrame, "Glowing cannot expand the pointer hit area")
+        XCTAssertNil(surface.attentionGlow.animationKeys(), "Reduce Motion leaves a steady indicator")
+        controller.selectPage(.usage)
+        controller.show()
+        XCTAssertEqual(surface.attentionGlow.opacity, 0, "The rim is only needed while collapsed")
+        done.state = .waiting
+        store.agentActivity.sessions = [done]
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(surface.attention, .waiting)
+        controller.collapse()
+        XCTAssertEqual(surface.attentionGlow.opacity, 1)
+        XCTAssertEqual(controller.presentation.navigation.visible, .usage)
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(surface.attentionGlow.opacity, 1)
+        XCTAssertEqual(panel.frame, compactFrame)
+        done.state = .idle; done.hasUnreadResult = false
+        store.agentActivity.sessions = [done]
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(surface.attention, .none)
+        XCTAssertEqual(surface.attentionGlow.opacity, 0)
+        controller.stop()
+        store.agentActivity.sessions = []
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertNil(controller.panel, "A queued observation cannot reopen a stopped controller")
+    }
+    @MainActor func testAttentionRimProducesVisiblePixelsAndClears() async throws {
+        try await withController(reduceMotion: true) { controller, _ in
+            let surface = try XCTUnwrap(controller.surface)
+            surface.layoutSubtreeIfNeeded()
+            @MainActor func render(_ attention: AgentAttention) throws -> NSBitmapImageRep {
+                surface.setAttention(attention, animated: false)
+                let bitmap = try XCTUnwrap(surface.bitmapImageRepForCachingDisplay(in: surface.bounds))
+                surface.cacheDisplay(in: surface.bounds, to: bitmap)
+                return bitmap
+            }
+            let off = try render(.none), blue = try render(.done), amber = try render(.waiting)
+            func changedPixels(_ image: NSBitmapImageRep) -> Int {
+                var count = 0
+                for y in 0..<image.pixelsHigh {
+                    for x in 0..<image.pixelsWide {
+                        guard let a = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                              let b = off.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                        if abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent) + abs(a.blueComponent - b.blueComponent) > 0.15 { count += 1 }
+                    }
+                }
+                return count
+            }
+            XCTAssertGreaterThan(changedPixels(blue), 100, "A layer state alone does not prove the glow is visible")
+            XCTAssertGreaterThan(changedPixels(amber), 100)
+            XCTAssertEqual(changedPixels(try render(.none)), 0)
+            if let directory = ProcessInfo.processInfo.environment["BURRO_NOTCH_RENDER_DIR"] {
+                let root = URL(fileURLWithPath: directory)
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                for (name, bitmap) in [("off", off), ("done", blue), ("waiting", amber)] {
+                    try bitmap.representation(using: .png, properties: [:])?.write(to: root.appendingPathComponent(name + ".png"))
+                }
+            }
+        }
+    }
+    @MainActor func testOverlayJoinsOtherApplicationsWithoutTakingFocus() async throws {
+        try await withController(reduceMotion: true) { controller, _ in
+            let panel = try XCTUnwrap(controller.panel)
+            XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllApplications))
+            XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
+            XCTAssertTrue(panel.collectionBehavior.contains(.fullScreenAuxiliary))
+            XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+            XCTAssertFalse(panel.hidesOnDeactivate)
+            XCTAssertEqual(panel.level.rawValue, NSWindow.Level.statusBar.rawValue + 1)
+            XCTAssertFalse(panel.isKeyWindow)
+            XCTAssertFalse(panel.isMainWindow)
+        }
+    }
     @MainActor func testTabPreviewUsesScreenCoordinatesAndCommonModeDeadline() async throws {
         try await withController(reduceMotion: true) { controller, move in
             controller.show()

@@ -26,6 +26,8 @@ jobs:
         run: swift test --skip NotchPanelTests
       - name: Remote probe fixtures
         run: python3 -B script/test_remote_probe.py
+      - name: Signing identity regression tests
+        run: python3 -B script/test_signing_identity.py
       - name: Build app from source
         run: CONFIGURATION=release ./script/build_and_run.sh --build-only
       - name: Verify bundle signature and bundled remote probe

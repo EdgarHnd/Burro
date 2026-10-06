@@ -1,6 +1,8 @@
 // Fast, read-only agent snapshots and presentation ordering, independent of expensive Git scans.
 import Foundation
 
+public enum AgentAttention: Sendable { case none, done, waiting }
+
 public struct AgentActivitySnapshot: Sendable {
     public var sessions: [AgentSession]
     public var warnings: [String]
@@ -14,10 +16,11 @@ public struct AgentActivitySnapshot: Sendable {
         var seen: Set<String> = []
         return sessions.filter { seen.insert($0.id).inserted }
     }
+    public var attention: AgentAttention { waitingCount > 0 ? .waiting : (doneCount > 0 ? .done : .none) }
     public var attentionCount: Int { waitingCount + doneCount }
     public var workingCount: Int { uniqueSessions.filter { $0.state == .working }.count }
     public var scheduledCount: Int { uniqueSessions.filter { $0.state == .scheduled }.count }
-    public var waitingCount: Int { uniqueSessions.filter { $0.state == .waiting }.count }
+    public var waitingCount: Int { uniqueSessions.filter { $0.state == .waiting && $0.remote?.stale != true }.count }
     public var idleCount: Int { uniqueSessions.filter { $0.state == .idle && !$0.isDone }.count }
     public var doneCount: Int { uniqueSessions.filter(\.isDone).count }
     public func visibleSessions(includeIdle: Bool) -> [AgentSession] {

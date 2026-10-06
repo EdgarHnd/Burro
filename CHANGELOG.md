@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.6 — Unreleased
+
+- Recognize Claude subagents that finish through a `SubagentHandback` tool-result envelope. Completed workers no longer leave idle parents stuck at Unknown; apply the same lifecycle rule locally and over SSH while retaining live background-task and uncertainty checks.
+
+## 0.6.5 — Unreleased
+
+- Block background Claude password prompts in both macOS Keychain implementations. Serialize and restore the legacy interaction policy; only the first read of an explicit connection may prompt, and retries stay silent.
+- Keep saved signing identities and designated requirements stable across updates. Refuse silent fallback or identity changes, and validate replacement bundles before touching the previous app.
+
+## 0.6.4 — Unreleased
+
+- Add a steady amber/blue attention glow to the collapsed notch for input requests and unread completions, including remote sessions and while Usage is selected. Respect Reduce Motion and clear with provider status.
+- Allow the notch overlay to join other applications’ fullscreen Spaces without taking focus.
+
 ## 0.6.3 — Unreleased
 
 - Add native worktree multi-selection, Select ready, one batch confirmation, and keyboard/context-menu cleanup actions.

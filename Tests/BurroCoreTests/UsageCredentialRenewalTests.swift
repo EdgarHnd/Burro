@@ -2,6 +2,12 @@
 import XCTest
 @testable import BurroCore
 
+private final class PromptFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Bool] = []
+    var requests: [Bool] { lock.withLock { values } }
+    func record(_ allowed: Bool) { lock.withLock { values.append(allowed) } }
+}
 private final class RenewalFixture: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Data
@@ -92,7 +98,7 @@ final class UsageCredentialRenewalTests: XCTestCase {
     }
     func testClaudeRetriesChangedTokenAfter401() async {
         let fixture = RenewalFixture(Data())
-        let result = await ClaudeUsageReader.read(load: {
+        let result = await ClaudeUsageReader.read(load: { _ in
             ClaudeUsageCredential(accessToken: fixture.calls == 0 ? "old" : "new")
         }, fetch: { token in
             if token.accessToken == "old" { fixture.increment(); throw UsageIssue.expired }
@@ -102,14 +108,36 @@ final class UsageCredentialRenewalTests: XCTestCase {
     }
     func testClaudeDoesNotRetryRejectedUnchangedToken() async {
         let fixture = RenewalFixture(Data())
-        let result = await ClaudeUsageReader.read(load: { ClaudeUsageCredential(accessToken: "same") }, fetch: { _ in
+        let result = await ClaudeUsageReader.read(load: { _ in ClaudeUsageCredential(accessToken: "same") }, fetch: { _ in
             fixture.increment(); throw UsageIssue.expired
         })
         XCTAssertEqual(result.issue, .renewalRequired); XCTAssertEqual(fixture.calls, 1)
     }
+    func testClaudeConnectionAllowsOnlyInitialReadToPrompt() async {
+        let fixture = PromptFixture()
+        let result = await ClaudeUsageReader.read(allowKeychainPrompt: true, load: { allowed in
+            fixture.record(allowed)
+            return ClaudeUsageCredential(accessToken: fixture.requests.count == 1 ? "old" : "new")
+        }, fetch: { token in
+            if token.accessToken == "old" { throw UsageIssue.expired }
+            return ProviderUsage(id: .claude, windows: [])
+        })
+        XCTAssertNil(result.issue)
+        XCTAssertEqual(fixture.requests, [true, false])
+    }
+    func testBackgroundRotationNeverEnablesPromptAndDenialDoesNotLoop() async {
+        let fixture = PromptFixture()
+        let result = await ClaudeUsageReader.read(load: { allowed in
+            fixture.record(allowed)
+            if fixture.requests.count > 1 { throw UsageIssue.permissionRequired }
+            return ClaudeUsageCredential(accessToken: "old")
+        }, fetch: { _ in throw UsageIssue.expired })
+        XCTAssertEqual(result.issue, .permissionRequired)
+        XCTAssertEqual(fixture.requests, [false, false])
+    }
     func testClaudeExpiredTokenDoesNotAskForPasswordOrMakeRequest() async {
         let fixture = RenewalFixture(Data())
-        let result = await ClaudeUsageReader.read(load: { throw UsageIssue.expired }, fetch: { _ in
+        let result = await ClaudeUsageReader.read(load: { _ in throw UsageIssue.expired }, fetch: { _ in
             fixture.increment(); return .failure(.claude, .unavailable)
         })
         XCTAssertEqual(result.issue, .renewalRequired); XCTAssertEqual(fixture.calls, 0)

@@ -6,19 +6,21 @@ import Darwin
 
 public enum ClaudeUsageReader {
     public static func read(allowKeychainPrompt: Bool = false, profile: String? = nil) async -> ProviderUsage {
-        await read(load: { try await ClaudeUsageCredential.loadAsync(allowPrompt: allowKeychainPrompt, profile: profile) }, fetch: fetch)
+        await read(allowKeychainPrompt: allowKeychainPrompt,
+                   load: { try await ClaudeUsageCredential.loadAsync(allowPrompt: $0, profile: profile) }, fetch: fetch)
     }
-    static func read(load: @Sendable () async throws -> ClaudeUsageCredential,
+    static func read(allowKeychainPrompt: Bool = false,
+                     load: @Sendable (Bool) async throws -> ClaudeUsageCredential,
                      fetch: @Sendable (ClaudeUsageCredential) async throws -> ProviderUsage) async -> ProviderUsage {
         do {
             let token: ClaudeUsageCredential
-            do { token = try await load() }
+            do { token = try await load(allowKeychainPrompt) }
             catch UsageIssue.expired { throw UsageIssue.renewalRequired }
             do { return try await fetch(token) }
             catch UsageIssue.expired {
                 // Claude Code owns renewal. If it rotated during our request, retry once
                 // with a fresh read of the SAME selected profile, never a cached account.
-                let fresh = try await load()
+                let fresh = try await load(false)
                 guard fresh.accessToken != token.accessToken else { throw UsageIssue.renewalRequired }
                 return try await fetch(fresh)
             }
@@ -127,7 +129,9 @@ struct ClaudeUsageCredential: Sendable {
             kSecUseAuthenticationContext as String: authenticationContext(allowPrompt: allowPrompt)
         ]
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = try KeychainAccess.perform(allowPrompt: allowPrompt) {
+            SecItemCopyMatching(query as CFDictionary, &result)
+        }
         switch status {
         case errSecSuccess:
             guard let data = result as? Data else { throw UsageIssue.unavailable }

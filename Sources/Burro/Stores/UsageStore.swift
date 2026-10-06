@@ -70,6 +70,8 @@ struct UsagePreferences: Codable, Equatable {
         guard enabled, !checking else { return }
         if let lastAttempt, Date().timeIntervalSince(lastAttempt) < 15 { return }
         let due = preferences.providers.filter { provider in
+            // A connection click authorizes Claude only, never another provider's auth.
+            if allowClaudePrompt && provider != .claude { return false }
             let ready = (nextPoll[provider] ?? .distantPast) <= Date()
             // Manual refresh must not hammer a provider that explicitly asked us to wait.
             if snapshot.providers.first(where: { $0.id == provider })?.issue == .rateLimited { return ready }

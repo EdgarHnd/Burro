@@ -65,6 +65,25 @@ class ProbeTests(unittest.TestCase):
         self.assertIsNone(probe.claude_task_id('/dev/pipe', sid))
         self.assertEqual(probe.claude_descendants(10, {10: 1, 11: 10, 12: 11, 13: 99}), {11, 12})
 
+    def test_handback_ends_worker_and_new_activity_can_resume_it(self):
+        sid = '11111111-2222-4333-8444-555555555555'
+        now = time.time()
+        event = json.loads(self.worker_event(sid, age=300))
+        event.update(type='user', toolEndsTurn=True, message={'role': 'user', 'content': [{'type': 'tool_result'}]})
+        done = json.dumps(event)
+        parse = lambda text: probe.claude_worker_tail_state(text, sid, 'worker-a', now - 600, now, now)
+        self.assertIsNone(parse(done))
+        self.assertIsNone(probe.claude_worker_tail_state(done, sid, 'worker-a', now - 600, now, now - 300))
+        self.assertEqual(parse(done + '\n' + self.worker_event(sid)), 'Working')
+        self.assertEqual(parse(done + '\n' + self.worker_event(sid, age=121)), 'Unknown')
+        for value in [False, 1, 'true', None]:
+            self.assertEqual(parse(json.dumps(dict(event, toolEndsTurn=value))), 'Unknown')
+        no_result = dict(event, message={'content': [{'type': 'text', 'text': 'toolEndsTurn: true'}]})
+        self.assertEqual(parse(json.dumps(no_result)), 'Unknown')
+        self.assertIsNone(parse(done.replace(sid, 'another-session')))
+        self.assertIsNone(parse(done.replace('worker-a', 'another-worker')))
+        self.assertIsNone(probe.claude_worker_tail_state(done, sid, 'worker-a', now - 60, now, now))
+
     def test_background_descriptor_probe_deduplicates_tasks_and_ignores_helpers(self):
         sid = '11111111-2222-4333-8444-555555555555'
         path = f'/tmp/claude-{os.getuid()}/project/{sid}/tasks/task-a.output'

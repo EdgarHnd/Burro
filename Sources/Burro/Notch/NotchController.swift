@@ -28,6 +28,7 @@ import BurroCore
     private var hoverTimer: Timer?
     private var scheduledDeadline: TimeInterval?
     private var transitionID: UUID?
+    private var observationID = UUID()
     private var placingWindow = false
     private var destinationFrame: NSRect = .zero
     private var observers: [NSObjectProtocol] = []
@@ -52,10 +53,11 @@ import BurroCore
         let panel = AgentNotchPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Burro — Agents"
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
-        panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
         panel.hidesOnDeactivate = false; panel.isFloatingPanel = true; panel.becomesKeyOnlyIfNeeded = true
+        // isFloatingPanel resets the level to floating; apply the overlay level afterwards.
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
         panel.isReleasedWhenClosed = false; panel.isMovable = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         func content(compact: Bool) -> NotchView {
             NotchView(store: store, presentation: presentation,
                 onToggle: { [weak self] in self?.toggle() },
@@ -114,8 +116,29 @@ import BurroCore
                 Task { @MainActor in self?.updateListHold() }
             })
         }
+        observationID = UUID()
+        observeAttention()
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let store = self.store else { return }
+                self.surface?.setAttention(store.agentActivity.attention, animated: !self.reduceMotion())
+            }
+        })
         configure()
         samplePointer()
+    }
+    // Observe live activity independently of the frozen expanded list and the selected tab.
+    private func observeAttention() {
+        guard let store, let surface, panel != nil else { return }
+        let id = observationID
+        withObservationTracking {
+            surface.setAttention(store.agentActivity.attention, animated: !reduceMotion())
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, self.observationID == id else { return }
+                self.observeAttention()
+            }
+        }
     }
     func show() {
         if store?.notchEnabled == false { store?.notchEnabled = true }
@@ -133,6 +156,7 @@ import BurroCore
         applyInteraction()
     }
     func stop() {
+        observationID = UUID()
         presentation.navigation.endPreview(); navigationBounds = [:]
         hoverTimer?.invalidate(); transitionID = nil
         scheduledDeadline = nil

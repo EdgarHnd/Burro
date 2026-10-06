@@ -74,7 +74,7 @@ public enum UsageIssue: String, Sendable, Equatable, Error {
         switch self {
         case .notInstalled: "Install this provider’s command-line app to connect an account."
         case .signInRequired: "Sign in to this provider’s coding app to see subscription limits."
-        case .permissionRequired: "Connect Claude to allow access to its existing Claude Code sign-in."
+        case .permissionRequired: "Connect Claude to use its existing sign-in. Choose Always Allow in the macOS prompt to remember access."
         case .expired: "The provider rejected this session. Open its coding app to reconnect."
         case .renewalRequired: "Waiting for the coding app to renew its session. Open the app; Burro will retry automatically."
         case .unavailable: "Couldn’t fetch limits. Retrying automatically."

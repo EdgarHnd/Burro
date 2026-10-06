@@ -7,6 +7,12 @@ import BurroCore
 @MainActor final class NotchSurfaceView: NSView {
     let background = CAShapeLayer()
     private let surfaceMask = CAShapeLayer()
+    let attentionGlow = CAShapeLayer()
+    private let glowContainer = CALayer()
+    private let glowClip = CAShapeLayer()
+    private let glowFade = CAGradientLayer()
+    private(set) var attention: AgentAttention = .none
+    private var attentionAnimated = false
     private let content = FlippedNotchView()
     private let compactHost: NSHostingView<NotchView>
     private let expandedHost: NSHostingView<NotchView>
@@ -25,6 +31,23 @@ import BurroCore
         wantsLayer = true
         background.fillColor = NSColor.black.cgColor
         layer?.addSublayer(background)
+        // An inner rim leaves the window and hover footprint unchanged. The top edge stays black.
+        layer?.addSublayer(glowContainer)
+        glowContainer.mask = glowClip
+        glowContainer.addSublayer(attentionGlow)
+        attentionGlow.fillColor = NSColor.clear.cgColor
+        attentionGlow.strokeColor = NSColor.systemBlue.cgColor
+        attentionGlow.shadowColor = NSColor.systemBlue.cgColor
+        attentionGlow.lineWidth = 2
+        attentionGlow.shadowRadius = 7
+        attentionGlow.shadowOffset = .zero
+        attentionGlow.shadowOpacity = 1
+        attentionGlow.opacity = 0
+        attentionGlow.mask = glowFade
+        glowFade.colors = [NSColor.clear.cgColor, NSColor.white.cgColor]
+        glowFade.locations = [0.25, 1]
+        glowFade.startPoint = CGPoint(x: 0.5, y: 0)
+        glowFade.endPoint = CGPoint(x: 0.5, y: 1)
         content.wantsLayer = true
         addSubview(content)
         content.layer?.mask = surfaceMask
@@ -51,6 +74,13 @@ import BurroCore
                                         width: expandedSize.width, height: expandedSize.height)
             background.frame = bounds
             surfaceMask.frame = content.bounds
+            glowContainer.frame = bounds; glowClip.frame = bounds
+            attentionGlow.frame = bounds
+            let compactRect = CGRect(x: (bounds.width - compactSize.width) / 2, y: 0,
+                                     width: compactSize.width, height: compactSize.height)
+            let glowPath = outline(size: compactSize, expansion: 0)
+            glowClip.path = glowPath; attentionGlow.path = glowPath
+            glowFade.frame = compactRect
             if !isAnimating { setModel(motion.sample(at: CACurrentMediaTime())) }
         }
     }
@@ -60,6 +90,7 @@ import BurroCore
         self.expanded = expanded
         let id = UUID(); generation = id
         isAnimating = animated
+        updateAttentionGlow(animated: animated && attentionAnimated)
         layoutSubtreeIfNeeded()
         compactHost.setAccessibilityHidden(expanded)
         expandedHost.setAccessibilityHidden(!expanded)
@@ -94,6 +125,7 @@ import BurroCore
             Task { @MainActor in
                 guard let self, self.generation == id else { return }
                 self.isAnimating = false
+                self.updateAttentionGlow(animated: self.attentionAnimated)
                 completion()
             }
         }
@@ -105,9 +137,37 @@ import BurroCore
         expandedHost.layer?.add(animation("transform.translation.y", values: samples.map { -6 * (1 - $0.expansion) }), forKey: "notch.lift")
         CATransaction.commit()
     }
+    func setAttention(_ attention: AgentAttention, animated: Bool) {
+        let changed = self.attention != attention
+        self.attention = attention; attentionAnimated = animated
+        if changed || !animated { updateAttentionGlow(animated: animated) }
+    }
+    private func updateAttentionGlow(animated: Bool) {
+        let color = attention == .waiting ? NSColor(NotchStyle.attention) : NSColor.systemBlue
+        let opacity: Float = attention != .none && !expanded && !isAnimating ? 1 : 0
+        let visible = attentionGlow.presentation() ?? attentionGlow
+        let oldOpacity = visible.opacity
+        let oldColor = visible.strokeColor
+        let oldShadow = visible.shadowColor
+        withoutActions {
+            attentionGlow.removeAllAnimations()
+            attentionGlow.strokeColor = color.cgColor
+            attentionGlow.shadowColor = color.cgColor
+            attentionGlow.opacity = opacity
+        }
+        guard animated else { return }
+        for (key, from, to) in [("opacity", oldOpacity as Any, opacity as Any),
+                                ("strokeColor", oldColor as Any, color.cgColor as Any),
+                                ("shadowColor", oldShadow as Any, color.cgColor as Any)] {
+            let fade = CABasicAnimation(keyPath: key)
+            fade.fromValue = from; fade.toValue = to; fade.duration = 0.22
+            fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            attentionGlow.add(fade, forKey: "attention." + key)
+        }
+    }
     func cancel() {
         generation = UUID(); isAnimating = false
-        withoutActions { [background, surfaceMask, compactHost.layer, expandedHost.layer].forEach { $0?.removeAllAnimations() } }
+        withoutActions { [background, surfaceMask, attentionGlow, compactHost.layer, expandedHost.layer].forEach { $0?.removeAllAnimations() } }
     }
     override func hitTest(_ point: NSPoint) -> NSView? {
         // Layer opacity does not control NSView hit testing. Route only to the intended content.
@@ -125,9 +185,12 @@ import BurroCore
     private func compactOpacity(_ progress: Double) -> Double { max(0, 1 - progress * 3) }
     private func expandedOpacity(_ progress: Double) -> Double { max(0, (progress - 0.12) / 0.88) }
     private func outline(_ sample: NotchMotion.Sample) -> CGPath {
-        let rect = CGRect(x: (bounds.width - sample.size.width) / 2, y: 0, width: sample.size.width, height: sample.size.height)
+        outline(size: sample.size, expansion: sample.expansion)
+    }
+    private func outline(size: CGSize, expansion: Double) -> CGPath {
+        let rect = CGRect(x: (bounds.width - size.width) / 2, y: 0, width: size.width, height: size.height)
         let shoulder = min(8.0, rect.height / 3)
-        let radius = min(10 + 16 * sample.expansion, (rect.height - shoulder) / 2)
+        let radius = min(10 + 16 * expansion, (rect.height - shoulder) / 2)
         let left = rect.minX + shoulder, right = rect.maxX - shoulder
         let path = CGMutablePath()
         path.move(to: CGPoint(x: rect.minX, y: rect.minY))

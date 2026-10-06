@@ -1,5 +1,6 @@
 // Keep idle Claude parents visible while verified background commands or in-process workers remain.
 import Foundation
+import CoreFoundation
 import CSystem
 import Darwin
 
@@ -110,6 +111,12 @@ struct ClaudeDelegatedActivity {
             if time == nil { formatter.formatOptions = [.withInternetDateTime]; time = formatter.date(from: stamp) }
             guard let time, time >= started.addingTimeInterval(-2), time <= now.addingTimeInterval(5) else { continue }
             if type == "assistant", ["end_turn", "stop_sequence"].contains(message["stop_reason"] as? String ?? "") { return nil }
+            // New Claude workers finish via SubagentHandback: the final tool-result
+            // envelope ends the turn, without a following assistant stop_reason.
+            if type == "user", let endsTurn = event["toolEndsTurn"] as? NSNumber,
+               CFGetTypeID(endsTurn) == CFBooleanGetTypeID(), endsTurn.boolValue,
+               let content = message["content"] as? [Any],
+               content.contains(where: { ($0 as? [String: Any])?["type"] as? String == "tool_result" }) { return nil }
             return (-5...120).contains(now.timeIntervalSince(time)) && (-5...120).contains(now.timeIntervalSince(modified)) ? .working : .unknown
         }
         return !identified && !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .unknown : nil

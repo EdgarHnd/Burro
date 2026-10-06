@@ -164,6 +164,13 @@ def claude_worker_tail_state(tail, sid, agent_id, started, now, modified):
                 continue
             if event["type"] == "assistant" and message.get("stop_reason") in ("end_turn", "stop_sequence"):
                 return None
+            # SubagentHandback ends on a user tool-result envelope, without a
+            # subsequent assistant stop_reason. Read the flag, never result text.
+            content = message.get("content")
+            if (event["type"] == "user" and event.get("toolEndsTurn") is True
+                    and isinstance(content, list)
+                    and any(isinstance(block, dict) and block.get("type") == "tool_result" for block in content)):
+                return None
             # Silence is not proof of completion. Retain uncertainty after fresh progress expires.
             return "Working" if -5 <= now - stamp <= 120 and -5 <= now - modified <= 120 else "Unknown"
         except (ValueError, KeyError, TypeError, AttributeError, OverflowError):

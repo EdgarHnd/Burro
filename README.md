@@ -40,7 +40,7 @@ For an optimized local build without launching:
 CONFIGURATION=release ./script/build_and_run.sh --build-only
 ```
 
-This release is **source-only**. Local builds reuse an available Apple Development signing identity for stable Keychain access, or fall back to ad-hoc signing without one. Set `BURRO_SIGNING_IDENTITY` to select an identity (`-` forces ad-hoc). Builds are not Developer ID signed or notarized; there is no prebuilt download or automatic updater. The build targets the architecture of the Mac that runs it.
+This release is **source-only**. Local builds preserve their selected Apple Development signing identity and refuse silent changes that would invalidate Keychain access. Fresh source builds without a certificate use ad-hoc signing. Set `BURRO_SIGNING_IDENTITY` to select an identity (`-` forces ad-hoc). Builds are not Developer ID signed or notarized; there is no prebuilt download or automatic updater. The build targets the architecture of the Mac that runs it.
 
 ## First run
 
