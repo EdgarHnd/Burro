@@ -59,12 +59,13 @@ public struct UsageWindow: Identifiable, Codable, Sendable, Equatable {
     public func isExpired(now: Date) -> Bool { resetsAt.map { $0 <= now } ?? false }
 }
 public enum UsageIssue: String, Sendable, Equatable, Error {
-    case notInstalled, signInRequired, permissionRequired, expired, renewalRequired, unavailable, timedOut, rateLimited, unsupported
+    case notInstalled, signInRequired, permissionRequired, keychainLocked, expired, renewalRequired, unavailable, timedOut, rateLimited, unsupported
     public var requiresSignIn: Bool { self == .signInRequired || self == .expired }
     public var accountLabel: String {
         switch self {
         case .signInRequired, .expired: "Sign-in needs attention"
         case .permissionRequired: "Keychain access needed"
+        case .keychainLocked: "Waiting for Keychain"
         case .renewalRequired: "Session renewal needed"
         case .notInstalled: "Coding app not installed"
         default: "Limits temporarily unavailable"
@@ -74,7 +75,8 @@ public enum UsageIssue: String, Sendable, Equatable, Error {
         switch self {
         case .notInstalled: "Install this provider’s command-line app to connect an account."
         case .signInRequired: "Sign in to this provider’s coding app to see subscription limits."
-        case .permissionRequired: "Connect Claude to use its existing sign-in. Choose Always Allow in the macOS prompt to remember access."
+        case .permissionRequired: "Connect Claude to use its existing sign-in. Claude Code can reset this permission when renewing its login."
+        case .keychainLocked: "Waiting for your login Keychain to unlock. Reconnecting automatically."
         case .expired: "The provider rejected this session. Open its coding app to reconnect."
         case .renewalRequired: "Waiting for the coding app to renew its session. Open the app; Burro will retry automatically."
         case .unavailable: "Couldn’t fetch limits. Retrying automatically."
@@ -97,6 +99,7 @@ public struct ProviderUsage: Identifiable, Sendable, Equatable {
     public var identity: UsageIdentity? = nil
     public var balance: UsageBalance? = nil
     public var isLoading = false
+    public var usesClaudeCLI = false
     public var resetCredits: Int? = nil
     public var products: [UsageProductShare] = []
     public var title: String { id.title }

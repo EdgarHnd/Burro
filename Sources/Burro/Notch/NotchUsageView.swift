@@ -49,7 +49,7 @@ struct NotchUsageView: View {
                         .help("Updated: \(date.formatted())")
                 }
             }.font(.system(size: 12))
-                .help(provider.identity.map { "\($0.account) · Limits shared across machines using this account" } ?? "Account limits")
+                .help(provider.identity.map { "\($0.account) · Limits shared across machines using this account" } ?? (provider.usesClaudeCLI ? "Live limits from Claude Code; account details unavailable" : "Account limits"))
             if provider.windows.isEmpty {
                 Text(provider.isLoading ? "Connecting…" : (provider.issue?.message ?? "No limits reported by this provider."))
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

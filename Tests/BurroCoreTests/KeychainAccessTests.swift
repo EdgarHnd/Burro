@@ -4,6 +4,15 @@ import XCTest
 @testable import BurroCore
 
 final class KeychainAccessTests: XCTestCase {
+    func testLockedKeychainIsTemporaryRatherThanMissingApproval() {
+        for status in [errSecInteractionNotAllowed, errSecAuthFailed] {
+            XCTAssertEqual(KeychainAccess.readIssue(status: status, unlocked: false), .keychainLocked)
+            XCTAssertEqual(KeychainAccess.readIssue(status: status, unlocked: true), .permissionRequired)
+            XCTAssertEqual(KeychainAccess.readIssue(status: status, unlocked: nil), .permissionRequired)
+        }
+        XCTAssertEqual(KeychainAccess.readIssue(status: errSecItemNotFound, unlocked: false), .signInRequired)
+        XCTAssertFalse(UsageIssue.keychainLocked.requiresSignIn)
+    }
     func testBackgroundReadDisablesLegacyUIAndRestoresIt() throws {
         var allowed = true, changes: [Bool] = []
         let value = try KeychainAccess.withInteraction(allowPrompt: false,

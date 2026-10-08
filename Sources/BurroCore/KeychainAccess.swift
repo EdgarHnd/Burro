@@ -18,6 +18,23 @@ enum KeychainAccess {
         }, set: { SecKeychainSetUserInteractionAllowed($0) }, operation: operation)
     }
 
+    static func defaultKeychainUnlocked() -> Bool? {
+        var keychain: SecKeychain?
+        guard SecKeychainCopyDefault(&keychain) == errSecSuccess, let keychain else { return nil }
+        var status: SecKeychainStatus = 0
+        guard SecKeychainGetStatus(keychain, &status) == errSecSuccess else { return nil }
+        return status & kSecUnlockStateStatus != 0
+    }
+    static func readIssue(status: OSStatus, unlocked: Bool?) -> UsageIssue {
+        switch status {
+        case errSecInteractionNotAllowed, errSecAuthFailed:
+            return unlocked == false ? .keychainLocked : .permissionRequired
+        case errSecUserCanceled: return .permissionRequired
+        case errSecItemNotFound: return .signInRequired
+        default: return .unavailable
+        }
+    }
+
     static func withInteraction<T>(allowPrompt: Bool,
                                    get: () -> (OSStatus, Bool),
                                    set: (Bool) -> OSStatus,

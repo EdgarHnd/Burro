@@ -3,10 +3,22 @@ import Foundation
 import Darwin
 
 public enum CodexUsageReader {
-    public static func executable(home: String = FileManager.default.homeDirectoryForCurrentUser.path, bundled: String? = nil) -> String? {
-        let candidates = [bundled, home + "/.local/bin/codex", "/opt/homebrew/bin/codex", "/usr/local/bin/codex",
-                          "/Applications/ChatGPT.app/Contents/Resources/codex", "/Applications/Codex.app/Contents/Resources/codex"]
-        return candidates.compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
+    public static func executable(home: String = FileManager.default.homeDirectoryForCurrentUser.path,
+                                  bundled: String? = nil, appBundle: String? = nil) -> String? {
+        executable(home: home, bundled: bundled, appBundle: appBundle,
+                   isExecutable: FileManager.default.isExecutableFile(atPath:))
+    }
+    static func executable(home: String, bundled: String?, appBundle: String?,
+                           isExecutable: (String) -> Bool) -> String? {
+        // Desktop updates can move the CLI. Prefer the installed app's packaged
+        // launcher over a shell-dependent npm shim, while supporting older layouts.
+        let apps = [appBundle, "/Applications/ChatGPT.app", "/Applications/Codex.app"].compactMap { $0 }
+        let packaged = apps.flatMap { root in
+            ["Contents/Resources/codex-cli/bin/codex", "Contents/Resources/codex"].map { root + "/" + $0 }
+        }
+        let candidates = [bundled].compactMap { $0 } + packaged
+            + [home + "/.local/bin/codex", "/opt/homebrew/bin/codex", "/usr/local/bin/codex"]
+        return candidates.first(where: isExecutable)
     }
     public static func read(executable: String?, timeout: TimeInterval = 20, home: String? = nil) -> ProviderUsage {
         guard let executable else { return .failure(.codex, .notInstalled) }

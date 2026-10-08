@@ -6,8 +6,11 @@ import Darwin
 
 public enum ClaudeUsageReader {
     public static func read(allowKeychainPrompt: Bool = false, profile: String? = nil) async -> ProviderUsage {
-        await read(allowKeychainPrompt: allowKeychainPrompt,
-                   load: { try await ClaudeUsageCredential.loadAsync(allowPrompt: $0, profile: profile) }, fetch: fetch)
+        let direct = await read(allowKeychainPrompt: allowKeychainPrompt,
+                                load: { try await ClaudeUsageCredential.loadAsync(allowPrompt: $0, profile: profile) }, fetch: fetch)
+        return await recover(direct, allowPrompt: allowKeychainPrompt) {
+            await Task.detached(priority: .utility) { ClaudeCLIUsageReader.read(profile: profile) }.value
+        }
     }
     static func read(allowKeychainPrompt: Bool = false,
                      load: @Sendable (Bool) async throws -> ClaudeUsageCredential,
@@ -27,6 +30,15 @@ public enum ClaudeUsageReader {
         } catch let issue as UsageIssue { return .failure(.claude, issue == .expired ? .renewalRequired : issue) }
         catch let error as URLError { return .failure(.claude, error.code == .timedOut ? .timedOut : .unavailable) }
         catch { return .failure(.claude, .unavailable) }
+    }
+    // Delegate quota reads, not credential export, to Claude when its Keychain grant
+    // rotates away. A cancelled interactive grant never starts a second auth path.
+    static func recover(_ direct: ProviderUsage, allowPrompt: Bool,
+                        fallback: @Sendable () async -> ProviderUsage) async -> ProviderUsage {
+        guard !allowPrompt, direct.issue == .permissionRequired || direct.issue == .renewalRequired else { return direct }
+        let value = await fallback()
+        if value.issue == nil || value.issue == .rateLimited || value.issue == .keychainLocked { return value }
+        return direct
     }
     private static func fetch(_ token: ClaudeUsageCredential) async throws -> ProviderUsage {
         let configuration = URLSessionConfiguration.ephemeral
@@ -130,15 +142,15 @@ struct ClaudeUsageCredential: Sendable {
         ]
         var result: CFTypeRef?
         let status = try KeychainAccess.perform(allowPrompt: allowPrompt) {
-            SecItemCopyMatching(query as CFDictionary, &result)
+            // A sleeping/locked login Keychain has not revoked the app's approval.
+            guard KeychainAccess.defaultKeychainUnlocked() != false else { throw UsageIssue.keychainLocked }
+            return SecItemCopyMatching(query as CFDictionary, &result)
         }
         switch status {
         case errSecSuccess:
             guard let data = result as? Data else { throw UsageIssue.unavailable }
             return try decode(data)
-        case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled: throw UsageIssue.permissionRequired
-        case errSecItemNotFound: throw UsageIssue.signInRequired
-        default: throw UsageIssue.unavailable
+        default: throw KeychainAccess.readIssue(status: status, unlocked: KeychainAccess.defaultKeychainUnlocked())
         }
     }
 }

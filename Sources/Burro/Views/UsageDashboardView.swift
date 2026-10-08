@@ -133,6 +133,10 @@ struct UsageDashboardView: View {
                     }
                 }
             }
+            if provider.usesClaudeCLI {
+                Text("Live limits from Claude Code. Account details, extra controls, and quota history resume when direct access is available.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if !provider.products.isEmpty {
                 HStack(spacing: 16) {
                     ForEach(provider.products) { product in

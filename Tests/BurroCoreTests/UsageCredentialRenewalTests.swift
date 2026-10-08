@@ -147,12 +147,22 @@ final class UsageCredentialRenewalTests: XCTestCase {
         XCTAssertFalse(ClaudeUsageCredential.authenticationContext(allowPrompt: true).interactionNotAllowed)
     }
     func testTemporaryProviderErrorsDoNotOfferSignIn() {
-        for issue: UsageIssue in [.unavailable, .timedOut, .rateLimited, .renewalRequired, .permissionRequired, .unsupported, .notInstalled] {
+        for issue: UsageIssue in [.keychainLocked, .unavailable, .timedOut, .rateLimited, .renewalRequired, .permissionRequired, .unsupported, .notInstalled] {
             XCTAssertFalse(issue.requiresSignIn)
         }
         XCTAssertTrue(UsageIssue.signInRequired.requiresSignIn)
         XCTAssertTrue(UsageIssue.expired.requiresSignIn)
         XCTAssertEqual(UsageIssue.renewalRequired.accountLabel, "Session renewal needed")
+    }
+    func testResumeRetriesTransientStatesWithoutDefeatingRateLimits() {
+        for issue: UsageIssue in [.keychainLocked, .permissionRequired, .renewalRequired, .unavailable, .timedOut] {
+            XCTAssertTrue(UsageRetryPolicy.retriesOnResume(issue))
+        }
+        for issue: UsageIssue? in [nil, .rateLimited, .signInRequired, .notInstalled, .unsupported] {
+            XCTAssertFalse(UsageRetryPolicy.retriesOnResume(issue))
+        }
+        XCTAssertEqual(UsageRetryPolicy.delay(issue: .keychainLocked, failures: 99, interval: 900), 30)
+        XCTAssertEqual(UsageRetryPolicy.delay(issue: .permissionRequired, failures: 99, interval: 900), 60)
     }
     func testRetryPolicySeparatesTemporaryFailureFromLogin() {
         XCTAssertEqual(UsageRetryPolicy.delay(issue: .unavailable, failures: 1, interval: 900), 30)

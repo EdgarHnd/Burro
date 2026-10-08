@@ -35,12 +35,18 @@ struct UsagePreferences: Codable, Equatable {
     private var nextPoll: [UsageProvider: Date] = [:]
     private var failures: [UsageProvider: Int] = [:]
     private var monitor: Task<Void, Never>?
+    private var recoveryTask: Task<Void, Never>?
+    private var recoveryRequested = false
+    private var lastRecovery: Date?
+    private var resumeObservers: [(NotificationCenter, NSObjectProtocol)] = []
+    private let readUsage: (@Sendable (UsageProvider, String?, Bool) async -> ProviderUsage)?
     private static var historyURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Burro/usage-history.json")
     }
-    init(defaults: UserDefaults) {
-        self.defaults = defaults
+    init(defaults: UserDefaults,
+         readUsage: (@Sendable (UsageProvider, String?, Bool) async -> ProviderUsage)? = nil) {
+        self.defaults = defaults; self.readUsage = readUsage
         enabled = defaults.object(forKey: "usageEnabled") as? Bool ?? true
         var loaded = defaults.data(forKey: "usagePreferences").flatMap { try? JSONDecoder().decode(UsagePreferences.self, from: $0) } ?? UsagePreferences()
         loaded.interval = [60, 300, 900].contains(loaded.interval) ? loaded.interval : 300
@@ -54,6 +60,16 @@ struct UsagePreferences: Codable, Equatable {
     }
     func start() {
         guard monitor == nil else { return }
+        let workspace = NSWorkspace.shared.notificationCenter
+        for (center, name) in [(workspace, NSWorkspace.didWakeNotification),
+                               (workspace, NSWorkspace.sessionDidBecomeActiveNotification),
+                               (workspace, NSWorkspace.screensDidWakeNotification),
+                               (NotificationCenter.default, NSApplication.didBecomeActiveNotification)] {
+            let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.scheduleRecovery() }
+            }
+            resumeObservers.append((center, token))
+        }
         monitor = Task {
             while !Task.isCancelled {
                 await refresh()
@@ -61,13 +77,42 @@ struct UsagePreferences: Codable, Equatable {
             }
         }
     }
+    private func scheduleRecovery() {
+        guard enabled, recoveryTask == nil else { return }
+        // Wake/unlock notifications arrive together. Give Keychain/network a moment,
+        // then retry with the same no-prompt policy as ordinary background polling.
+        recoveryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, !Task.isCancelled else { return }
+            await self.recoverAfterResume()
+            self.recoveryTask = nil
+        }
+    }
+    func recoverAfterResume() async {
+        guard enabled, lastRecovery.map({ Date().timeIntervalSince($0) >= 15 }) ?? true else { return }
+        lastRecovery = Date(); recoveryRequested = true
+        await refresh()
+    }
+    func stop() {
+        monitor?.cancel(); monitor = nil
+        recoveryTask?.cancel(); recoveryTask = nil; recoveryRequested = false
+        for (center, token) in resumeObservers { center.removeObserver(token) }
+        resumeObservers = []
+    }
     private func invalidate() {
         generation += 1; lastAttempt = nil; nextPoll = [:]; failures = [:]
+        recoveryRequested = false; lastRecovery = nil
         snapshot = enabled ? .loading : .disabled
         Task { await refresh() }
     }
     func refresh(force: Bool = false, allowClaudePrompt: Bool = false) async {
         guard enabled, !checking else { return }
+        if recoveryRequested {
+            recoveryRequested = false; lastAttempt = nil
+            for provider in snapshot.providers where UsageRetryPolicy.retriesOnResume(provider.issue) {
+                nextPoll[provider.id] = .distantPast
+            }
+        }
         if let lastAttempt, Date().timeIntervalSince(lastAttempt) < 15 { return }
         let due = preferences.providers.filter { provider in
             // A connection click authorizes Claude only, never another provider's auth.
@@ -79,10 +124,10 @@ struct UsagePreferences: Codable, Equatable {
         }
         guard !due.isEmpty else { return }
         checking = true; lastAttempt = Date()
-        let ticket = generation, prefs = preferences
+        let ticket = generation, prefs = preferences, readUsage = readUsage
         let bundle = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
-            .map { $0.appendingPathComponent("Contents/Resources/codex").path }
-        let executable = CodexUsageReader.executable(bundled: bundle)
+            .map(\.path)
+        let executable = CodexUsageReader.executable(appBundle: bundle)
         let order = UsageProvider.allCases.filter { prefs.providers.contains($0) }
         let placeholders = order.map { provider in
             var value = snapshot.providers.first(where: { $0.id == provider }) ?? .loading(provider)
@@ -94,6 +139,7 @@ struct UsagePreferences: Codable, Equatable {
             for provider in UsageProvider.allCases where due.contains(provider) {
                 let profile = prefs.profiles[provider]
                 group.addTask {
+                    if let readUsage { return await readUsage(provider, profile, allowClaudePrompt) }
                     switch provider {
                     case .codex: return await Task.detached(priority: .utility) { CodexUsageReader.read(executable: executable, home: profile) }.value
                     case .claude: return await ClaudeUsageReader.read(allowKeychainPrompt: allowClaudePrompt, profile: profile)
@@ -128,7 +174,7 @@ struct UsagePreferences: Codable, Equatable {
             }
         }
         checking = false
-        if enabled && ticket != generation { await refresh() }
+        if enabled && (ticket != generation || recoveryRequested) { await refresh() }
     }
     func connectClaude() {
         guard !checking else { return }
@@ -181,7 +227,7 @@ struct UsagePreferences: Codable, Equatable {
     static func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
     static func executable(_ provider: UsageProvider) -> String? {
         if provider == .codex {
-            return CodexUsageReader.executable(bundled: NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")?.appendingPathComponent("Contents/Resources/codex").path)
+            return CodexUsageReader.executable(appBundle: NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")?.path)
         }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return [home + "/.local/bin/" + provider.rawValue, "/opt/homebrew/bin/" + provider.rawValue, "/usr/local/bin/" + provider.rawValue]

@@ -83,11 +83,19 @@ enum GrokCredentialCommand {
 }
 
 public enum UsageRetryPolicy {
+    public static func retriesOnResume(_ issue: UsageIssue?) -> Bool {
+        guard let issue else { return false }
+        switch issue {
+        case .keychainLocked, .permissionRequired, .renewalRequired, .unavailable, .timedOut: return true
+        default: return false
+        }
+    }
     public static func delay(issue: UsageIssue?, failures: Int, interval: Int) -> TimeInterval {
         guard let issue else { return Double(interval) }
         switch issue {
         case .unavailable, .timedOut: return min(300, 30 * pow(2, Double(min(max(failures - 1, 0), 4))))
-        case .renewalRequired: return 60
+        case .keychainLocked: return 30
+        case .permissionRequired, .renewalRequired: return 60
         case .rateLimited: return max(300, Double(interval))
         default: return max(300, Double(interval))
         }
