@@ -35,12 +35,16 @@ fi
 previous_trusted=no
 if [[ -n "$previous_requirement" && "$previous_requirement" != *cdhash* ]]; then previous_trusted=yes; fi
 signing_identity="$(burro_signing_identity "$requested_identity" "$saved_identity" "$identities" "$previous_trusted")"
-if [[ ! -f Resources/AppIcon.icns || script/generate_icon.swift -nt Resources/AppIcon.icns ]]; then
+if [[ ! -f Sources/Burro/Resources/Brand/butter.pdf || ! -f Sources/Burro/Resources/Brand/butter-body.pdf || ! -f Sources/Burro/Resources/Brand/butter-plate.pdf || ! -f Sources/Burro/Resources/Brand/butter-eyes.json || script/generate_brand.swift -nt Sources/Burro/Resources/Brand/butter.pdf ]]; then
+  swift script/generate_brand.swift
+fi
+if [[ ! -f Resources/AppIcon.icns || script/generate_icon.swift -nt Resources/AppIcon.icns || Sources/Burro/Resources/Brand/butter.pdf -nt Resources/AppIcon.icns ]]; then
   swift script/generate_icon.swift Resources/AppIcon.iconset
   iconutil -c icns Resources/AppIcon.iconset -o Resources/AppIcon.icns
 fi
 swift build -c "$CONFIGURATION" --product "$APP_NAME"
 BUILD_BINARY="$(swift build -c "$CONFIGURATION" --show-bin-path)/$APP_NAME"
+"$ROOT_DIR/script/build_rust_worker.sh" "$(dirname "$BUILD_BINARY")"
 # Package separately so a failed signature check cannot overwrite the previous app.
 mkdir -p "$ROOT_DIR/dist"
 bundle_staging="$(mktemp -d "$ROOT_DIR/dist/.burro-build.XXXXXX")"
@@ -56,6 +60,7 @@ APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_BINARY="$APP_CONTENTS/MacOS/$APP_NAME"
 mkdir -p "$APP_CONTENTS/MacOS" "$APP_CONTENTS/Resources"
 cp "$BUILD_BINARY" "$APP_BINARY"
+cp "$(dirname "$BUILD_BINARY")/burro-log-worker" "$APP_CONTENTS/MacOS/burro-log-worker"
 chmod +x "$APP_BINARY"
 cat > "$APP_CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -86,6 +91,15 @@ if [[ ! -f "$RESOURCE_BUNDLE/remote_probe.py" && ! -f "$RESOURCE_BUNDLE/Contents
   exit 1
 fi
 cp -R "$RESOURCE_BUNDLE" "$APP_CONTENTS/Resources/"
+BRAND_BUNDLE="$(dirname "$BUILD_BINARY")/Burro_Burro.bundle"
+for resource in butter.pdf butter-body.pdf butter-plate.pdf butter-eyes.json abstract.pdf; do
+  if [[ ! -f "$BRAND_BUNDLE/Brand/$resource" && ! -f "$BRAND_BUNDLE/Contents/Resources/Brand/$resource" ]]; then
+    echo "The required brand resource is missing: $BRAND_BUNDLE/$resource" >&2
+    exit 1
+  fi
+done
+cp -R "$BRAND_BUNDLE" "$APP_CONTENTS/Resources/"
+codesign --force --sign "$signing_identity" "$APP_CONTENTS/MacOS/burro-log-worker"
 codesign --force --deep --sign "$signing_identity" "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"
 current_requirement="$(codesign -dr - "$APP_BUNDLE" 2>/dev/null)"

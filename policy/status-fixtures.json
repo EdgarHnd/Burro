@@ -1,0 +1,282 @@
+{
+  "codex": [
+    {
+      "tail": "",
+      "held": -1,
+      "age": -3600,
+      "state": "Unknown",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": 0,
+      "age": -3600,
+      "state": "Inactive",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": 1,
+      "age": -3600,
+      "state": "Unknown",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": -1,
+      "age": 0,
+      "state": "Unknown",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": 0,
+      "age": 0,
+      "state": "Recent activity",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": 1,
+      "age": 0,
+      "state": "Working",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": -1,
+      "age": 119,
+      "state": "Unknown",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": 0,
+      "age": 119,
+      "state": "Recent activity",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": 1,
+      "age": 119,
+      "state": "Working",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": -1,
+      "age": 120,
+      "state": "Unknown",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": 0,
+      "age": 120,
+      "state": "Recent activity",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": 1,
+      "age": 120,
+      "state": "Unknown",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": -1,
+      "age": 299,
+      "state": "Unknown",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": 0,
+      "age": 299,
+      "state": "Recent activity",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": 1,
+      "age": 299,
+      "state": "Unknown",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": -1,
+      "age": 300,
+      "state": "Unknown",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": 0,
+      "age": 300,
+      "state": "Inactive",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "",
+      "held": 1,
+      "age": 300,
+      "state": "Unknown",
+      "last": null,
+      "completed": false
+    },
+    {
+      "tail": "{\"type\": \"event_msg\", \"payload\": {\"type\": \"task_complete\"}}\n{\"type\": \"event_msg\", \"payload\": {\"type\": \"task_started\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"task_started\"}}\n{\"broken\":",
+      "held": 1,
+      "age": 0,
+      "state": "Working",
+      "last": "working",
+      "completed": false
+    },
+    {
+      "tail": "{\"type\": \"event_msg\", \"payload\": {\"type\": \"task_complete\"}}\n{\"type\": \"event_msg\", \"payload\": {\"type\": \"turn_started\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"task_started\"}}\n{\"broken\":",
+      "held": 1,
+      "age": 0,
+      "state": "Working",
+      "last": "working",
+      "completed": false
+    },
+    {
+      "tail": "{\"type\": \"event_msg\", \"payload\": {\"type\": \"task_complete\"}}\n{\"type\": \"event_msg\", \"payload\": {\"type\": \"task_complete\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"task_started\"}}\n{\"broken\":",
+      "held": 1,
+      "age": 0,
+      "state": "Open \u00b7 idle",
+      "last": "idle",
+      "completed": true
+    },
+    {
+      "tail": "{\"type\": \"event_msg\", \"payload\": {\"type\": \"task_complete\"}}\n{\"type\": \"event_msg\", \"payload\": {\"type\": \"turn_complete\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"task_started\"}}\n{\"broken\":",
+      "held": 1,
+      "age": 0,
+      "state": "Open \u00b7 idle",
+      "last": "idle",
+      "completed": true
+    },
+    {
+      "tail": "{\"type\": \"event_msg\", \"payload\": {\"type\": \"task_complete\"}}\n{\"type\": \"event_msg\", \"payload\": {\"type\": \"turn_aborted\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"task_started\"}}\n{\"broken\":",
+      "held": 1,
+      "age": 0,
+      "state": "Open \u00b7 idle",
+      "last": "idle",
+      "completed": false
+    },
+    {
+      "tail": "{\"type\": \"event_msg\", \"payload\": {\"type\": \"task_complete\"}}\n{\"type\": \"event_msg\", \"payload\": {\"type\": \"task_aborted\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"task_started\"}}\n{\"broken\":",
+      "held": 1,
+      "age": 0,
+      "state": "Open \u00b7 idle",
+      "last": "idle",
+      "completed": false
+    },
+    {
+      "tail": "{\"type\": \"event_msg\", \"payload\": {\"type\": \"task_complete\"}}\n{\"type\": \"event_msg\", \"payload\": {\"type\": \"request_user_input\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"task_started\"}}\n{\"broken\":",
+      "held": 1,
+      "age": 0,
+      "state": "Needs input",
+      "last": "waiting",
+      "completed": false
+    },
+    {
+      "tail": "{\"type\": \"event_msg\", \"payload\": {\"type\": \"task_complete\"}}\n{\"type\": \"event_msg\", \"payload\": {\"type\": \"approval_required\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"task_started\"}}\n{\"broken\":",
+      "held": 1,
+      "age": 0,
+      "state": "Needs input",
+      "last": "waiting",
+      "completed": false
+    },
+    {
+      "tail": "{\"type\":\"event_msg\",\"payload\":{\"type\":[]}}",
+      "held": 1,
+      "age": 300,
+      "state": "Unknown",
+      "last": null,
+      "completed": false
+    }
+  ],
+  "claude": [
+    {
+      "status": "running",
+      "live": false,
+      "state": "Inactive"
+    },
+    {
+      "status": "running",
+      "live": true,
+      "state": "Working"
+    },
+    {
+      "status": "PROCESSING",
+      "live": false,
+      "state": "Inactive"
+    },
+    {
+      "status": "PROCESSING",
+      "live": true,
+      "state": "Working"
+    },
+    {
+      "status": "waiting_for_permission",
+      "live": false,
+      "state": "Inactive"
+    },
+    {
+      "status": "waiting_for_permission",
+      "live": true,
+      "state": "Needs input"
+    },
+    {
+      "status": "awaiting_approval",
+      "live": false,
+      "state": "Inactive"
+    },
+    {
+      "status": "awaiting_approval",
+      "live": true,
+      "state": "Needs input"
+    },
+    {
+      "status": "idle",
+      "live": false,
+      "state": "Inactive"
+    },
+    {
+      "status": "idle",
+      "live": true,
+      "state": "Open \u00b7 idle"
+    },
+    {
+      "status": "complete",
+      "live": false,
+      "state": "Inactive"
+    },
+    {
+      "status": "complete",
+      "live": true,
+      "state": "Unknown"
+    }
+  ]
+}

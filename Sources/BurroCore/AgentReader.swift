@@ -30,20 +30,17 @@ public enum AgentParsing {
         }
         return isSubagent ? "Codex sub-agent" : "Untitled chat"
     }
-    public static func codexCompleted(tail: String) -> Bool {
+    static func codexEvent(tail: String) -> (CodexEventState, Bool)? {
         for line in tail.split(separator: "\n").reversed() {
             guard let data = line.data(using: .utf8),
                   let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   event["type"] as? String == "event_msg", let payload = event["payload"] as? [String: Any],
-                  let kind = payload["type"] as? String else { continue }
-            switch kind {
-            case "task_complete", "turn_complete": return true
-            case "task_started", "turn_started", "task_aborted", "turn_aborted", "request_user_input", "approval_required": return false
-            default: break
-            }
+                  let kind = payload["type"] as? String, let result = SessionStatusPolicy.codexEvents[kind] else { continue }
+            return result
         }
-        return false
+        return nil
     }
+    public static func codexCompleted(tail: String) -> Bool { codexEvent(tail: tail)?.1 ?? false }
     public static func matchesClaudeStart(_ text: String, started: Date) -> Bool {
         let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
@@ -56,42 +53,18 @@ public enum AgentParsing {
     }
     public static func claudeState(_ status: String, live: Bool) -> AgentState {
         guard live else { return .inactive }
-        switch status.lowercased() {
-        case "working", "running", "busy", "processing": return .working
-        case "waiting", "waiting_for_input", "needs_input", "awaiting_approval", "waiting_for_permission": return .waiting
-        case "idle": return .idle
-        default: return .unknown
-        }
+        return SessionStatusPolicy.claudeAliases[status.lowercased()] ?? .unknown
     }
     public static func codexState(tail: String, held: Int32, modified: Date?, now: Date) -> AgentState {
-        if held < 0 { return .unknown }
-        // Inspect event envelopes only. Prompt and tool bodies are never retained.
-        var last: AgentState?
-        events: for line in tail.split(separator: "\n").reversed() {
-            guard let data = line.data(using: .utf8),
-                  let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  envelope["type"] as? String == "event_msg",
-                  let payload = envelope["payload"] as? [String: Any],
-                  let type = payload["type"] as? String else { continue }
-            switch type {
-            case "task_started", "turn_started": last = .working; break events
-            case "task_complete", "turn_complete", "turn_aborted", "task_aborted": last = .idle; break events
-            case "request_user_input", "approval_required": last = .waiting; break events
-            default: break
-            }
-        }
-        if held == 1 {
-            if let last { return last }
-            if let modified, now.timeIntervalSince(modified) < 120 { return .working }
-            return .unknown
-        }
-        if last == .idle { return .inactive }
-        if let modified, now.timeIntervalSince(modified) < 300 { return .recent }
-        return .inactive
+        let event = codexEvent(tail: tail)
+        return CodexLogEvidence(readable: true, modified: modified?.timeIntervalSince1970,
+                                last: event?.0, completed: event?.1 ?? false).state(held: held, now: now)
     }
 }
 public struct AgentReader: Sendable {
-    public init() {}
+    private let logWorker: AgentLogWorker
+    public init() { logWorker = .shared }
+    init(logWorker: AgentLogWorker) { self.logWorker = logWorker }
     public func read(home: String, processes: ProcessSnapshot, now: Date, readState: ProviderReadState = .empty) -> AgentInventory {
         var result = codex(home: home, now: now, unread: readState.codexUnread)
         let claude = claude(home: home, processes: processes, now: now)
@@ -130,6 +103,16 @@ public struct AgentReader: Sendable {
                     }
                 }
             }
+            // Batch only the logs this snapshot needs. The worker caches parsed
+            // events; live lock checks and age-dependent state stay in Swift.
+            let paths = Array(Set(threads.compactMap { row -> String? in
+                guard let id = row["id"], let path = row["rollout_path"] else { return nil }
+                let held = burro_lock_held(directory.appendingPathComponent("thread-writer-locks/\(id).lock").path)
+                let recent = now.timeIntervalSince1970 - (Double(row["updated_at"] ?? "0") ?? 0) < 600
+                let unreadParent = unread.contains(id) && !AgentParsing.codexIsSubagent(source: row["source"])
+                return held != 0 || recent || unreadParent ? path : nil
+            })).sorted()
+            let logs = Dictionary(uniqueKeysWithValues: zip(paths, logWorker.read(paths)))
             for row in threads {
                 guard let id = row["id"], let cwd = row["cwd"] else { result.warnings.append("A Codex session is missing its workspace"); continue }
                 let lock = directory.appendingPathComponent("thread-writer-locks/\(id).lock").path
@@ -142,13 +125,19 @@ public struct AgentReader: Sendable {
                 var evidence = "No held writer lock or recent unfinished turn"
                 if held != 0 || recent || (unread.contains(id) && !isSubagent) {
                     let rollout = row["rollout_path"] ?? ""
-                    let modified = (try? FileManager.default.attributesOfItem(atPath: rollout)[.modificationDate]) as? Date
-                    let tail = readTail(rollout)
-                    completed = AgentParsing.codexCompleted(tail: tail ?? "")
-                    if held == 1 && tail == nil { state = .unknown; evidence = "Open writer lock; session log unavailable" }
+                    // A lock acquired during the batch can introduce a new log.
+                    let log = logs[rollout] ?? CodexLogEvidence.swiftRead(rollout)
+                    completed = log.completed
+                    if !log.readable {
+                        state = .unknown
+                        evidence = held == 1 ? "Open writer lock; session log unavailable" : "Session log unavailable; activity is uncertain"
+                    }
                     else {
-                        state = AgentParsing.codexState(tail: tail ?? "", held: held, modified: modified, now: now)
+                        state = log.state(held: held, now: now)
                         evidence = held == 1 ? "Live Codex writer lock + local turn events" : (held < 0 ? "Writer lock could not be inspected" : "Local turn events; no live writer lock")
+                        if held == 1 && state == .unknown && log.last == nil {
+                            evidence = "This open Codex chat has no turn activity in its local log."
+                        }
                     }
                 }
                 result.sessions.append(AgentSession(id: "codex:\(id)", provider: .codex,
@@ -170,12 +159,34 @@ public struct AgentReader: Sendable {
         }
         do {
             let completed = ProviderReadState.claudeCompletedSessions(home: home)
-            let deadline = ProcessInfo.processInfo.systemUptime + 1.5
+            var records: [[String: Any]] = []
             for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) where file.pathExtension == "json" {
                 guard let data = try? Data(contentsOf: file), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let id = object["sessionId"] as? String, let cwd = object["cwd"] as? String, let pid = object["pid"] as? Int else {
+                      object["sessionId"] is String, object["cwd"] is String, object["pid"] is Int else {
                     result.warnings.append("A Claude session record could not be read"); continue
                 }
+                records.append(object)
+            }
+            // One Rust batch discovers Claude projects once and caches each worker's lifecycle.
+            // Only verified idle sessions can be overridden by delegated-work evidence.
+            let candidates = records.compactMap { object -> ClaudeLogSession? in
+                guard object["status"] as? String == "idle", let id = object["sessionId"] as? String,
+                      UUID(uuidString: id) != nil, let started = object["startedAt"] as? Double,
+                      started.isFinite, started > 0, let pid = object["pid"] as? Int,
+                      let expected = object["procStart"] as? String,
+                      let process = processes.processes.first(where: { $0.pid == pid && $0.name.lowercased() == "claude" }),
+                      AgentParsing.matchesClaudeStart(expected, started: process.started) else { return nil }
+                return ClaudeLogSession(sessionID: id, started: started / 1000)
+            }
+            let parsed = logWorker.readClaude(root: URL(fileURLWithPath: home).appendingPathComponent(".claude/projects").path,
+                                             sessions: candidates, now: now)
+            let deadline = ProcessInfo.processInfo.systemUptime + 1.5
+            var delegatedStates: [String: [AgentState]] = [:]
+            if let parsed {
+                for (session, state) in zip(candidates, parsed) { delegatedStates[session.sessionID] = state.map { [$0] } ?? [] }
+            }
+            for object in records {
+                guard let id = object["sessionId"] as? String, let cwd = object["cwd"] as? String, let pid = object["pid"] as? Int else { continue }
                 let process = processes.processes.first { $0.pid == pid && $0.name.lowercased() == "claude" }
                 // procStart is the kernel start time. Verify it to avoid stale files matching reused PIDs.
                 let expected = object["procStart"] as? String
@@ -188,7 +199,7 @@ public struct AgentReader: Sendable {
                 if state == .idle, let process,
                    let delegated = ClaudeDelegatedActivity.inspect(home: home, sessionID: id, parent: process,
                        incarnation: (object["startedAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) },
-                       processes: processes.processes, now: now, deadline: deadline) {
+                       processes: processes.processes, now: now, deadline: deadline, workerEvidence: delegatedStates[id]) {
                     state = delegated.state; evidence = delegated.evidence
                 }
                 result.sessions.append(AgentSession(id: "claude:\(id)", provider: .claude,
@@ -202,14 +213,5 @@ public struct AgentReader: Sendable {
             }
         } catch { result.warnings.append("Claude session directory could not be read") }
         return result
-    }
-    private func readTail(_ path: String) -> String? {
-        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? handle.close() }
-        do {
-            let size = try handle.seekToEnd(), limit: UInt64 = 512 * 1024
-            try handle.seek(toOffset: size > limit ? size - limit : 0)
-            return String(decoding: try handle.readToEnd() ?? Data(), as: UTF8.self)
-        } catch { return nil }
     }
 }

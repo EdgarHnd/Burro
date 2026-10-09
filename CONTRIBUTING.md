@@ -4,14 +4,16 @@ Small, focused improvements are welcome. Open an issue before a larger feature o
 
 ## Local setup
 
-Use macOS 14+ with Swift 6 and Git; Python 3 runs the remote reader fixtures. Clone the repository and run `./script/build_and_run.sh`. No provider account is required to build or run the synthetic tests.
+Use macOS 14+ with Swift 6, Rust through rustup (pinned in `rust-toolchain.toml`), and Git; Python 3 runs the remote reader fixtures. Clone the repository and run `./script/build_and_run.sh`. No provider account is required to build or run the synthetic tests.
 
 Read [MODULE.md](MODULE.md) for ownership boundaries and [the usage guide](docs/usage.md) for expected behavior. Keep the app, core monitoring code, and remote Python reader separated. When provider interpretation changes, update matching Swift and Python fixtures together.
 
 ## Before opening a pull request
 
 ```sh
-swift test
+cargo test --manifest-path Rust/Cargo.toml --target-dir .build/rust --locked
+./script/build_rust_worker.sh
+BURRO_REQUIRE_RUST_WORKER=1 swift test
 python3 -B script/test_remote_probe.py
 CONFIGURATION=release ./script/build_and_run.sh --build-only
 ```
@@ -19,6 +21,8 @@ CONFIGURATION=release ./script/build_and_run.sh --build-only
 Use a logged-in macOS graphical session for `NotchPanelTests`; they exercise real windows and compositor frames. In headless environments, use `swift test --skip NotchPanelTests` and state that native interaction was not tested. CI intentionally uses that headless command; green CI alone does not validate hover feel, display placement, or animation.
 
 Add a targeted regression test for behavioral fixes. For visual changes, describe the native checks performed, including Reduce Motion when relevant. Update the canonical usage/architecture docs when behavior or ownership changes. No new test is needed merely to repeat a color constant.
+
+Edit shared event/status rules in `policy/session-status.json`, run `python3 -B script/generate_status_policy.py`, and update the independent fixtures in `policy/status-fixtures.json`. CI checks generated files. Codex and Claude lifecycle changes must preserve parity between `AgentParsing`, the Rust log worker, and the remote Python reader. The Swift integration tests compare Rust and Swift event/age/lock behavior, project discovery limits, and cross-provider cache isolation and exercise worker failure/recovery. Keep `Rust/Cargo.lock` checked in and use `--locked` for builds; the Rust worker has no network or provider-authentication responsibilities.
 
 ## Boundaries to preserve
 

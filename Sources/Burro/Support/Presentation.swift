@@ -47,7 +47,7 @@ enum WorktreeFilter: Hashable {
 }
 extension SafetyLevel {
     var color: Color {
-        switch self { case .keep: .secondary; case .review: .orange; case .candidate: .green }
+        switch self { case .keep: .secondary; case .review: AppAppearance.amber; case .candidate: AppAppearance.green }
     }
     var icon: String {
         switch self { case .keep: "shield.lefthalf.filled"; case .review: "exclamationmark.circle"; case .candidate: "checkmark.circle" }
@@ -55,7 +55,7 @@ extension SafetyLevel {
 }
 extension AgentState {
     var color: Color {
-        switch self { case .working: .green; case .scheduled: .teal; case .waiting: .orange; case .recent: .blue; case .unknown: .orange; default: .secondary }
+        switch self { case .working: AppAppearance.green; case .scheduled: .teal; case .waiting: AppAppearance.amber; case .recent: AppAppearance.blue; case .unknown: AppAppearance.amber; default: .secondary }
     }
 }
 enum Layout {
@@ -68,9 +68,9 @@ enum Layout {
 extension CleanupStatus {
     var color: Color {
         switch self {
-        case .ready: .green
-        case .localChanges, .needsBranch, .gitBusy, .unknown: .orange
-        case .inUse: .blue
+        case .ready: AppAppearance.green
+        case .localChanges, .needsBranch, .gitBusy, .unknown: AppAppearance.amber
+        case .inUse: AppAppearance.blue
         case .protected, .managed: .secondary
         }
     }

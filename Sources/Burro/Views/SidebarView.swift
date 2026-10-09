@@ -35,6 +35,9 @@ struct SidebarView: View {
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .font(.system(size: 12, weight: .medium))
+            .tint(AppAppearance.text)
             VStack(alignment: .leading, spacing: Layout.small) {
                 Label(store.remoteHosts.isEmpty ? "Local on this Mac" : "This Mac + \(store.remoteHosts.count) remote", systemImage: "desktopcomputer")
                     .font(.caption.weight(.medium))
@@ -42,6 +45,6 @@ struct SidebarView: View {
                     .font(.caption2).foregroundStyle(.secondary)
                 HStack { Spacer(); SettingsLink { Image(systemName: "gearshape") }.buttonStyle(.plain).help("Settings") }
             }.foregroundStyle(.secondary).padding(Layout.inset)
-        }
+        }.background(AppAppearance.surface)
     }
 }

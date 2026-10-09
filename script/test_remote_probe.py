@@ -21,6 +21,57 @@ spec.loader.exec_module(probe)
 
 
 class ProbeTests(unittest.TestCase):
+    def test_shared_status_fixtures(self):
+        fixtures = json.loads((PROBE.parents[3] / 'policy/status-fixtures.json').read_text())
+        for case in fixtures['codex']:
+            with self.subTest(case=case):
+                self.assertEqual(probe.codex_state(case['tail'], case['held'], 10000 - case['age'], 10000), case['state'])
+                self.assertEqual(probe.codex_completed(case['tail']), case['completed'])
+        for case in fixtures['claude']:
+            self.assertEqual(probe.claude_state(case['status'], case['live']), case['state'])
+
+    def test_history_limit_prioritizes_recent_chats_across_providers(self):
+        with tempfile.TemporaryDirectory(prefix='burro-today-limit-') as directory:
+            home = Path(directory); codex = home / '.codex'; codex.mkdir()
+            now = time.time()
+            rollout = codex / 'done.jsonl'
+            rollout.write_text(json.dumps({'type': 'event_msg', 'payload': {'type': 'task_complete'}}))
+            with closing(sqlite3.connect(codex / 'state_7.sqlite')) as db, db:
+                db.execute('CREATE TABLE threads (id TEXT,cwd TEXT,title TEXT,updated_at REAL,rollout_path TEXT,archived INTEGER)')
+                db.executemany('INSERT INTO threads VALUES (?,?,?,?,?,0)', [
+                    ('old-1', '/repo', 'Old result', now - 3 * 86400, str(rollout)),
+                    ('old-2', '/repo', 'Older result', now - 4 * 86400, str(rollout))])
+            registry = home / '.claude/sessions'; registry.mkdir(parents=True)
+            (registry / 'recent.json').write_text(json.dumps(dict(
+                sessionId='recent', cwd='/repo', pid=123, status='idle', updatedAt=(now - 3600) * 1000)))
+            with patch.object(probe, 'claude_identity', return_value=False), patch.object(probe, 'LIMIT', 2):
+                result = probe.collect(home)
+            self.assertEqual([s['id'] for s in result['sessions']], ['claude:recent', 'codex:old-1'])
+            self.assertIn('Remote sessions exceed the inspection limit.', result['warnings'])
+
+    def test_recent_closed_chats_are_retained_for_viewer_local_today(self):
+        with tempfile.TemporaryDirectory(prefix='burro-today-') as directory:
+            home = Path(directory); codex = home / '.codex'; codex.mkdir()
+            now = time.time()
+            rollout = codex / 'aborted.jsonl'
+            rollout.write_text(json.dumps({'type': 'event_msg', 'payload': {'type': 'task_aborted'}}))
+            os.utime(rollout, (now - 3600, now - 3600))
+            with closing(sqlite3.connect(codex / 'state_7.sqlite')) as db, db:
+                db.execute('CREATE TABLE threads (id TEXT,cwd TEXT,title TEXT,updated_at REAL,rollout_path TEXT,archived INTEGER)')
+                db.executemany('INSERT INTO threads VALUES (?,?,?,?,?,0)', [
+                    ('recent', '/repo', 'Recent closed chat', now - 3600, str(rollout)),
+                    ('old', '/repo', 'Old closed chat', now - 3 * 86400, str(rollout))])
+            registry = home / '.claude/sessions'; registry.mkdir(parents=True)
+            for sid, age in [('recent', 3600), ('old', 3 * 86400)]:
+                (registry / (sid + '.json')).write_text(json.dumps(dict(
+                    sessionId=sid, cwd='/repo', pid=123, status='idle', name='Closed Claude',
+                    updatedAt=(now - age) * 1000)))
+            with patch.object(probe, 'claude_identity', return_value=False):
+                sessions = probe.collect(home)['sessions']
+            self.assertEqual({s['id'] for s in sessions}, {'codex:recent', 'claude:recent'})
+            self.assertTrue(all(s['state'] == 'Inactive' for s in sessions))
+            self.assertTrue(all(not s['turnCompleted'] for s in sessions))
+
     def worker_event(self, sid, agent='worker-a', age=0, stop='tool_use', started=None):
         from datetime import datetime, timezone
         stamp = time.time() - age if started is None else started
@@ -40,8 +91,23 @@ class ProbeTests(unittest.TestCase):
         self.assertIsNone(parse(running.replace('true', 'false')))
         self.assertIsNone(parse(self.worker_event(sid, age=120)))
         self.assertEqual(parse(running, now - 130), 'Unknown')
-        self.assertIsNone(parse(self.worker_event(sid, started=now + 3600)))
+        self.assertEqual(parse(self.worker_event(sid, started=now + 3600)), 'Unknown')
         self.assertEqual(parse('truncated lifecycle envelope'), 'Unknown')
+
+    def test_worker_discovery_handles_more_than_256_projects(self):
+        sid = '11111111-2222-4333-8444-555555555555'
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            root = home / '.claude/projects'
+            root.mkdir(parents=True)
+            for i in range(270):
+                (root / str(i)).mkdir()
+            now = time.time()
+            self.assertEqual(probe.claude_worker_states(home, sid, now - 60, now, time.monotonic() + 5), [])
+            folder = root / '269' / sid / 'subagents'
+            folder.mkdir(parents=True)
+            (folder / 'agent-worker-a.jsonl').write_text(self.worker_event(sid))
+            self.assertEqual(probe.claude_worker_states(home, sid, now - 60, now, time.monotonic() + 5), ['Working'])
 
     def test_stale_unfinished_worker_remains_unknown_until_terminal_event(self):
         sid = '11111111-2222-4333-8444-555555555555'

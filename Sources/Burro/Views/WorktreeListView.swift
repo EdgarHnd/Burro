@@ -9,17 +9,17 @@ struct WorktreeListView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: Layout.inset) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(title).font(.title2.weight(.semibold))
+                    Text(title).font(AppAppearance.pageTitle)
                     Spacer()
                     Text("\(store.visibleWorktrees.count) worktrees").font(.subheadline).foregroundStyle(.secondary)
                 }
                 HStack(spacing: 28) {
-                    metric("Working", value: metricWorktrees.filter(\.isWorking).count, color: .green)
+                    metric("Working", value: metricWorktrees.filter(\.isWorking).count, color: AppAppearance.green)
                     metric("In use", value: metricWorktrees.filter(\.isInUse).count, color: .primary)
                     metric("Inactive", value: metricWorktrees.filter { !$0.isInUse }.count, color: .secondary)
-                    metric("Ready to remove", value: metricWorktrees.filter { store.cleanupEligibility($0).allowed }.count, color: .green)
+                    metric("Ready to remove", value: metricWorktrees.filter { store.cleanupEligibility($0).allowed }.count, color: AppAppearance.green)
                 }
-            }.padding(Layout.inset)
+            }.padding(Layout.inset).frame(maxWidth: .infinity, alignment: .leading).background(AppAppearance.surface)
             HStack(spacing: Layout.gap) {
                 Button("Select ready (\(store.readyWorktrees.count))") { store.selectReadyWorktrees() }
                     .disabled(store.readyWorktrees.isEmpty || store.cleaningWorktree)
@@ -33,16 +33,14 @@ struct WorktreeListView: View {
                 }.disabled(store.selectedReadyCount == 0 || store.cleaningWorktree)
                     .help("Move selected ready worktrees to Trash (⌘⌫)")
                     .keyboardShortcut(.delete, modifiers: .command)
-            }.controlSize(.small).padding(.horizontal, Layout.inset).padding(.bottom, Layout.gap)
+            }.controlSize(.small).padding(.horizontal, Layout.inset).padding(.bottom, Layout.gap).background(AppAppearance.surface)
             Divider()
             if !store.didScan {
                 skeleton
             } else if store.visibleWorktrees.isEmpty {
-                ContentUnavailableView {
-                    Label(store.cleaningWorktree ? "Cleanup is running" : (store.snapshot.worktrees.isEmpty ? "Add your first repository" : "No matching worktrees"), systemImage: "arrow.triangle.branch")
-                } description: {
-                    Text(store.cleaningWorktree ? "You can keep browsing while Burro rechecks and moves the selected folders." : (store.snapshot.worktrees.isEmpty ? "Burro discovers local Codex and Claude workspaces. You can also choose a repository." : "Try another filter or search."))
-                } actions: {
+                AppEmptyState(title: store.cleaningWorktree ? "Cleanup is running" : (store.snapshot.worktrees.isEmpty ? "Add your first repository" : "No matching worktrees"),
+                    symbol: "arrow.triangle.branch",
+                    detail: store.cleaningWorktree ? "You can keep browsing while Burro rechecks and moves the selected folders." : (store.snapshot.worktrees.isEmpty ? "Burro discovers local Codex and Claude workspaces. You can also choose a repository." : "Try another filter or search.")) {
                     if store.snapshot.worktrees.isEmpty { Button("Add repository…") { store.addRepository() } }
                 }
             } else {
@@ -61,7 +59,7 @@ struct WorktreeListView: View {
                     TableColumn("Activity") { tree in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 5) {
-                                Circle().fill(tree.isWorking ? Color.green : (tree.isInUse ? Color.blue : Color.secondary.opacity(0.4))).frame(width: 5, height: 5)
+                                Circle().fill(tree.isWorking ? AppAppearance.green : (tree.isInUse ? AppAppearance.blue : Color.secondary.opacity(0.4))).frame(width: 5, height: 5)
                                 Text(tree.activity).font(.caption.weight(.medium))
                             }
                             let providers = Set(tree.agents.filter { $0.state.keepsWorktree }.map { $0.provider == .codex ? "Codex" : "Claude" }).sorted()
@@ -72,13 +70,16 @@ struct WorktreeListView: View {
                     TableColumn("Cleanup") { tree in
                         VStack(alignment: .leading, spacing: 4) {
                             if store.cleanupBatch.failure(for: tree.id) != nil {
-                                Label("Needs attention", systemImage: "exclamationmark.circle").font(.caption.weight(.medium)).foregroundStyle(.orange)
+                                Label("Needs attention", systemImage: "exclamationmark.circle").font(.caption.weight(.medium)).foregroundStyle(AppAppearance.amber)
                             } else { CleanupBadge(status: store.cleanupEligibility(tree).status) }
                             Text(store.cleanupBatch.failure(for: tree.id) ?? (store.cleanupEligibility(tree).allowed ? tree.facts.integrationSummary : store.cleanupEligibility(tree).summary))
                                 .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                         }.help(store.cleanupEligibility(tree).reasons.joined(separator: "\n") + "\n" + tree.facts.integrationSummary)
                     }.width(min: 155, ideal: 190, max: 240)
                 }
+                .scrollContentBackground(.hidden)
+                .background(AppAppearance.background)
+                .tint(AppAppearance.raised)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.cleanupBatch.hiddenPaths)
                 .contextMenu(forSelectionType: String.self) { paths in
                     let trees = store.visibleWorktrees.filter { paths.contains($0.id) }
@@ -103,7 +104,7 @@ struct WorktreeListView: View {
                 if !store.snapshot.warnings.isEmpty {
                     DisclosureGroup("\(store.snapshot.warnings.count) monitoring notice(s)") {
                         ForEach(store.snapshot.warnings, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
-                    }.font(.caption).foregroundStyle(.orange)
+                    }.font(.caption).foregroundStyle(AppAppearance.amber)
                 }
                 HStack {
                     Image(systemName: "eye").foregroundStyle(.secondary)
@@ -112,7 +113,7 @@ struct WorktreeListView: View {
                     if store.didScan { Text(store.snapshot.scannedAt, style: .time).foregroundStyle(.tertiary) }
                 }.font(.caption)
             }.padding(.horizontal, Layout.inset).padding(.vertical, Layout.gap)
-        }
+        }.background(AppAppearance.background)
     }
     private var metricWorktrees: [Worktree] { store.visibleWorktrees }
     private var title: String {
@@ -121,7 +122,7 @@ struct WorktreeListView: View {
     }
     private func metric(_ label: String, value: Int, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("\(value)").font(.title2.monospacedDigit().weight(.medium)).foregroundStyle(color)
+            Text("\(value)").font(AppAppearance.metric).monospacedDigit().foregroundStyle(color)
             Text(label).font(.caption).foregroundStyle(.secondary)
         }
     }

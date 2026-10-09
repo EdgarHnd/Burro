@@ -1,6 +1,8 @@
 // User-facing grouping and stable list membership never alter the underlying safety inventory.
 import Foundation
 
+public enum NotchChatScope: Hashable, Sendable { case activity, today }
+
 public struct NotchGroup: Identifiable, Sendable {
     public var id: String
     public var root: AgentSession?
@@ -27,12 +29,25 @@ public struct NotchGroup: Identifiable, Sendable {
 public struct NotchFeed: Sendable {
     public var groups: [NotchGroup]
     public var inventory: [String: AgentSession]
-    public init(sessions: [AgentSession], includeIdle: Bool) {
+    public init(sessions: [AgentSession], includeIdle: Bool, scope: NotchChatScope = .activity,
+                now: Date = Date(), calendar: Calendar = .current) {
         var inventory: [String: AgentSession] = [:]
         for session in sessions where inventory[session.id] == nil { inventory[session.id] = session }
         self.inventory = inventory
+        if scope == .today {
+            let start = calendar.startOfDay(for: now)
+            // History is a flat list of chats, including closed/idle chats. Worker
+            // status and workspace grouping must not override last-activity order.
+            groups = inventory.values.filter {
+                $0.isSubagent != true && $0.updatedAt >= start && $0.updatedAt <= now
+            }.sorted {
+                if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+                return $0.id < $1.id
+            }.map { NotchGroup(id: $0.id, root: $0, workers: []) }
+            return
+        }
         func visible(_ session: AgentSession) -> Bool {
-            session.isDone || (session.state != .inactive && (includeIdle || session.state != .idle))
+            session.isDone || (session.state != .inactive && (includeIdle || (session.state != .idle && session.state != .unknown)))
         }
         // Follow only explicit, same-provider/same-host links. Never infer ownership from cwd/title.
         func root(for worker: AgentSession) -> AgentSession? {
@@ -88,6 +103,7 @@ public struct NotchListState: Sendable {
             Set(groups.flatMap { group in group.members.map { group.id + "/" + $0.id } })
         }
         pendingChanges = membership(groups).symmetricDifference(membership(feed.groups)).count
+        if groups.map(\.id) != feed.groups.map(\.id) { pendingChanges = max(1, pendingChanges) }
         // Preserve positions and hit targets, but keep labels and status live. Missing rows
         // become disabled instead of leaving a different chat underneath the pointer.
         groups = groups.map { old in

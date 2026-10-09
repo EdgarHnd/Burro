@@ -47,6 +47,6 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Apply & refresh") { Task { await store.refresh() } }.disabled(store.scanning)
             }
-        }.formStyle(.grouped).frame(width: 560, height: 680)
+        }.formStyle(.grouped).scrollContentBackground(.hidden).frame(width: 560, height: 680)
     }
 }

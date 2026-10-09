@@ -3,9 +3,12 @@ import SwiftUI
 import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    var store: AppStore?
     var notchController: NotchController?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        // Match native menus, toolbars and sheets to Burro's shared charcoal surfaces.
+        NSApp.appearance = NSAppearance(named: .darkAqua)
         // Set the running Dock image directly; Launch Services can retain an older bundle icon.
         if let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") as? String,
            let url = Bundle.main.url(forResource: name, withExtension: "icns"),
@@ -14,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
     }
-    func applicationWillTerminate(_ notification: Notification) { notchController?.stop() }
+    func applicationWillTerminate(_ notification: Notification) { notchController?.stop(); store?.stop() }
 }
 @main struct BurroApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
@@ -23,7 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var body: some Scene {
         WindowGroup("Burro", id: "main") {
             DesktopRootView(store: store, notch: notch)
-                .onAppear { delegate.notchController = notch }
+                .onAppear { delegate.notchController = notch; delegate.store = store }
         }
         .defaultSize(width: 1240, height: 760)
         .commands {
@@ -38,9 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } label: {
             Label {
                 Text(store.activeAgents.isEmpty ? "Burro" : "\(store.activeAgents.count)")
-            } icon: { Text("🧈") }
+            } icon: { Image(nsImage: BurroBrand.image) }
         }
-        Settings { SettingsView(store: store) }
+        Settings { SettingsView(store: store).modifier(AppTheme()) }
     }
 }
 private struct DesktopRootView: View {

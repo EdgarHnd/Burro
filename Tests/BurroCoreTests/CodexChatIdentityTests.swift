@@ -62,5 +62,11 @@ final class CodexChatIdentityTests: XCTestCase {
         XCTAssertEqual(feed.doneCount, 2)
         XCTAssertEqual(Set(feed.visibleSessions(includeIdle: false).map(\.title)), ["Displayed chat name", "Untitled chat"])
         XCTAssertEqual(inventory.sessions.filter { $0.isSubagent == true }.count, 2)
+        let fallback = AgentReader(logWorker: AgentLogWorker(executable: nil)).read(
+            home: home.path, processes: ProcessSnapshot(processes: [], warnings: []), now: Date(), readState: read)
+        XCTAssertEqual(fallback.warnings, inventory.warnings)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        XCTAssertEqual(try encoder.encode(fallback.sessions), try encoder.encode(inventory.sessions),
+                       "Swift recovery must preserve complete session metadata and unread state")
     }
 }

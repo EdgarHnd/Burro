@@ -1,11 +1,229 @@
 // Verify the AppKit boundary that previously displaced the notch below the menu bar.
 import AppKit
 import QuartzCore
+import SwiftUI
 import XCTest
 @testable import Burro
 @testable import BurroCore
 
 final class NotchPanelTests: XCTestCase {
+    @MainActor func testTodayScopeKeepsCompactGeometryAndSurvivesUsagePreviews() async throws {
+        try await withController(reduceMotion: true, prepare: { store in
+            store.didCheckAgents = true
+            let today = Calendar.current.startOfDay(for: Date())
+            store.agentActivity = AgentActivitySnapshot(sessions: (0..<9).map { index in
+                AgentSession(id: "today-\(index)", provider: .codex, title: "Chat \(index)", cwd: "/fixture",
+                             state: index == 0 ? .working : .inactive, updatedAt: today, evidence: "fixture")
+            }, warnings: [], sampledAt: Date())
+        }) { controller, move in
+            let panel = try XCTUnwrap(controller.panel)
+            move(NSPoint(x: panel.frame.midX, y: panel.frame.maxY)); controller.samplePointer()
+            try await Task.sleep(for: .milliseconds(80))
+            let activityFrame = panel.frame
+            controller.presentation.chatScope = .today
+            try await Task.sleep(for: .milliseconds(80))
+            let todayFrame = panel.frame
+            XCTAssertEqual(controller.presentation.visibleRows, 5, "Nine chats scroll inside the existing five-row cap")
+            XCTAssertEqual(todayFrame.width, activityFrame.width)
+            XCTAssertEqual(todayFrame.maxY, activityFrame.maxY)
+            XCTAssertGreaterThan(todayFrame.height, activityFrame.height)
+            let usage = try XCTUnwrap(controller.navigationBounds[.usage])
+            let agents = try XCTUnwrap(controller.navigationBounds[.agents])
+            for _ in 0..<3 {
+                move(NSPoint(x: todayFrame.minX + usage.midX, y: todayFrame.maxY - usage.midY)); controller.samplePointer()
+                try await Task.sleep(for: .milliseconds(210))
+                XCTAssertEqual(controller.presentation.navigation.visible, .usage)
+                move(NSPoint(x: todayFrame.minX + agents.midX, y: todayFrame.maxY - agents.midY)); controller.samplePointer()
+                try await Task.sleep(for: .milliseconds(40))
+                XCTAssertEqual(controller.presentation.navigation.visible, .agents)
+                XCTAssertEqual(controller.presentation.chatScope, .today)
+                XCTAssertEqual(panel.frame, todayFrame)
+            }
+            controller.presentation.chatScope = .activity
+            try await Task.sleep(for: .milliseconds(80))
+            XCTAssertEqual(panel.frame, activityFrame)
+        }
+    }
+
+    @MainActor func testContentResizeWaitsUntilAfterRenderAndCancelsWhenStopped() async throws {
+        try await withController(reduceMotion: true, prepare: { $0.didCheckAgents = true }) { controller, move in
+            let panel = try XCTUnwrap(controller.panel)
+            move(NSPoint(x: panel.frame.midX, y: panel.frame.maxY)); controller.samplePointer()
+            try await Task.sleep(for: .milliseconds(80))
+            let before = panel.frame
+
+            // SwiftUI's content callbacks run on the render stack. Repeated
+            // invalidations must leave AppKit alone until that stack returns.
+            controller.presentation.visibleRows = 5
+            for _ in 0..<6 { controller.requestContentLayout() }
+            XCTAssertEqual(panel.frame, before, "Never resize the hosting view inside a render callback")
+            try await Task.sleep(for: .milliseconds(40))
+            XCTAssertGreaterThan(panel.frame.height, before.height)
+            XCTAssertEqual(panel.frame.maxY, before.maxY)
+
+            controller.presentation.visibleRows = 1
+            controller.requestContentLayout()
+            controller.stop()
+            try await Task.sleep(for: .milliseconds(40))
+            XCTAssertNil(controller.panel, "A pending resize cannot revive a stopped controller")
+            XCTAssertNil(controller.surface)
+        }
+    }
+
+    @MainActor func testRepeatedUsagePreviewsKeepScrollContentInPlace() async throws {
+        try await withController(prepare: { store in
+            store.didCheckAgents = true
+            store.agentActivity = AgentActivitySnapshot(sessions: [AgentSession(id: "peek", provider: .codex,
+                title: "Preview fixture", cwd: "/fixture", state: .working, updatedAt: Date(), evidence: "fixture")],
+                warnings: [], sampledAt: Date())
+            store.usage.snapshot = ProviderUsageSnapshot(availability: .available, providers: UsageProvider.allCases.map { provider in
+                ProviderUsage(id: provider, updatedAt: Date(), windows: (0..<(provider == .claude ? 3 : 1)).map { index in
+                    UsageWindow(id: "\(index)", title: "Weekly", remainingPercent: 58,
+                                resetsAt: Date().addingTimeInterval(7200))
+                })
+            })
+        }) { controller, move in
+            let panel = try XCTUnwrap(controller.panel)
+            let surface = try XCTUnwrap(controller.surface)
+            move(NSPoint(x: panel.frame.midX, y: panel.frame.maxY)); controller.samplePointer()
+            try await Task.sleep(for: .milliseconds(600))
+            let agentsFrame = panel.frame
+            let usage = try XCTUnwrap(controller.navigationBounds[.usage])
+            let agents = try XCTUnwrap(controller.navigationBounds[.agents])
+            let host = try XCTUnwrap(surface.subviews.flatMap(\.subviews).compactMap { $0 as? NSHostingView<NotchView> }.first { !$0.rootView.compact })
+            @MainActor func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+            var initialScrollFrame: CGRect?
+            for cycle in 0..<12 {
+                move(NSPoint(x: agentsFrame.minX + usage.midX, y: agentsFrame.maxY - usage.midY)); controller.samplePointer()
+                try await Task.sleep(for: .milliseconds(210))
+                XCTAssertEqual(controller.presentation.navigation.visible, .usage, "Cycle \(cycle)")
+                let scrolls = descendants(host).compactMap { $0 as? NSScrollView }
+                XCTAssertFalse(scrolls.isEmpty, "The Usage viewport must exist on every preview")
+                for scroll in scrolls {
+                    let actualFrame = scroll.convert(scroll.bounds, to: surface)
+                    if let initialScrollFrame { XCTAssertEqual(actualFrame, initialScrollFrame, "Usage viewport drifts on cycle \(cycle)") }
+                    else { initialScrollFrame = actualFrame }
+                    XCTAssertEqual(scroll.documentVisibleRect.minY, 0, accuracy: 0.5, "Usage content must return at the top")
+                }
+                if let directory = ProcessInfo.processInfo.environment["BURRO_NOTCH_RENDER_DIR"] {
+                    let bitmap = try XCTUnwrap(surface.bitmapImageRepForCachingDisplay(in: surface.bounds))
+                    surface.cacheDisplay(in: surface.bounds, to: bitmap)
+                    try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("repeat-\(cycle).png"))
+                }
+                let target = cycle.isMultiple(of: 2) ? agents : CGRect(x: 350, y: 110, width: 1, height: 1)
+                move(NSPoint(x: agentsFrame.minX + target.midX, y: agentsFrame.maxY - target.midY)); controller.samplePointer()
+                try await Task.sleep(for: .milliseconds(cycle.isMultiple(of: 2) ? 30 : 100))
+                XCTAssertEqual(controller.presentation.navigation.visible, .agents)
+                XCTAssertEqual(panel.frame, agentsFrame)
+            }
+        }
+    }
+    @MainActor func testHoverPreviewKeepsContentAnchoredWhileChangingHeight() async throws {
+        try await withController(prepare: { store in
+            store.didCheckAgents = true
+            store.agentActivity = AgentActivitySnapshot(sessions: [AgentSession(id: "peek", provider: .codex,
+                title: "Preview fixture", cwd: "/fixture", state: .working, updatedAt: Date(), evidence: "fixture")],
+                warnings: [], sampledAt: Date())
+            store.usage.snapshot = ProviderUsageSnapshot(availability: .available, providers: UsageProvider.allCases.map { provider in
+                ProviderUsage(id: provider, updatedAt: Date(), windows: (0..<(provider == .claude ? 3 : 1)).map { index in
+                    UsageWindow(id: "\(index)", title: "Weekly", remainingPercent: 58,
+                                resetsAt: Date().addingTimeInterval(7200))
+                })
+            })
+        }) { controller, move in
+            let panel = try XCTUnwrap(controller.panel)
+            let surface = try XCTUnwrap(controller.surface)
+            move(NSPoint(x: panel.frame.midX, y: panel.frame.maxY)); controller.samplePointer()
+            try await Task.sleep(for: .milliseconds(650))
+            let before = panel.frame
+            let usage = try XCTUnwrap(controller.navigationBounds[.usage])
+            let host = try XCTUnwrap(surface.subviews.flatMap(\.subviews).compactMap { $0 as? NSHostingView<NotchView> }.first { !$0.rootView.compact })
+            move(NSPoint(x: before.minX + usage.midX, y: before.maxY - usage.midY)); controller.samplePointer()
+            var tabY: [CGFloat] = [], hostY: [CGFloat] = [], croppedHeight: [CGFloat] = []
+            for index in 0..<80 {
+                try await Task.sleep(for: .milliseconds(10))
+                if let bounds = controller.navigationBounds[.usage] { tabY.append(bounds.minY) }
+                hostY.append(host.convert(.zero, to: surface).y)
+                if controller.presentation.navigation.visible == .usage, panel.frame.height > before.height + 1,
+                   let outline = surface.background.presentation()?.path {
+                    croppedHeight.append(host.frame.height - outline.boundingBoxOfPath.height)
+                }
+                if index == 30, let directory = ProcessInfo.processInfo.environment["BURRO_NOTCH_RENDER_DIR"] {
+                    let bitmap = try XCTUnwrap(surface.bitmapImageRepForCachingDisplay(in: surface.bounds))
+                    surface.cacheDisplay(in: surface.bounds, to: bitmap)
+                    try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: directory).appendingPathComponent("peek.png"))
+                }
+            }
+            print("Preview geometry: height \(before.height) -> \(panel.frame.height); tabs \(tabY.min()!)...\(tabY.max()!); cropped height \(croppedHeight.max() ?? 0)")
+            XCTAssertEqual(controller.presentation.navigation.visible, .usage)
+            XCTAssertEqual(controller.presentation.navigation.selected, .agents)
+            XCTAssertGreaterThan(panel.frame.height, before.height)
+            XCTAssertEqual(panel.frame.maxY, before.maxY)
+            XCTAssertEqual(tabY.min()!, usage.minY, accuracy: 0.5)
+            XCTAssertEqual(tabY.max()!, usage.minY, accuracy: 0.5)
+            XCTAssertEqual(hostY.min()!, 0, accuracy: 0.5)
+            XCTAssertEqual(hostY.max()!, 0, accuracy: 0.5)
+            XCTAssertLessThanOrEqual(try XCTUnwrap(croppedHeight.max()), 1,
+                "A fully expanded page must not replace content underneath a smaller animated clipping outline")
+            move(NSPoint(x: panel.frame.midX, y: panel.frame.maxY - 110)); controller.samplePointer()
+            try await Task.sleep(for: .milliseconds(130))
+            XCTAssertEqual(controller.presentation.navigation.visible, .agents)
+            XCTAssertEqual(panel.frame, before, "Leaving a preview must restore the original compact Agents size")
+            XCTAssertEqual(controller.navigationBounds[.usage]?.minY, usage.minY)
+            XCTAssertFalse(surface.isAnimating)
+
+            move(NSPoint(x: before.minX + usage.midX, y: before.maxY - usage.midY)); controller.samplePointer()
+            try await Task.sleep(for: .milliseconds(220))
+            let previewFrame = panel.frame
+            controller.selectPage(.usage)
+            try await Task.sleep(for: .milliseconds(80))
+            XCTAssertEqual(controller.presentation.navigation.selected, .usage)
+            XCTAssertFalse(controller.presentation.navigation.isPreviewing)
+            XCTAssertEqual(panel.frame, previewFrame, "Committing a preview must not trigger another resize")
+        }
+    }
+    @MainActor func testExpandedGlassPreservesClippingInputAndAccessibilityFallback() async throws {
+        var reduceTransparency = false
+        try await withController(reduceMotion: true, reduceTransparency: { reduceTransparency }) { controller, move in
+            let panel = try XCTUnwrap(controller.panel)
+            let surface = try XCTUnwrap(controller.surface)
+            let compactFrame = panel.frame
+            XCTAssertTrue(surface.glassBackdrop.isHidden)
+            XCTAssertEqual(surface.background.opacity, 1)
+
+            move(NSPoint(x: compactFrame.midX, y: compactFrame.maxY))
+            controller.samplePointer()
+            try await Task.sleep(for: .milliseconds(80))
+            surface.layoutSubtreeIfNeeded()
+            let expandedFrame = panel.frame
+            XCTAssertFalse(surface.glassBackdrop.isHidden)
+            XCTAssertEqual(surface.glassBackdrop.layer?.opacity, 1)
+            XCTAssertEqual(surface.background.opacity, 0)
+            let mask = try XCTUnwrap(surface.glassBackdrop.layer?.mask as? CAShapeLayer)
+            XCTAssertEqual(mask.path?.boundingBox, surface.background.path?.boundingBox,
+                "Glass must remain inside the animated notch outline")
+            XCTAssertNil(surface.glassBackdrop.hitTest(NSPoint(x: 30, y: 50)),
+                "The material must never intercept existing controls")
+            XCTAssertFalse(panel.isKeyWindow)
+
+            reduceTransparency = true
+            NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+            try await Task.sleep(for: .milliseconds(40))
+            XCTAssertTrue(surface.glassBackdrop.isHidden)
+            XCTAssertEqual(surface.background.opacity, 1)
+            XCTAssertEqual(panel.frame, expandedFrame)
+
+            reduceTransparency = false
+            NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+            try await Task.sleep(for: .milliseconds(40))
+            XCTAssertFalse(surface.glassBackdrop.isHidden)
+            XCTAssertEqual(surface.background.opacity, 0)
+            controller.collapse()
+            XCTAssertTrue(surface.glassBackdrop.isHidden)
+            XCTAssertEqual(surface.background.opacity, 1)
+            XCTAssertEqual(panel.frame, compactFrame)
+        }
+    }
     @MainActor func testAttentionUpdatesWithoutExpansionAndSurvivesUsageAndSpaceChanges() async throws {
         _ = NSApplication.shared
         let name = "burro-attention-test-\(UUID().uuidString)"
@@ -230,6 +448,8 @@ final class NotchPanelTests: XCTestCase {
     }
 
     @MainActor private func withController(reduceMotion: Bool = false,
+        reduceTransparency: @escaping () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency },
+        prepare: @MainActor (AppStore) -> Void = { _ in },
         _ test: @MainActor (NotchController, @MainActor (NSPoint) -> Void) async throws -> Void) async throws {
         _ = NSApplication.shared
         let name = "burro-notch-test-\(UUID().uuidString)"
@@ -239,8 +459,9 @@ final class NotchPanelTests: XCTestCase {
         defaults.set(false, forKey: "usageEnabled") // Native interaction tests never contact provider accounts.
         defer { defaults.removePersistentDomain(forName: name) }
         let store = AppStore(defaults: defaults)
+        prepare(store)
         var pointer = NSPoint(x: -100_000, y: -100_000)
-        let controller = NotchController(pointerLocation: { pointer }, reduceMotion: { reduceMotion })
+        let controller = NotchController(pointerLocation: { pointer }, reduceMotion: { reduceMotion }, reduceTransparency: reduceTransparency)
         controller.start(store: store, openDashboard: {})
         defer { controller.stop() }
         try await test(controller, { pointer = $0 })

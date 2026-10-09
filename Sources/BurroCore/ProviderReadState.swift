@@ -78,6 +78,12 @@ public struct ProviderReadState: Sendable {
 
     static func claudeCompletedSessions(home: String) -> Set<String> {
         let root = URL(fileURLWithPath: home).appendingPathComponent("Library/Application Support/Claude/claude-code-sessions")
+        if let result = AgentLogWorker.shared.exchange([], completed: root.path)?.completed, !result.partial {
+            return Set(result.ids)
+        }
+        return autoreleasepool { swiftClaudeCompletedSessions(root: root) }
+    }
+    static func swiftClaudeCompletedSessions(root: URL) -> Set<String> {
         let fm = FileManager.default
         var result = Set<String>()
         // Exactly two account directories; never walk transcripts or arbitrary user paths.

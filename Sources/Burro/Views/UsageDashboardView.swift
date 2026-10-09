@@ -4,7 +4,7 @@ import Charts
 import BurroCore
 
 extension UsageProvider {
-    var color: Color { switch self { case .codex: .green; case .claude: .orange; case .grok: .cyan } }
+    var color: Color { switch self { case .codex: AppAppearance.green; case .claude: AppAppearance.claude; case .grok: AppAppearance.blue } }
 }
 struct UsageDashboardView: View {
     @Bindable var usage: UsageStore
@@ -14,8 +14,8 @@ struct UsageDashboardView: View {
         VStack(spacing: 0) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Usage").font(.largeTitle.weight(.semibold))
-                    Text("Your accounts. Every limit in one place.").foregroundStyle(.secondary)
+                    Text("Usage").font(AppAppearance.pageTitle)
+                    Text("Your accounts. Every limit in one place.").font(.caption).foregroundStyle(AppAppearance.secondary)
                 }
                 Spacer()
                 Button { settings = true } label: { Image(systemName: "slider.horizontal.3") }.help("Usage settings")
@@ -23,30 +23,33 @@ struct UsageDashboardView: View {
                     Label(usage.checking ? "Refreshing…" : "Refresh", systemImage: "arrow.clockwise")
                 }.disabled(usage.checking || !usage.enabled)
             }.padding(Layout.inset)
-            HStack(spacing: 8) {
-                tab("Overview", provider: nil)
-                ForEach(UsageProvider.allCases) { provider in tab(provider.title, provider: provider) }
+            HStack(spacing: 12) {
+                HStack(spacing: 3) {
+                    tab("Overview", provider: nil)
+                    ForEach(UsageProvider.allCases) { provider in tab(provider.title, provider: provider) }
+                }.padding(3).background(AppAppearance.raised, in: Capsule())
                 Spacer()
-                Text("Account limits · all machines").font(.caption).foregroundStyle(.tertiary)
-            }.padding(.horizontal, Layout.inset).padding(.bottom, 16)
+                Text("Account limits · all machines").font(.caption).foregroundStyle(AppAppearance.secondary)
+            }.padding(.horizontal, Layout.inset).padding(.bottom, 12)
             Divider()
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 12) {
                     if let message = usage.message {
                         HStack { Label(message, systemImage: "info.circle"); Spacer(); Button { usage.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }
                             .font(.callout).padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
                     }
                     if !usage.enabled {
-                        ContentUnavailableView { Label("Usage is paused", systemImage: "pause.circle") } description: {
-                            Text("Connect your coding accounts to see their limits and reset times.")
-                        } actions: { Button("Enable usage") { usage.enabled = true } }
+                        AppEmptyState(title: "Usage is paused", symbol: "pause.circle",
+                            detail: "Connect your coding accounts to see their limits and reset times.") {
+                            Button("Enable usage") { usage.enabled = true }
+                        }
                     } else if usage.snapshot.availability == .loading {
                         ForEach(0..<3) { _ in
                             VStack(alignment: .leading, spacing: 16) {
                                 RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(width: 160, height: 22)
                                 RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(height: 8)
                                 RoundedRectangle(cornerRadius: 4).fill(.quaternary).frame(width: 220, height: 12)
-                            }.padding(22).background(.background, in: RoundedRectangle(cornerRadius: 14))
+                            }.padding(16).modifier(AppCardSurface())
                         }.accessibilityHidden(true)
                         Text("Loading usage limits…").font(.caption).foregroundStyle(.secondary)
                     } else {
@@ -54,7 +57,7 @@ struct UsageDashboardView: View {
                             providerCard(provider)
                         }
                         if visibleProviders.isEmpty {
-                            ContentUnavailableView("Provider is paused", systemImage: "pause.circle", description: Text("Enable it in Usage settings."))
+                            AppEmptyState("Provider is paused", symbol: "pause.circle", detail: "Enable it in Usage settings.")
                         }
                         if let selected = usage.selected {
                             UsageCostView(provider: selected, profile: usage.preferences.profiles[selected])
@@ -63,8 +66,9 @@ struct UsageDashboardView: View {
                     Text("Burro connects directly to each provider. Quotas follow the account shown above; local session activity and token estimates belong to this Mac.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(Layout.inset).frame(maxWidth: 1060).frame(maxWidth: .infinity)
-            }.background(Color(nsColor: .windowBackgroundColor))
+            }
         }
+        .modifier(AppTheme())
         .sheet(isPresented: $settings) { UsageSettingsView(usage: usage) }
         .task { await usage.refresh() }
     }
@@ -74,24 +78,24 @@ struct UsageDashboardView: View {
     private func tab(_ title: String, provider: UsageProvider?) -> some View {
         Button { usage.selected = provider } label: {
             HStack(spacing: 6) { Image(systemName: provider?.symbol ?? "square.grid.2x2"); Text(title) }
-                .font(.callout.weight(.medium)).padding(.horizontal, 14).padding(.vertical, 8)
-                .background(usage.selected == provider ? Color.primary.opacity(0.09) : .clear, in: Capsule())
+                .font(.system(size: 12, weight: .semibold)).padding(.horizontal, 11).padding(.vertical, 5)
+                .foregroundStyle(usage.selected == provider ? AppAppearance.text : AppAppearance.secondary)
+                .background(usage.selected == provider ? AppAppearance.background : .clear, in: Capsule())
         }.buttonStyle(.plain).accessibilityAddTraits(usage.selected == provider ? .isSelected : [])
     }
     private func providerCard(_ provider: ProviderUsage) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: provider.id.symbol).font(.title2).foregroundStyle(provider.id.color)
-                    .frame(width: 42, height: 42).background(provider.id.color.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+                ProviderBadge(symbol: provider.id.symbol, color: provider.id.color)
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
-                        Text(provider.title).font(.title3.weight(.semibold))
-                        if let plan = provider.identity?.plan { Text(plan).font(.caption).padding(.horizontal, 7).padding(.vertical, 3).background(.quaternary, in: Capsule()) }
+                        Text(provider.title).font(AppAppearance.sectionTitle)
+                        if let plan = provider.identity?.plan { Text(plan).font(.caption.weight(.semibold)).foregroundStyle(AppAppearance.secondary).padding(.horizontal, 7).padding(.vertical, 2).background(AppAppearance.raised, in: Capsule()) }
                     }
                     Text(provider.identity?.account ?? (provider.isLoading ? "Connecting…" : (provider.issue?.accountLabel ?? "Account identity unavailable")))
-                        .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                        .font(.callout.weight(.medium)).foregroundStyle(AppAppearance.secondary).textSelection(.enabled)
                     Text(usage.preferences.profiles[provider.id].map { "Profile: \(($0 as NSString).lastPathComponent)" } ?? "From \(provider.id.title == "Claude" ? "Claude Code" : provider.title) on this Mac")
-                        .font(.caption).foregroundStyle(.tertiary)
+                        .font(.caption).foregroundStyle(AppAppearance.secondary)
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 7) {
@@ -168,8 +172,7 @@ struct UsageDashboardView: View {
                 Spacer()
                 if usage.selected == nil { Button("Details") { usage.selected = provider.id }.buttonStyle(.plain).foregroundStyle(provider.id.color) }
             }.font(.callout)
-        }.padding(22).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.05)))
+        }.padding(16).modifier(AppCardSurface())
     }
     private func accountMenu(_ provider: UsageProvider) -> some View {
         Menu {
@@ -177,7 +180,9 @@ struct UsageDashboardView: View {
             Button("Choose existing profile…") { usage.selectProfile(provider) }
             if usage.preferences.profiles[provider] != nil { Button("Use default account") { usage.preferences.profiles.removeValue(forKey: provider) } }
             if provider == .claude { Button("Allow Claude Keychain access…") { usage.connectClaude() } }
-        } label: { Label("Account", systemImage: "person.crop.circle") }.fixedSize()
+        } label: { Label("Account", systemImage: "person.crop.circle").font(.callout.weight(.semibold)) }
+            .menuStyle(.borderlessButton).fixedSize().padding(.horizontal, 10).padding(.vertical, 5)
+            .background(AppAppearance.raised, in: Capsule())
     }
     @ViewBuilder private func historyChart(_ provider: ProviderUsage) -> some View {
         let samples = usage.history.filter { $0.provider == provider.id && $0.account == provider.identity?.scope && $0.date >= Date().addingTimeInterval(Double(-days) * 86400) }
@@ -221,28 +226,24 @@ struct UsageLimitRow: View {
         let estimate = uncertain ? nil : UsagePace(window: window, now: now)
         VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Text(window.title).font(.callout.weight(.semibold))
+                Text(window.title.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.6).foregroundStyle(AppAppearance.secondary)
                 Spacer()
                 if let quota {
-                    Text("\(Int((remaining ? quota : 100 - quota).rounded()))% \(uncertain ? "last seen" : (remaining ? "left" : "used"))").font(.callout.weight(.semibold)).monospacedDigit()
+                    (Text("\(Int((remaining ? quota : 100 - quota).rounded()))").font(.system(size: 16, weight: .semibold, design: .rounded))
+                     + Text("% ").font(.system(size: 12, weight: .semibold))
+                     + Text(uncertain ? "last seen" : (remaining ? "left" : "used")).font(.system(size: 12, weight: .semibold)))
+                        .monospacedDigit().foregroundStyle(uncertain ? AppAppearance.secondary : AppAppearance.text)
                 } else { Text("Unavailable").foregroundStyle(.secondary) }
             }
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.06))
-                    if let quota { Capsule().fill(uncertain ? .gray : (quota <= 10 ? .red : provider.color)).frame(width: geometry.size.width * (remaining ? quota : 100 - quota) / 100) }
-                    if pace, let estimate {
-                        RoundedRectangle(cornerRadius: 1).fill(Color.primary.opacity(0.6)).frame(width: 2, height: 12)
-                            .offset(x: max(0, geometry.size.width * (remaining ? estimate.expectedRemaining : 100 - estimate.expectedRemaining) / 100 - 1))
-                    }
-                }
-            }.frame(height: 6).accessibilityHidden(true)
+            UsageQuotaBar(percent: quota.map { remaining ? $0 : 100 - $0 }, remaining: quota, stale: uncertain,
+                          marker: pace ? estimate.map { remaining ? $0.expectedRemaining : 100 - $0.expectedRemaining } : nil)
             HStack(alignment: .firstTextBaseline) {
                 Text(window.resetLabel(now: now)).help(window.resetsAt?.formatted() ?? "Reset unavailable")
                 Spacer()
                 if pace, let estimate {
                     Text("\(Int(abs(estimate.reserve).rounded()))% \(estimate.reserve >= 0 ? "reserve" : "ahead of pace")")
-                        .foregroundStyle(estimate.reserve >= 0 ? Color.secondary : Color.orange)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(estimate.reserve >= 0 ? AppAppearance.green : AppAppearance.amber)
                         .help("Linear estimate based on elapsed time in this limit window. Workload and provider rules can change.")
                 }
             }.font(.caption).foregroundStyle(.secondary)
@@ -255,7 +256,7 @@ struct UsageSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Text("Usage settings").font(.title2.weight(.semibold)); Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }.padding(20)
+            HStack { Text("Usage settings").font(AppAppearance.pageTitle); Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }.padding(20)
             Form {
                 Section("Providers") {
                     ForEach(UsageProvider.allCases) { provider in
@@ -276,7 +277,7 @@ struct UsageSettingsView: View {
                     Button("Clear quota history", role: .destructive) { usage.clearHistory() }
                     Text("Only quota readings and a hashed account identifier are saved. Turning history off deletes saved readings.").font(.caption).foregroundStyle(.secondary)
                 }
-            }.formStyle(.grouped)
-        }.frame(width: 470, height: 560)
+            }.formStyle(.grouped).scrollContentBackground(.hidden)
+        }.frame(width: 470, height: 560).modifier(AppTheme())
     }
 }

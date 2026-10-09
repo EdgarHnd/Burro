@@ -11,41 +11,44 @@ struct NotchUsageView: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
                     switch snapshot.availability {
                     case .loading:
                         ForEach(0..<2) { _ in
                             VStack(alignment: .leading, spacing: 10) {
                                 RoundedRectangle(cornerRadius: 3).fill(.white.opacity(0.08)).frame(width: 70, height: 10)
-                                RoundedRectangle(cornerRadius: 3).fill(.white.opacity(0.05)).frame(height: 5)
+                                RoundedRectangle(cornerRadius: 3).fill(.white.opacity(0.05)).frame(height: 4)
                                 RoundedRectangle(cornerRadius: 3).fill(.white.opacity(0.05)).frame(width: 140, height: 8)
-                            }.padding(.vertical, 10)
+                            }.padding(14).modifier(AppCardSurface(translucent: true))
                         }.accessibilityHidden(true)
                     case .available:
-                        ForEach(Array(snapshot.providers.enumerated()), id: \.element.id) { index, provider in
-                            if index > 0 { Rectangle().fill(.white.opacity(0.08)).frame(height: 1) }
+                        ForEach(snapshot.providers) { provider in
                             providerSection(provider, now: context.date)
                         }
                     case .disabled:
                         emptyState
                     }
-                }.padding(.horizontal, 22).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
+                }.padding(.horizontal, 12).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
             }.accessibilityLabel(snapshot.availability == .loading ? "Loading usage limits" : "Usage limits")
         }
+        .foregroundStyle(AppAppearance.text)
+        .buttonStyle(AppButtonStyle())
     }
     private func providerSection(_ provider: ProviderUsage, now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
                 Image(systemName: provider.id.symbol)
-                    .foregroundStyle(provider.id.color)
-                Text(provider.title).fontWeight(.semibold)
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 20, height: 20)
+                    .background(provider.id.color.opacity(0.8), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                Text(provider.title).font(.system(size: 12, weight: .semibold))
                 Spacer()
                 if let date = provider.updatedAt {
                     HStack(spacing: 3) {
                         if provider.isStale(now: now) { Text("Stale ·") }
                         Text(date, style: .relative)
                         Text("ago")
-                    }.font(.system(size: 9)).foregroundStyle(provider.isStale(now: now) ? .orange : .secondary)
+                    }.font(.system(size: 9, weight: .medium)).foregroundStyle(provider.isStale(now: now) ? AppAppearance.amber : AppAppearance.secondary)
                         .help("Updated: \(date.formatted())")
                 }
             }.font(.system(size: 12))
@@ -59,25 +62,21 @@ struct NotchUsageView: View {
                     .font(.system(size: 11, weight: .medium))
             }
             ForEach(provider.windows) { window in quotaRow(window, stale: provider.isStale(now: now), now: now) }
-        }
+        }.padding(.horizontal, 12).padding(.vertical, 8).modifier(AppCardSurface(translucent: true))
     }
     private func quotaRow(_ window: UsageWindow, stale: Bool, now: Date) -> some View {
         let uncertain = stale || window.isExpired(now: now)
-        let tint: Color = uncertain ? .gray : ((window.remainingPercent ?? 100) <= 10 ? .orange : .green)
         return HStack(spacing: 10) {
-            Text(window.title).foregroundStyle(.secondary).lineLimit(1)
+            Text(window.title).foregroundStyle(AppAppearance.secondary).lineLimit(1)
             Spacer(minLength: 4)
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(.white.opacity(0.08))
-                    if let left = window.remainingPercent { Capsule().fill(tint).frame(width: geometry.size.width * left / 100) }
-                }
-            }.frame(width: 54, height: 3).accessibilityHidden(true)
+            UsageQuotaBar(percent: window.remainingPercent, remaining: window.remainingPercent, stale: uncertain, height: 4)
+                .frame(width: 54)
             Text(window.remainingPercent.map { "\(Int($0.rounded()))%" } ?? "—")
-                .monospacedDigit().foregroundStyle(uncertain ? .secondary : .primary).frame(width: 34, alignment: .trailing)
+                .font(.system(size: 11, weight: .semibold, design: .rounded)).lineLimit(1)
+                .monospacedDigit().foregroundStyle(uncertain ? AppAppearance.secondary : AppAppearance.text).frame(width: 36, alignment: .trailing)
             Text(window.resetLabel(now: now).replacingOccurrences(of: "Resets in ", with: ""))
                 .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).frame(width: 65, alignment: .trailing)
-        }.font(.system(size: 11, weight: .medium)).frame(minHeight: 19)
+        }.font(.system(size: 11, weight: .semibold)).frame(minHeight: 19)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(window.title), \(window.remainingPercent.map { "\(Int($0.rounded())) percent \(uncertain ? "last seen" : "remaining")" } ?? "unavailable"), \(window.resetLabel(now: now))")
             .help(window.resetsAt.map { "Reset: \($0.formatted())" } ?? "Reset time unavailable")
@@ -90,6 +89,6 @@ struct NotchUsageView: View {
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Button("Enable usage", action: onEnable)
 
-        }.padding(.vertical, 4)
+        }.padding(14).modifier(AppCardSurface(translucent: true))
     }
 }

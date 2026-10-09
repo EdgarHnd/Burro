@@ -56,11 +56,11 @@ struct ClaudeDelegatedActivity {
     }
 
     static func inspect(home: String, sessionID: String, parent: LocalProcess, incarnation: Date?,
-                        processes: [LocalProcess], now: Date, deadline: TimeInterval,
+                        processes: [LocalProcess], now: Date, deadline: TimeInterval, workerEvidence: [AgentState]? = nil,
                         identity: (LocalProcess) -> Bool = ProcessReader.isCurrent,
                         descriptor: OutputPath = outputPath) -> Self? {
-        var workers: [AgentState] = []
-        if let incarnation, incarnation.timeIntervalSince1970.isFinite, incarnation.timeIntervalSince1970 > 0 {
+        var workers: [AgentState] = workerEvidence ?? []
+        if workerEvidence == nil, let incarnation, incarnation.timeIntervalSince1970.isFinite, incarnation.timeIntervalSince1970 > 0 {
             workers = workerStates(home: home, sessionID: sessionID, started: incarnation, now: now, deadline: deadline)
         }
         var tasks: [String: Set<Int>] = [:], complete = true
@@ -109,7 +109,8 @@ struct ClaudeDelegatedActivity {
             formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             var time = formatter.date(from: stamp)
             if time == nil { formatter.formatOptions = [.withInternetDateTime]; time = formatter.date(from: stamp) }
-            guard let time, time >= started.addingTimeInterval(-2), time <= now.addingTimeInterval(5) else { continue }
+            guard let time, time >= started.addingTimeInterval(-2) else { continue }
+            if time > now.addingTimeInterval(5) { return .unknown }
             if type == "assistant", ["end_turn", "stop_sequence"].contains(message["stop_reason"] as? String ?? "") { return nil }
             // New Claude workers finish via SubagentHandback: the final tool-result
             // envelope ends the turn, without a following assistant stop_reason.
@@ -134,12 +135,13 @@ struct ClaudeDelegatedActivity {
             return values.isSymbolicLink != true && values.isDirectory == true
         }
         do {
+            guard try directory(root) else { return [.unknown] }
             // The enumerator is shallow, with explicit bounds instead of an unbounded recursive crawl.
             guard let projects = fm.enumerator(at: root, includingPropertiesForKeys: nil, options: [.skipsSubdirectoryDescendants], errorHandler: { _, _ in enumerationFailed = true; return false }) else { return [.unknown] }
             var count = 0
             for case let project as URL in projects {
                 count += 1
-                guard count <= 256, ProcessInfo.processInfo.systemUptime < deadline else { return states + [.unknown] }
+                guard count <= 4096, ProcessInfo.processInfo.systemUptime < deadline else { return states + [.unknown] }
                 guard try directory(project) else { continue }
                 let session = project.appendingPathComponent(sessionID), folder = session.appendingPathComponent("subagents")
                 guard fm.fileExists(atPath: folder.path) else { continue }
@@ -148,7 +150,7 @@ struct ClaudeDelegatedActivity {
                 var workers = 0
                 for case let file as URL in files where file.lastPathComponent.hasPrefix("agent-") && file.pathExtension == "jsonl" {
                     workers += 1
-                    guard workers <= 64, ProcessInfo.processInfo.systemUptime < deadline else { return states + [.unknown] }
+                    guard workers <= 256, ProcessInfo.processInfo.systemUptime < deadline else { return states + [.unknown] }
                     let agentID = String(file.deletingPathExtension().lastPathComponent.dropFirst(6))
                     guard validID(agentID) else { continue }
                     let values = try file.resourceValues(forKeys: [.isSymbolicLinkKey, .contentModificationDateKey])
@@ -158,9 +160,15 @@ struct ClaudeDelegatedActivity {
                     guard fd >= 0 else { states.append(.unknown); continue }
                     let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
                     defer { try? handle.close() }
+                    var before = stat()
+                    guard fstat(fd, &before) == 0, before.st_mode & S_IFMT == S_IFREG else { states.append(.unknown); continue }
                     let size = try handle.seekToEnd(), limit: UInt64 = 512 * 1024
                     try handle.seek(toOffset: size > limit ? size - limit : 0)
                     let tail = String(decoding: try handle.read(upToCount: Int(limit)) ?? Data(), as: UTF8.self)
+                    var after = stat()
+                    guard fstat(fd, &after) == 0, before.st_size == after.st_size,
+                          before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec, before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec,
+                          before.st_ctimespec.tv_sec == after.st_ctimespec.tv_sec, before.st_ctimespec.tv_nsec == after.st_ctimespec.tv_nsec else { states.append(.unknown); continue }
                     if let state = workerTailState(tail, sessionID: sessionID, agentID: agentID, started: started, now: now, modified: modified) { states.append(state) }
                 }
             }

@@ -15,7 +15,7 @@ struct NotchHealthView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Monitoring").font(.system(size: 13, weight: .semibold))
-                if store.notchNotices.isEmpty {
+                if store.notchNotices.isEmpty && store.agentActivity.unverifiedSessions.isEmpty {
                     Text("No monitoring notices.").foregroundStyle(.secondary)
                 }
                 ForEach(store.notchNotices) { notice in
@@ -26,11 +26,23 @@ struct NotchHealthView: View {
                             HStack(spacing: 4) { Text("Last successful check"); Text(checked, style: .relative) }
                                 .foregroundStyle(.secondary)
                         }
-                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(10).modifier(AppCardSurface(translucent: true))
+                }
+                if !store.agentActivity.unverifiedSessions.isEmpty {
+                    Text("Unverified chats").fontWeight(.medium)
+                    Text("These chats stay protected. Burro cannot confirm their current activity.")
+                        .foregroundStyle(.secondary)
+                    ForEach(store.agentActivity.unverifiedSessions) { session in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(session.title).fontWeight(.medium).lineLimit(2)
+                            Text("\(session.provider.rawValue) · \(session.remote?.hostName ?? "This Mac")").foregroundStyle(.secondary)
+                            Text(session.evidence).foregroundStyle(.secondary)
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(10).modifier(AppCardSurface(translucent: true))
+                    }
                 }
                 Button("Check again") { Task { await store.refreshAgents(); await store.refreshRemotes() } }
                     .disabled(store.checkingAgents || store.checkingRemotes)
             }.font(.system(size: 11)).padding(22).frame(maxWidth: .infinity, alignment: .leading)
-        }
+        }.buttonStyle(AppButtonStyle()).controlSize(.mini)
     }
 }

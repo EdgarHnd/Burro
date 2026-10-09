@@ -11,10 +11,10 @@ struct UsageCostView: View {
     @State private var showCost = false
     @State private var expandedModels = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Local usage & cost").font(.headline)
+                    Text("Local usage & cost").font(AppAppearance.sectionTitle)
                     Text(result?.partial == true ? "Partial local history · last 30 days" : "This Mac · selected profile · last 30 days").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -27,7 +27,7 @@ struct UsageCostView: View {
                     HStack(spacing: 40) {
                         metric(result.partial ? "Observed tokens" : "30-day tokens", value: result.tokens.formatted(.number.notation(.compactName)))
                         if provider != .grok {
-                            metric("Today’s tokens", value: (result.days.first { Calendar.current.isDateInToday($0.date) }?.tokens ?? 0).formatted(.number.notation(.compactName)))
+                            metric(result.partial ? "Observed today" : "Today’s tokens", value: (result.days.first { Calendar.current.isDateInToday($0.date) }?.tokens ?? 0).formatted(.number.notation(.compactName)))
                         }
                         metric(result.partial ? "Observed API value" : "Est. API value", value: result.pricedCount > 0 ? result.apiValue.formatted(.currency(code: "USD")) : "Unavailable")
                         Spacer()
@@ -39,7 +39,7 @@ struct UsageCostView: View {
                         }
                         Chart(result.days) { day in
                             BarMark(x: .value("Day", day.date, unit: .day), y: .value(showCost ? "USD" : "Tokens", showCost ? day.apiValue : day.tokens))
-                                .foregroundStyle(provider.color.gradient).cornerRadius(3)
+                                .foregroundStyle(AppAppearance.quotaGradient(remaining: 100, stale: false)).cornerRadius(5)
                         }.frame(height: 150)
                     }
                     DisclosureGroup("Models", isExpanded: $expandedModels) {
@@ -47,7 +47,7 @@ struct UsageCostView: View {
                             HStack { Text(model); Spacer(); Text(result.models[model, default: 0].formatted(.number.notation(.compactName)) + " tokens").monospacedDigit() }.font(.caption).padding(.vertical, 3)
                         }
                     }
-                    if result.partial { Label("Partial history: the scan reached a file, size, or time limit.", systemImage: "info.circle").font(.caption).foregroundStyle(.orange) }
+                    if result.partial { Label("Partial history: the scan reached a file, size, or time limit.", systemImage: "info.circle").font(.caption).foregroundStyle(AppAppearance.amber) }
                     Text(provider == .grok ? "Grok reports cumulative session tokens. This includes sessions updated in the last 30 days; it cannot be split accurately by day or converted into dollars." : "Reference API value, not your bill. Standard short-context rates, checked Sep 29, 2026; excludes tool fees, tier/context premiums and unknown models. Priced \(result.pricedCount) of \(result.recordCount) records. Logs may include multiple accounts and exclude remote work.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -57,12 +57,15 @@ struct UsageCostView: View {
             if provider != .grok {
                 Link("Pricing reference ↗", destination: URL(string: provider == .claude ? "https://platform.claude.com/docs/en/about-claude/pricing" : "https://developers.openai.com/api/docs/pricing")!).font(.caption)
             }
-        }.padding(22).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
+        }.padding(16).modifier(AppCardSurface())
         .onChange(of: provider) { _, _ in result = nil }
         .onChange(of: profile) { _, _ in result = nil }
     }
     private func metric(_ title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) { Text(title).font(.caption).foregroundStyle(.secondary); Text(value).font(.title2.weight(.semibold)).monospacedDigit() }
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title.uppercased()).font(.system(size: 10, weight: .bold)).tracking(0.7).foregroundStyle(AppAppearance.secondary)
+            Text(value).font(AppAppearance.metric).monospacedDigit()
+        }
     }
     private func scan() {
         scanning = true

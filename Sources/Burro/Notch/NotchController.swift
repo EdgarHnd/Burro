@@ -9,6 +9,7 @@ import BurroCore
     var expanded = false
     var pinned = false
     var includeIdle = false
+    var chatScope: NotchChatScope = .activity
     var holdingList = false
     var visibleRows = 3
     var navigation = NotchNavigation()
@@ -29,6 +30,7 @@ import BurroCore
     private var scheduledDeadline: TimeInterval?
     private var transitionID: UUID?
     private var observationID = UUID()
+    private var contentLayoutRequest: UUID?
     private var placingWindow = false
     private var destinationFrame: NSRect = .zero
     private var observers: [NSObjectProtocol] = []
@@ -38,12 +40,15 @@ import BurroCore
     private(set) var navigationBounds: [NotchPage: CGRect] = [:]
     private let pointerLocation: () -> NSPoint
     private let reduceMotion: () -> Bool
+    private let reduceTransparency: () -> Bool
     private let hoverLog = Logger(subsystem: "local.burro.worktrees", category: "Notch")
 
     init(pointerLocation: @escaping () -> NSPoint = { NSEvent.mouseLocation },
-         reduceMotion: @escaping () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }) {
+         reduceMotion: @escaping () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion },
+         reduceTransparency: @escaping () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency }) {
         self.pointerLocation = pointerLocation
         self.reduceMotion = reduceMotion
+        self.reduceTransparency = reduceTransparency
     }
 
     func start(store: AppStore, openDashboard: @escaping () -> Void) {
@@ -68,13 +73,17 @@ import BurroCore
                 onOpenDashboard: { [weak self] in self?.openDashboardWindow() },
                 onSelectPage: { [weak self] in self?.selectPage($0) },
                 onNavigationBounds: { [weak self] in self?.setNavigationBounds($0) },
-                onContentChange: { [weak self] in self?.configure(animate: true) }, compact: compact)
+                onContentChange: { [weak self] in self?.requestContentLayout() }, compact: compact)
         }
-        let surface = NotchSurfaceView(compact: content(compact: true), expanded: content(compact: false))
+        let surface = NotchSurfaceView(compact: content(compact: true), expanded: content(compact: false), reduceTransparency: reduceTransparency)
         panel.contentView = surface
         panel.acceptsMouseMovedEvents = true
         self.surface = surface
         self.panel = panel
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.surface?.updateGlassAccessibility() }
+            })
         store.onNotchPreferenceChange = { [weak self] in self?.configure() }
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.configure() }
@@ -157,6 +166,7 @@ import BurroCore
     }
     func stop() {
         observationID = UUID()
+        contentLayoutRequest = nil
         presentation.navigation.endPreview(); navigationBounds = [:]
         hoverTimer?.invalidate(); transitionID = nil
         scheduledDeadline = nil
@@ -238,14 +248,33 @@ import BurroCore
         hoverTimer = timer
         RunLoop.main.add(timer, forMode: .common)
     }
+    func requestContentLayout() {
+        guard panel != nil, contentLayoutRequest == nil else { return }
+        let id = UUID()
+        contentLayoutRequest = id
+        // SwiftUI calls onAppear/onChange during its render pass. Resizing the
+        // hosting view (or forcing its layout) from that stack makes AppKit skip
+        // the reentrant pass, leaving old content bounds after repeated previews.
+        // A main-queue turn also coalesces the visible-page and preview callbacks.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.contentLayoutRequest == id else { return }
+            self.contentLayoutRequest = nil
+            self.configure(animate: true)
+        }
+    }
     private func present(_ layout: NotchGeometry, expanded: Bool, animate: Bool) {
         guard let panel, let surface else { return }
         let frame = layout.frame
         guard destinationFrame != frame || presentation.expanded != expanded || !animate else { return }
         destinationFrame = frame
         let id = UUID(); transitionID = id
+        let changesExpansion = presentation.expanded != expanded
         presentation.expanded = expanded
-        let animated = animate && panel.isVisible && !reduceMotion()
+        // The two hosts crossfade only when opening/closing. An already-open page
+        // replaces its SwiftUI content at full size immediately, so its window and
+        // clipping outline must change in the same transaction. A spring here cuts
+        // the new Usage page beneath the previous (shorter) Agents outline.
+        let animated = animate && changesExpansion && panel.isVisible && !reduceMotion()
         setPanelFrame(animated ? panel.frame.union(frame) : frame)
         surface.transition(size: frame.size, expanded: expanded, animated: animated) { [weak self] in
             guard let self, self.transitionID == id else { return }
@@ -281,8 +310,8 @@ import BurroCore
         let expanded = NotchGeometry.layout(screen: screen.frame, visibleFrame: screen.visibleFrame,
             safeTop: screen.safeAreaInsets.top, hardwareWidth: gap, expanded: true,
             visibleAgents: store.didCheckAgents ? presentation.visibleRows : 3)
-        presentation.compactGeometry = compact
-        presentation.expandedGeometry = expanded
+        if presentation.compactGeometry != compact { presentation.compactGeometry = compact }
+        if presentation.expandedGeometry != expanded { presentation.expandedGeometry = expanded }
         surface?.setContentSizes(compact: compact.frame.size, expanded: expanded.frame.size)
         present(hoverState.expanded ? expanded : compact, expanded: hoverState.expanded, animate: animate)
         if !panel.isVisible || !animate { panel.orderFrontRegardless() }

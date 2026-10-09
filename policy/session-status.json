@@ -1,0 +1,19 @@
+{
+  "codexEvents": {
+    "task_started": ["working", false],
+    "turn_started": ["working", false],
+    "task_complete": ["idle", true],
+    "turn_complete": ["idle", true],
+    "task_aborted": ["idle", false],
+    "turn_aborted": ["idle", false],
+    "request_user_input": ["waiting", false],
+    "approval_required": ["waiting", false]
+  },
+  "claudeAliases": {
+    "working": "working", "running": "working", "busy": "working", "processing": "working",
+    "waiting": "waiting", "waiting_for_input": "waiting", "needs_input": "waiting",
+    "awaiting_approval": "waiting", "waiting_for_permission": "waiting", "idle": "idle"
+  },
+  "workingSeconds": 120,
+  "recentSeconds": 300
+}

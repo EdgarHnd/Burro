@@ -21,18 +21,29 @@ jobs:
         with:
           persist-credentials: false
       - name: Toolchain
-        run: swift --version
+        run: |
+          swift --version
+          rustup toolchain install 1.90.0 --profile minimal
+      - name: Rust worker tests and build
+        run: |
+          cargo test --manifest-path Rust/Cargo.toml --target-dir .build/rust --locked
+          ./script/build_rust_worker.sh
       - name: Swift tests (native panel tests require an interactive display)
+        env:
+          BURRO_REQUIRE_RUST_WORKER: "1"
         run: swift test --skip NotchPanelTests
+      - name: Shared status policy is current
+        run: python3 -B script/generate_status_policy.py --check
       - name: Remote probe fixtures
         run: python3 -B script/test_remote_probe.py
       - name: Signing identity regression tests
         run: python3 -B script/test_signing_identity.py
       - name: Build app from source
         run: CONFIGURATION=release ./script/build_and_run.sh --build-only
-      - name: Verify bundle signature and bundled remote probe
+      - name: Verify bundle signature, Rust worker, and remote probe
         run: |
           codesign --verify --deep --strict dist/Burro.app
+          codesign --verify --strict dist/Burro.app/Contents/MacOS/burro-log-worker
           swift script/verify_bundle.swift dist/Burro.app
   linux-probe:
     name: Linux remote probe tests
@@ -43,3 +54,7 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 -B script/test_remote_probe.py
+      - name: Rust worker portability tests
+        run: |
+          rustup toolchain install 1.90.0 --profile minimal
+          cargo test --manifest-path Rust/Cargo.toml --target-dir .build/rust --locked

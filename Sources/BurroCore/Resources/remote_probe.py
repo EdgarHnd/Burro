@@ -17,6 +17,33 @@ import time
 LIMIT = 2000
 TAIL_LIMIT = 512 * 1024
 
+# BEGIN GENERATED STATUS POLICY
+CODEX_EVENTS = {
+    'task_started': ('Working', False),
+    'turn_started': ('Working', False),
+    'task_complete': ('Open · idle', True),
+    'turn_complete': ('Open · idle', True),
+    'task_aborted': ('Open · idle', False),
+    'turn_aborted': ('Open · idle', False),
+    'request_user_input': ('Needs input', False),
+    'approval_required': ('Needs input', False),
+}
+CLAUDE_ALIASES = {
+    'working': 'Working',
+    'running': 'Working',
+    'busy': 'Working',
+    'processing': 'Working',
+    'waiting': 'Needs input',
+    'waiting_for_input': 'Needs input',
+    'needs_input': 'Needs input',
+    'awaiting_approval': 'Needs input',
+    'waiting_for_permission': 'Needs input',
+    'idle': 'Open · idle',
+}
+WORKING_SECONDS = 120
+RECENT_SECONDS = 300
+# END GENERATED STATUS POLICY
+
 
 
 def held_lock(path):
@@ -34,50 +61,33 @@ def held_lock(path):
         return -1
 
 
+def codex_event(tail):
+    for line in reversed(tail.splitlines()):
+        try:
+            event = json.loads(line)
+            if event.get("type") == "event_msg":
+                kind = event.get("payload", {}).get("type")
+                if isinstance(kind, str) and kind in CODEX_EVENTS:
+                    return CODEX_EVENTS[kind]
+        except (ValueError, AttributeError, TypeError):
+            continue
+    return (None, False)
+
+
 def codex_state(tail, held, modified, now):
     if held < 0:
         return "Unknown"
-    last = None
-    for line in reversed(tail.splitlines()):
-        try:
-            event = json.loads(line)
-            if event.get("type") != "event_msg":
-                continue
-            kind = event.get("payload", {}).get("type")
-            if kind in ("task_started", "turn_started"):
-                last = "Working"
-            elif kind in ("task_complete", "turn_complete", "turn_aborted", "task_aborted"):
-                last = "Open · idle"
-            elif kind in ("request_user_input", "approval_required"):
-                last = "Needs input"
-            else:
-                continue
-            break
-        except (ValueError, AttributeError, TypeError):
-            continue
+    last, _ = codex_event(tail)
+    age = now - modified if modified is not None else None
     if held == 1:
-        return last or ("Working" if modified is not None and 0 <= now - modified < 120 else "Unknown")
+        return last or ("Working" if age is not None and 0 <= age < WORKING_SECONDS else "Unknown")
     if last == "Open · idle":
         return "Inactive"
-    return "Recent activity" if modified is not None and 0 <= now - modified < 300 else "Inactive"
-
+    return "Recent activity" if age is not None and 0 <= age < RECENT_SECONDS else "Inactive"
 
 
 def codex_completed(tail):
-    completed = False
-    for line in reversed(tail.splitlines()):
-        try:
-            event = json.loads(line)
-            if event.get("type") != "event_msg":
-                continue
-            kind = event.get("payload", {}).get("type")
-            if kind in ("task_complete", "turn_complete"):
-                return True
-            elif kind in ("task_started", "turn_started", "task_aborted", "turn_aborted", "request_user_input", "approval_required"):
-                return False
-        except (ValueError, AttributeError, TypeError):
-            continue
-    return completed
+    return codex_event(tail)[1]
 
 
 def claude_completed(home):
@@ -104,12 +114,7 @@ def claude_state(status, live):
         return "Unknown"
     if not live:
         return "Inactive"
-    status = str(status).lower()
-    if status in ("working", "running", "busy", "processing"):
-        return "Working"
-    if status in ("waiting", "waiting_for_input", "needs_input", "awaiting_approval", "waiting_for_permission"):
-        return "Needs input"
-    return "Open · idle" if status == "idle" else "Unknown"
+    return CLAUDE_ALIASES.get(str(status).lower(), "Unknown")
 
 
 def claude_identity(pid, expected):
@@ -157,8 +162,10 @@ def claude_worker_tail_state(tail, sid, agent_id, started, now, modified):
             if event.get("type") not in ("assistant", "user"):
                 continue
             stamp = datetime.fromisoformat(event["timestamp"].replace("Z", "+00:00")).timestamp()
-            if not math.isfinite(stamp) or stamp < started - 2 or stamp > now + 5:
+            if not math.isfinite(stamp) or stamp < started - 2:
                 continue
+            if stamp > now + 5:
+                return "Unknown"
             message = event.get("message", {})
             if not isinstance(message, dict):
                 continue
@@ -187,7 +194,7 @@ def claude_worker_states(home, sid, started, now, deadline):
     states = []
     # Registry cwd may change after worktree creation; parent UUID is the ownership boundary.
     for index, project in enumerate(root.iterdir()):
-        if index >= 256 or time.monotonic() > deadline:
+        if index >= 4096 or time.monotonic() > deadline:
             return states + ["Unknown"]
         if not project.is_dir() or project.is_symlink():
             continue
@@ -195,7 +202,7 @@ def claude_worker_states(home, sid, started, now, deadline):
         if not directory.is_dir() or directory.is_symlink() or directory.parent.is_symlink():
             continue
         for count, path in enumerate(directory.glob("agent-*.jsonl")):
-            if count >= 64 or time.monotonic() > deadline:
+            if count >= 256 or time.monotonic() > deadline:
                 return states + ["Unknown"]
             agent_id = path.stem[len("agent-"):]
             if path.is_symlink() or not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", agent_id):
@@ -451,7 +458,10 @@ def collect(home):
                     except (OSError, TypeError):
                         state = "Unknown" if held != 0 else "Inactive"
                     completed = codex_completed(tail)
-                    if state != "Inactive" or completed and not is_subagent:
+                    # Retain recent closed chat metadata so the viewer can apply
+                    # its own local day boundary, even across different time zones.
+                    recent_chat = not is_subagent and now - 48 * 3600 <= float(updated or 0) <= now
+                    if state != "Inactive" or completed and not is_subagent or recent_chat:
                         sessions.append(session("codex:" + sid, "Codex", codex_display_name(name, title, is_subagent), cwd, state, updated or 0,
                                                 "Remote writer lock and turn event metadata.", pinned=bool(pinned)))
                         sessions[-1]["turnCompleted"] = completed
@@ -497,8 +507,8 @@ def collect(home):
                                 state = "Unknown"
                     desktop_id = record.get("hostSessionId")
                     has_result = isinstance(desktop_id, str) and desktop_id in completed and record.get("status") == "idle" and state in ("Open · idle", "Inactive")
-                    if state != "Inactive" or has_result:
-                        updated = float(record.get("updatedAt", record.get("startedAt", 0))) / 1000
+                    updated = float(record.get("updatedAt", record.get("startedAt", 0))) / 1000
+                    if state != "Inactive" or has_result or now - 48 * 3600 <= updated <= now:
                         sessions.append(session("claude:" + sid, "Claude Code", record.get("name") or "Claude Code session",
                                                 cwd, state, updated, "Remote PID/start-time identity and reported session status.", pid=pid if live else None))
                         sessions[-1]["turnCompleted"] = has_result
@@ -519,7 +529,8 @@ def collect(home):
             warnings.append("Claude session metadata could not be read on this host.")
     elif (home / ".claude").exists():
         warnings.append("Claude session registry is unavailable on this host.")
-    sessions.sort(key=lambda item: item["state"] == "Inactive")
+    # Preserve live evidence first, then the newest history across both providers.
+    sessions.sort(key=lambda item: (item["state"] == "Inactive", -item["updatedAt"]))
     if len(sessions) > LIMIT:
         warnings.append("Remote sessions exceed the inspection limit.")
     return dict(version=1, sessions=sessions[:LIMIT], warnings=sorted(set(warnings)))

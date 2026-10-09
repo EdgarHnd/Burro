@@ -5,6 +5,10 @@ import BurroCore
 @main struct BurroInspect {
     static func main() async throws {
         let paths = Array(CommandLine.arguments.dropFirst())
+        if paths.first == "--profile" || paths.first == "--profile-agents" {
+            try PerformanceProfile.run(includeUsage: paths.first == "--profile")
+            return
+        }
         if paths == ["--agents"] {
             let activity = AgentMonitor().sample()
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601

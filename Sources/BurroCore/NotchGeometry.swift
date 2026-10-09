@@ -2,7 +2,7 @@
 import Foundation
 import CoreGraphics
 
-public struct NotchGeometry: Sendable {
+public struct NotchGeometry: Equatable, Sendable {
     public var frame: CGRect
     public var headerHeight: CGFloat
     public var hardwareGap: CGFloat

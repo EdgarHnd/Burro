@@ -94,7 +94,8 @@ import BurroCore
     var baseOverrides: [String: String] { didSet { save() } }
     private var monitorTask: Task<Void, Never>?
     private var remoteMonitorTask: Task<Void, Never>?
-    private var agentMonitorTask: Task<Void, Never>?
+    private var agentRefresh: AgentRefreshCoordinator?
+    private var agentWatcher: AgentFileWatcher?
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard, cleanupBatch: CleanupBatchStore? = nil,
@@ -165,12 +166,17 @@ import BurroCore
         guard monitorTask == nil else { return }
         // Owned by the app store so closing the window keeps the menu-bar monitor alive.
         usage.start()
-        agentMonitorTask = Task {
-            while !Task.isCancelled {
-                await refreshAgents()
-                try? await Task.sleep(for: .seconds(3))
-            }
+        let coordinator = AgentRefreshCoordinator { [weak self] in
+            guard let self else { return 15 }
+            await self.refreshAgents()
+            return AgentRefreshCoordinator.interval(states: self.localActivity.sessions.map(\.state),
+                warnings: !self.localActivity.warnings.isEmpty, watching: self.agentWatcher?.isRunning == true)
         }
+        agentRefresh = coordinator
+        agentWatcher = AgentFileWatcher(paths: AgentFileWatcher.paths(home: FileManager.default.homeDirectoryForCurrentUser.path)) { [weak coordinator] in
+            Task { @MainActor in coordinator?.changed() }
+        }
+        coordinator.start()
         remoteMonitorTask = Task {
             while !Task.isCancelled {
                 await refreshRemotes()
@@ -183,6 +189,13 @@ import BurroCore
                 try? await Task.sleep(for: .seconds(30))
             }
         }
+    }
+    func stop() {
+        usage.stop()
+        agentWatcher?.stop(); agentWatcher = nil
+        agentRefresh?.stop(); agentRefresh = nil
+        monitorTask?.cancel(); monitorTask = nil
+        remoteMonitorTask?.cancel(); remoteMonitorTask = nil
     }
     func refreshUsage(force: Bool = false, allowClaudePrompt: Bool = false) async {
         await usage.refresh(force: force, allowClaudePrompt: allowClaudePrompt)
@@ -230,7 +243,17 @@ import BurroCore
         return snapshot.worktrees.first { $0.path == owner }
     }
     var remoteSessions: [AgentSession] { agentActivity.visibleSessions(includeIdle: true).filter { $0.remote != nil } }
-    var selectedRemote: AgentSession? { remoteSessions.first { $0.id == remoteSelection } }
+    // Keep browsing history separate from the live activity/safety inventory.
+    var notchChatSessions: [AgentSession] {
+        var sessions = agentActivity.sessions.filter { $0.remote == nil }
+        for host in remoteHosts where host.enabled {
+            guard var snapshot = remoteSnapshots[host.id] else { continue }
+            snapshot.host = host
+            sessions += snapshot.displaySessions().map { localActivity.readState.applying(to: $0) }
+        }
+        return sessions
+    }
+    var selectedRemote: AgentSession? { notchChatSessions.first { $0.remote != nil && $0.id == remoteSelection } }
     func connection(for host: RemoteHost) -> RemoteHostSnapshot {
         guard host.enabled else { return RemoteHostSnapshot(host: host, state: .disabled) }
         return remoteSnapshots[host.id] ?? RemoteHostSnapshot(host: host)

@@ -123,6 +123,47 @@ final class ClaudeDelegatedActivityTests: XCTestCase {
         try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
         XCTAssertEqual(read(), .unknown)
     }
+    func testRustClaudeBatchMatchesSwiftAcrossLargeProjectHistoryAndFallback() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let root = home.appendingPathComponent(".claude/projects")
+        for index in 0..<270 { try FileManager.default.createDirectory(at: root.appendingPathComponent("project-\(index)"), withIntermediateDirectories: true) }
+        let projectRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let executable = projectRoot.appendingPathComponent(".build/rust/release/burro-log-worker")
+        if !FileManager.default.isExecutableFile(atPath: executable.path) {
+            if ProcessInfo.processInfo.environment["BURRO_REQUIRE_RUST_WORKER"] == "1" { XCTFail("Required Rust worker missing") }
+            throw XCTSkip("Build the Rust worker first")
+        }
+        let worker = AgentLogWorker(executable: executable); defer { worker.stop() }
+        let request = ClaudeLogRequest(root: root.path, sessions: [ClaudeLogSession(sessionID: sid, started: now.timeIntervalSince1970 - 600)], now: now.timeIntervalSince1970)
+        func fallback() -> [AgentState] { ClaudeDelegatedActivity.workerStates(home: home.path, sessionID: sid, started: now.addingTimeInterval(-600), now: now, deadline: deadline) }
+        XCTAssertEqual(fallback(), [], "A large project history alone must not create Unknown sessions")
+        XCTAssertNil(try XCTUnwrap(worker.exchange([], claude: request)?.claude).results[0])
+        let folder = root.appendingPathComponent("project-269/\(sid)/subagents")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let path = folder.appendingPathComponent("agent-worker.jsonl")
+        let fixtures = try [event(), event(stop: "end_turn"), handback(time: now.addingTimeInterval(-300)),
+                            handback(flag: 1, time: now.addingTimeInterval(-300)), event(time: now.addingTimeInterval(-121)),
+                            event(time: now.addingTimeInterval(20)), event(session: UUID().uuidString), "bad JSON"]
+        for text in fixtures {
+            try text.write(to: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: path.path)
+            let result = try XCTUnwrap(worker.exchange([], claude: request)?.claude)
+            XCTAssertEqual(result.results[0].map { [$0.agentState] } ?? [], fallback())
+            XCTAssertEqual(result.reads, 1)
+            XCTAssertEqual(try XCTUnwrap(worker.exchange([], claude: request)?.claude).cacheHits, 1)
+        }
+        // Codex requests must not evict Claude summaries, and vice versa.
+        let codex = home.appendingPathComponent("codex.jsonl")
+        try "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}".write(to: codex, atomically: true, encoding: .utf8)
+        XCTAssertEqual(try XCTUnwrap(worker.exchange([codex.path])).reads, 1)
+        XCTAssertEqual(try XCTUnwrap(worker.exchange([], claude: request)?.claude).cacheHits, 1)
+        XCTAssertEqual(try XCTUnwrap(worker.exchange([codex.path])).cacheHits, 1)
+        worker.stop()
+        XCTAssertEqual(try XCTUnwrap(worker.exchange([], claude: request)?.claude).reads, 1)
+        XCTAssertNil(AgentLogWorker(executable: nil).readClaude(root: root.path, sessions: request.sessions, now: now))
+    }
+
     func testScheduledRemainsVisibleSeparateFromRunningAttentionAndDone() {
         var session = AgentSession(id: "scheduled", provider: .claude, title: "Delayed check", cwd: "/fixture", state: .scheduled,
             updatedAt: now, evidence: "fixture", turnCompleted: true, hasUnreadResult: true)

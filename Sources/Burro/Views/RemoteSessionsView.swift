@@ -10,20 +10,17 @@ struct RemoteSessionsView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Remote sessions").font(.title2.weight(.semibold))
+                    Text("Remote sessions").font(AppAppearance.pageTitle)
                     Text("Codex and Claude Code across your machines").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button { Task { await store.refreshRemotes() } } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(store.checkingRemotes).help("Refresh remote sessions")
                 Button { adding = RemoteHost(name: "", destination: "") } label: { Image(systemName: "plus") }.help("Add remote machine")
-            }.padding(Layout.inset)
+            }.padding(Layout.inset).background(AppAppearance.surface)
             if store.remoteHosts.isEmpty {
-                ContentUnavailableView {
-                    Label("Connect your other laptop", systemImage: "laptopcomputer.and.arrow.down")
-                } description: {
-                    Text("Add an SSH address to see its Codex and Claude Code sessions here and in the notch.")
-                } actions: {
+                AppEmptyState(title: "Connect your other laptop", symbol: "laptopcomputer.and.arrow.down",
+                    detail: "Add an SSH address to see its Codex and Claude Code sessions here and in the notch.") {
                     Button("Add remote machine…") { adding = RemoteHost(name: "", destination: "") }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -45,21 +42,21 @@ struct RemoteSessionsView: View {
                             }
                             ForEach(sessions) { session in
                                 HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: session.provider == .codex ? "terminal" : "sparkle").foregroundStyle(.secondary)
+                                    AgentAvatar(session: session, size: 24)
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Text(session.title).lineLimit(2)
+                                        Text(session.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
                                         Text("\(session.provider.rawValue) · \(URL(fileURLWithPath: session.cwd).lastPathComponent)")
                                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                     }
                                     Spacer()
                                     Text(session.remote?.stale == true ? "Last seen" : session.statusLabel)
-                                        .font(.caption).foregroundStyle(session.isDone ? .blue : session.state.color)
+                                        .font(.caption).foregroundStyle(session.isDone ? AppAppearance.blue : session.state.color)
                                 }.padding(.vertical, 5).tag(session.id)
                             }
                             if let error = connection.error, host.enabled {
-                                Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
+                                Text(error).font(.caption).foregroundStyle(AppAppearance.amber).textSelection(.enabled)
                             }
-                            ForEach(connection.warnings, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
+                            ForEach(connection.warnings, id: \.self) { Text($0).font(.caption).foregroundStyle(AppAppearance.amber) }
                         } header: {
                             HStack {
                                 Text(host.name)
@@ -68,14 +65,14 @@ struct RemoteSessionsView: View {
                             }
                         }
                     }
-                }.listStyle(.inset)
+                }.listStyle(.inset).scrollContentBackground(.hidden).tint(AppAppearance.raised)
             }
             HStack {
                 Text("Remote status refreshes every 10 seconds")
                 Spacer()
                 SettingsLink { Text("Manage machines") }
             }.font(.caption).foregroundStyle(.secondary).padding(Layout.inset)
-        }
+        }.background(AppAppearance.background)
         .sheet(item: $adding) { RemoteHostEditor(host: $0) { store.saveRemoteHost($0) } }
     }
     private func matches(_ session: AgentSession) -> Bool {
@@ -98,10 +95,10 @@ struct RemoteSessionDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     Label(origin.hostName, systemImage: "laptopcomputer").foregroundStyle(.secondary)
-                    Text(session.title).font(.title2.weight(.semibold)).textSelection(.enabled)
+                    Text(session.title).font(AppAppearance.pageTitle).textSelection(.enabled)
                     Label(session.remote?.stale == true ? "Last seen · connection unavailable" : session.statusLabel,
                           systemImage: origin.stale ? "wifi.slash" : "circle.fill")
-                        .font(.callout).foregroundStyle(session.isDone ? .blue : session.state.color)
+                        .font(.callout).foregroundStyle(session.isDone ? AppAppearance.blue : session.state.color)
                     LabeledContent("Agent", value: session.provider.rawValue)
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Remote workspace").font(.caption).foregroundStyle(.secondary)
@@ -118,10 +115,10 @@ struct RemoteSessionDetailView: View {
                     Text("Cleanup checks are available for worktrees on this Mac only.")
                         .font(.callout).foregroundStyle(.secondary)
                 }.padding(Layout.inset).frame(maxWidth: .infinity, alignment: .leading)
-            }
+            }.background(AppAppearance.surface)
         } else {
-            ContentUnavailableView("Select a remote session", systemImage: "network",
-                description: Text("Its machine, activity, and workspace appear here."))
+            AppEmptyState("Select a remote session", symbol: "network",
+                detail: "Its machine, activity, and workspace appear here.")
         }
     }
 }

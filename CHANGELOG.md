@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.6.19 — Unreleased
+
+- Move local token-history scanning for Codex, Claude and Grok into a separately supervised Rust worker with bounded counter caches and Swift recovery. Prioritize recent logs and clearly label partial totals.
+- Cache Claude desktop completion metadata in Rust, reading only completion fields instead of rebuilding large nested JSON objects on every refresh.
+- Share Codex lifecycle events, age thresholds and Claude status aliases across local and remote adapters. Treat future timestamps conservatively.
+- Wake local monitoring on file changes, combine bursts, retain frequent active/uncertain process checks, and use a slower fallback when quiet. Add local CPU, memory and scan profiling tools.
+
+## 0.6.18 — Unreleased
+
+- Add Today's chats to the notch options, showing local and connected-Mac chats active today in last-active order, including idle and closed chats. Keep rows compact, show activity times, retain the selected view across Usage previews, and preserve stable targets while interacting.
+
+## 0.6.17 — Unreleased
+
+- Fix skipped layouts after repeatedly hovering Usage and returning to Agents. Defer and combine content resize requests until SwiftUI finishes rendering, avoid unchanged geometry updates, and cancel pending requests when the notch stops.
+
+## 0.6.16 — Unreleased
+
+- Fix cropped layouts when hovering the Usage tab: update an open panel's content size and clipping outline together, keeping tabs anchored and restoring the original Agents size on exit. Preserve animated notch opening/closing and click-to-commit behavior.
+
+## 0.6.15 — Unreleased
+
+- Let the butter hop off its stationary wrapper, squash on landing, double bounce, tilt, glance, and blink. Use orange Claude and blue Codex butter avatars across notch sessions, remote sessions, and agent details, with staggered motion and quieter idle behavior. Preserve compact frames and Reduce Motion support.
+
+## 0.6.14 — Unreleased
+
+- Animate the white butter mascot in the expanded notch with an occasional blink and a gentle bob while agents are working. Preserve its compact size, pause when collapsed or hidden, and honor Reduce Motion.
+
+## 0.6.13 — Unreleased
+
+- Replace the butter emoji with an original minimal white butter mascot in the notch, menu bar, and app icon. Keep compact sizing, use crisp vector artwork, and retain an abstract alternate with transparent PNG/SVG exports.
+
+## 0.6.12 — Unreleased
+
+- Move local Claude delegated-worker discovery and lifecycle parsing into the Rust worker, with bounded scans, cached summaries, and Swift recovery. Fix idle Claude chats incorrectly becoming Unknown after the project history exceeds 256 folders.
+- Keep unverified chats in Monitoring details with a visible count, while the active queue focuses on confirmed activity. Preserve their cleanup protection and offer an explicit option to include them in the queue.
+
+## 0.6.11 — Unreleased
+
+- Give the expanded notch a native Liquid Glass surface on macOS 26, with frosted material on earlier macOS versions. Keep the camera area and collapsed notch black, preserve compact dimensions and pointer behavior, and honor Reduce Transparency.
+
+## 0.6.10 — Unreleased
+
+- Unify the entire app with compact charcoal surfaces, rounded controls, consistent provider badges, and shared status colors. Apply the treatment to the sidebar, worktrees, inspectors, remote sessions, settings, cleanup sheets, and both notch pages. Reduce oversized Usage typography, controls, and padding while keeping existing window and notch dimensions.
+
+## 0.6.9 — Unreleased
+
+- Refresh both Usage surfaces with soft charcoal cards, pill controls, stronger numeric typography, and green-to-lime quota accents. Keep the existing dashboard layout, compact notch dimensions, and provider controls.
+
+## 0.6.8 — Unreleased
+
+- Add a bundled Rust worker for local Codex lifecycle-log parsing. Reuse summaries for unchanged files, retain Swift/AppKit UI and live safety checks, and recover through the Swift reader if the worker exits, times out, or returns an invalid response.
+
 ## 0.6.6 — Unreleased
 
 - Recognize Claude subagents that finish through a `SubagentHandback` tool-result envelope. Completed workers no longer leave idle parents stuck at Unknown; apply the same lifecycle rule locally and over SSH while retaining live background-task and uncertainty checks.

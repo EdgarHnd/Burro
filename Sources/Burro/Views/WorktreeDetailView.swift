@@ -19,7 +19,7 @@ struct WorktreeDetailView: View {
                         }.buttonStyle(.borderless).help(tree.protectedByUser ? "Remove your protection" : "Protect this worktree")
                             .accessibilityLabel(tree.protectedByUser ? "Remove protection" : "Protect worktree")
                     }
-                    Text(URL(fileURLWithPath: tree.path).lastPathComponent).font(.title3.weight(.semibold)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    Text(URL(fileURLWithPath: tree.path).lastPathComponent).font(AppAppearance.sectionTitle).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     Label("Branch: " + tree.branch, systemImage: "arrow.triangle.branch").font(.callout).textSelection(.enabled)
                     Text(tree.path.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~"))
                         .font(.caption).foregroundStyle(.secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
@@ -90,7 +90,7 @@ struct WorktreeDetailView: View {
                 Text("Cleanup rechecks activity and Git evidence, then preserves the folder in Trash and keeps the branch. Emptying Trash is permanent. Git refs are not fetched automatically.")
                     .font(.caption).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }.padding(Layout.inset)
-        }.frame(minWidth: 280, idealWidth: Layout.inspector)
+        }.background(AppAppearance.surface).frame(minWidth: 280, idealWidth: Layout.inspector)
         .task(id: tree.repositoryPath) {
             let branches = await store.comparisonBranches(tree)
             if !Task.isCancelled { comparisonBranches = branches }
@@ -132,6 +132,7 @@ struct AgentRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
+                AgentAvatar(session: session, size: 18)
                 Text(session.provider.rawValue).font(.caption.weight(.semibold)).foregroundStyle(.primary)
                 if session.pinned { Image(systemName: "pin.fill").font(.caption2) }
                 Spacer()

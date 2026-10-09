@@ -21,7 +21,7 @@ struct RemoteHostsSection: View {
                     Button { store.removeRemoteHost(host.id) } label: { Image(systemName: "minus.circle") }.help("Remove remote machine")
                 }.buttonStyle(.borderless)
                 if let error = store.connection(for: host).error, host.enabled {
-                    Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
+                    Text(error).font(.caption).foregroundStyle(AppAppearance.amber).textSelection(.enabled)
                 }
             }
             Button("Add remote machine…") { editing = RemoteHost(name: "", destination: "") }
@@ -53,7 +53,7 @@ struct RemoteHostEditor: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Remote machine").font(.title2.weight(.semibold))
+            Text("Remote machine").font(AppAppearance.pageTitle)
             Form {
                 TextField("Name", text: $draft.name, prompt: Text("Other laptop"))
                 TextField("SSH address", text: $draft.destination, prompt: Text("user@laptop.local or an SSH alias"))
@@ -61,12 +61,12 @@ struct RemoteHostEditor: View {
             }
             Text("First confirm that SSH connects in Terminal. Burro uses your existing keys and verified host identity, then reads session metadata. No helper installation or provider login is needed; Python 3 must be available on the remote machine.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if !draft.destination.isEmpty, let error { Text(error).font(.caption).foregroundStyle(.orange) }
+            if !draft.destination.isEmpty, let error { Text(error).font(.caption).foregroundStyle(AppAppearance.amber) }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Save & connect") { save(value); dismiss() }.keyboardShortcut(.defaultAction).disabled(error != nil)
             }
-        }.padding(24).frame(width: 480)
+        }.padding(24).frame(width: 480).modifier(AppTheme())
     }
 }

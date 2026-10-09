@@ -4,6 +4,56 @@ import XCTest
 @testable import Burro
 
 final class NotchFeedTests: XCTestCase {
+    func testTodayIncludesQuietChatsAndSortsAcrossProvidersAndProjectsByLastActivity() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        var olderWaiting = agent("waiting", .waiting); olderWaiting.updatedAt = now.addingTimeInterval(-600)
+        var closed = agent("closed", .inactive); closed.updatedAt = now.addingTimeInterval(-60); closed.cwd = "/other"
+        var idle = agent("idle", .idle); idle.updatedAt = now.addingTimeInterval(-120); idle.provider = .claude
+        var worker = agent("worker", .working, child: true); worker.updatedAt = now
+        var yesterday = agent("yesterday"); yesterday.updatedAt = calendar.startOfDay(for: now).addingTimeInterval(-1)
+        var future = agent("future"); future.updatedAt = now.addingTimeInterval(60)
+        let feed = NotchFeed(sessions: [olderWaiting, closed, idle, worker, yesterday, future, closed],
+                             includeIdle: false, scope: .today, now: now, calendar: calendar)
+        XCTAssertEqual(feed.groups.map(\.id), ["closed", "idle", "waiting"])
+        XCTAssertTrue(feed.groups.allSatisfy { $0.workers.isEmpty })
+        XCTAssertEqual(feed.inventory.count, 6, "Browsing must not filter the safety inventory")
+        XCTAssertEqual(feed.inventory["closed"]?.state, .inactive)
+    }
+
+    func testTodayUsesLocalCalendarBoundaryIncludingDSTAndStableTies() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        // The fall-back day lasts 25 hours; today's early chat is over 24 hours old.
+        let now = calendar.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 23, minute: 30))!
+        let start = calendar.startOfDay(for: now)
+        var first = agent("a", .inactive); first.updatedAt = start
+        var second = first; second.id = "b"
+        var previous = first; previous.id = "previous"; previous.updatedAt = start.addingTimeInterval(-1)
+        XCTAssertGreaterThan(now.timeIntervalSince(start), 24 * 3600)
+        let feed = NotchFeed(sessions: [second, previous, first], includeIdle: false, scope: .today, now: now, calendar: calendar)
+        XCTAssertEqual(feed.groups.map(\.id), ["a", "b"])
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: start)!
+        XCTAssertTrue(NotchFeed(sessions: [first], includeIdle: false, scope: .today, now: tomorrow, calendar: calendar).groups.isEmpty)
+    }
+
+    func testTodayDefersReorderingUntilInteractionEndsAndOffersUpdate() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var first = agent("first", .idle); first.updatedAt = now.addingTimeInterval(-10)
+        var second = agent("second", .idle); second.updatedAt = now.addingTimeInterval(-20)
+        var list = NotchListState()
+        list.reconcile(NotchFeed(sessions: [first, second], includeIdle: false, scope: .today, now: now), holding: false)
+        second.updatedAt = now
+        let latest = NotchFeed(sessions: [first, second], includeIdle: false, scope: .today, now: now)
+        list.reconcile(latest, holding: true)
+        XCTAssertEqual(list.groups.map(\.id), ["first", "second"])
+        XCTAssertGreaterThan(list.pendingChanges, 0)
+        XCTAssertEqual(list.groups[1].root?.updatedAt, now)
+        list.reconcile(latest, holding: false)
+        XCTAssertEqual(list.groups.map(\.id), ["second", "first"])
+        XCTAssertEqual(list.pendingChanges, 0)
+    }
+
     private func agent(_ id: String, _ state: AgentState = .working, parent: String? = nil, child: Bool = false) -> AgentSession {
         AgentSession(id: id, provider: .codex, title: id, cwd: "/same/repo", state: state,
             updatedAt: Date(timeIntervalSince1970: 100), evidence: "fixture", isSubagent: child, parentSessionID: parent)
@@ -23,7 +73,7 @@ final class NotchFeedTests: XCTestCase {
         let child = agent("child", .working, parent: "parent", child: true)
         let guardian = agent("guardian", .unknown, child: true)
         let sessions = [parent, child, guardian, agent("unrelated")]
-        let feed = NotchFeed(sessions: sessions, includeIdle: false)
+        let feed = NotchFeed(sessions: sessions, includeIdle: true)
         XCTAssertEqual(feed.groups.first { $0.id == "parent" }?.workers.map(\.id), ["child"])
         XCTAssertEqual(feed.groups.first { $0.root == nil }?.workers.map(\.id), ["guardian"])
         XCTAssertTrue(feed.groups.first { $0.id == "unrelated" }!.workers.isEmpty)
@@ -36,7 +86,7 @@ final class NotchFeedTests: XCTestCase {
         let grandchild = agent("grandchild", .waiting, parent: "child", child: true)
         let a = agent("a", .unknown, parent: "b", child: true)
         let b = agent("b", .unknown, parent: "a", child: true)
-        let feed = NotchFeed(sessions: [root, child, grandchild, a, b], includeIdle: false)
+        let feed = NotchFeed(sessions: [root, child, grandchild, a, b], includeIdle: true)
         XCTAssertEqual(feed.groups.first?.root?.id, "root")
         XCTAssertEqual(feed.groups.first?.workers.map(\.id), ["grandchild"])
         XCTAssertEqual(Set(feed.groups.last!.workers.map(\.id)), ["a", "b"])
@@ -53,10 +103,23 @@ final class NotchFeedTests: XCTestCase {
     func testQuietWorkersAreCollapsedButWaitingWorkersHaveHighestPriority() {
         let waiting = agent("waiting", .waiting, child: true)
         let unknown = agent("unknown", .unknown, child: true)
-        let feed = NotchFeed(sessions: [agent("chat"), waiting, unknown], includeIdle: false)
+        let feed = NotchFeed(sessions: [agent("chat"), waiting, unknown], includeIdle: true)
         XCTAssertNil(feed.groups.first?.root)
         XCTAssertEqual(feed.groups.first?.workers.count, 2)
         XCTAssertEqual(feed.groups.first?.priority, 0)
+    }
+    func testUnverifiedChatsStayProtectedAndInspectableOutsideActiveQueue() {
+        let uncertain = agent("uncertain", .unknown)
+        let worker = agent("worker", .unknown, child: true)
+        let sessions = [agent("active"), uncertain, worker]
+        let feed = NotchFeed(sessions: sessions, includeIdle: false)
+        XCTAssertEqual(feed.groups.map(\.id), ["active"])
+        XCTAssertTrue(feed.inventory["uncertain"]!.state.keepsWorktree)
+        XCTAssertTrue(feed.inventory["worker"]!.state.keepsWorktree)
+        XCTAssertEqual(NotchFeed(sessions: sessions, includeIdle: true).groups.count, 3)
+        let activity = AgentActivitySnapshot(sessions: sessions + [uncertain], warnings: [], sampledAt: Date())
+        XCTAssertEqual(activity.unverifiedSessions.map(\.id), ["uncertain", "worker"])
+        XCTAssertEqual(activity.attentionCount, 0)
     }
     func testHeldListUpdatesBadgesWithoutMovingOrReplacingTargets() {
         var list = NotchListState()

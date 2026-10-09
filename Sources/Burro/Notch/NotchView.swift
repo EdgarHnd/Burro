@@ -19,13 +19,16 @@ struct NotchView: View {
     @State private var expandedGroups: Set<String> = []
     @State private var showingHealth = false
     @State private var workspacePaths: [String: String] = [:]
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     private var workspaces: [NotchWorkspace] {
         NotchWorkspace.grouped(list.groups) { workspacePaths[$0.id] ?? store.workspacePath(for: $0) }
     }
     private var showingUsage: Bool { presentation.navigation.visible == .usage }
     private var activity: AgentActivitySnapshot { store.agentActivity }
+    private var chatSessions: [AgentSession] { presentation.chatScope == .today ? store.notchChatSessions : activity.sessions }
     private var rowCount: Int {
-        list.groups.reduce(0) { $0 + 1 + (expandedGroups.contains($1.id) ? $1.workers.count : 0) } + workspaces.filter { !$0.path.isEmpty }.count
+        if presentation.chatScope == .today { return list.groups.count }
+        return list.groups.reduce(0) { $0 + 1 + (expandedGroups.contains($1.id) ? $1.workers.count : 0) } + workspaces.filter { !$0.path.isEmpty }.count
     }
 
     var body: some View {
@@ -38,7 +41,7 @@ struct NotchView: View {
                     .accessibilityAddTraits(.isButton).accessibilityAction { onToggle() }
             } else {
                 VStack(spacing: 0) {
-                    expandedHeader.frame(height: presentation.expandedGeometry.headerHeight)
+                    expandedHeader.frame(height: presentation.expandedGeometry.headerHeight).background(.black)
                     expandedBody
                 }
             }
@@ -50,27 +53,32 @@ struct NotchView: View {
         }
         .accessibilityHidden(compact == presentation.expanded)
         .preferredColorScheme(.dark)
+        .foregroundStyle(AppAppearance.text)
+        .tint(AppAppearance.text)
         .transaction { $0.animation = nil }
         .onAppear { reconcile() }
-        .onChange(of: activity.sessions) { _, _ in reconcile() }
+        .onChange(of: chatSessions) { _, _ in reconcile() }
+        .onChange(of: Calendar.current.startOfDay(for: activity.sampledAt)) { _, _ in reconcile() }
         .onChange(of: presentation.holdingList) { _, _ in reconcile() }
         .onChange(of: presentation.expanded) { _, expanded in
             if !expanded { showingHealth = false }
             reconcile(force: !expanded)
         }
         .onChange(of: presentation.includeIdle) { _, _ in reconcile(force: true) }
+        .onChange(of: presentation.chatScope) { _, _ in reconcile(force: true) }
         .onChange(of: presentation.navigation.visible) { _, page in
             updateGeometry()
             if page == .usage { Task { await store.refreshUsage() } }
         }
         .onChange(of: presentation.navigation.isPreviewing) { _, _ in updateGeometry() }
         .onChange(of: rowCount) { _, _ in updateGeometry() }
+        .onChange(of: showingHealth) { _, _ in updateGeometry() }
         .onChange(of: store.didCheckAgents) { _, _ in updateGeometry() }
     }
     private func reconcile(force: Bool = false) {
         guard !compact else { return }
         let holding = !force && presentation.expanded && presentation.holdingList
-        list.reconcile(NotchFeed(sessions: activity.sessions, includeIdle: presentation.includeIdle), holding: holding)
+        list.reconcile(NotchFeed(sessions: chatSessions, includeIdle: presentation.includeIdle, scope: presentation.chatScope), holding: holding)
         if !holding || workspacePaths.isEmpty {
             workspacePaths = Dictionary(list.groups.flatMap(\.members).map { ($0.id, store.workspacePath(for: $0)) }, uniquingKeysWith: { first, _ in first })
         }
@@ -78,7 +86,8 @@ struct NotchView: View {
     }
     private func updateGeometry() {
         guard !compact else { return }
-        presentation.visibleRows = showingUsage || presentation.navigation.isPreviewing ? max(5, rowCount) : rowCount
+        let rows = showingHealth || showingUsage || presentation.navigation.isPreviewing ? 5 : min(5, rowCount)
+        if presentation.visibleRows != rows { presentation.visibleRows = rows }
         onContentChange()
     }
     private var compactStatus: some View {
@@ -102,7 +111,8 @@ struct NotchView: View {
     private var expandedHeader: some View {
         HStack(spacing: 0) {
             HStack(spacing: 6) {
-                Text("🧈").font(.system(size: 18)).frame(width: 22, height: 22)
+                BurroMark(active: presentation.expanded, working: activity.workingCount > 0)
+                    .frame(width: 22, height: 22)
                 Text("Burro").font(.system(size: 12, weight: .semibold, design: .rounded))
             }.frame(maxWidth: .infinity, alignment: .leading)
             Color.clear.frame(width: presentation.expandedGeometry.hardwareGap)
@@ -124,6 +134,8 @@ struct NotchView: View {
                 if presentation.navigation.isPreviewing {
                     Label("Preview", systemImage: "eye").foregroundStyle(.secondary)
                         .help("Move away to return; click the tab to keep this view")
+                } else if !showingUsage && !showingHealth && presentation.chatScope == .today {
+                    count(list.groups.count, "today", AppAppearance.text)
                 } else if !showingUsage {
                     if activity.waitingCount > 0 { count(activity.waitingCount, "need you", NotchStyle.attention) }
                     if activity.doneCount > 0 { count(activity.doneCount, "done", .blue) }
@@ -132,7 +144,18 @@ struct NotchView: View {
                     } else { count(activity.workingCount, "running", AgentState.working.color) }
                 }
                 Menu {
-                    Toggle("Include idle chats", isOn: $presentation.includeIdle)
+                    Picker("Chats", selection: Binding(get: { presentation.chatScope }, set: { scope in
+                        showingHealth = false
+                        presentation.chatScope = scope
+                        onSelectPage(.agents)
+                    })) {
+                        Text("Active chats").tag(NotchChatScope.activity)
+                        Text("Today's chats").tag(NotchChatScope.today)
+                    }.pickerStyle(.inline)
+                    Divider()
+                    if presentation.chatScope == .activity {
+                        Toggle("Include idle and unverified chats", isOn: $presentation.includeIdle)
+                    }
                     Button("Refresh status") { Task { await store.refreshAgents(); await store.refreshRemotes() } }
                     Button("Usage limits") { onSelectPage(.usage); showingHealth = false; Task { await store.refreshUsage() } }
                     Button("Monitoring details") { onSelectPage(.agents); showingHealth = true }
@@ -148,6 +171,9 @@ struct NotchView: View {
             else if showingHealth && !presentation.navigation.isPreviewing { NotchHealthView(store: store) }
             else if !store.didCheckAgents { loading }
             else if list.groups.isEmpty { empty }
+            else if presentation.chatScope == .today {
+                NotchTodayView(groups: list.groups, active: presentation.expanded, select: onSelect, inspect: onInspect)
+            }
             else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -159,6 +185,7 @@ struct NotchView: View {
                                     ForEach(group.workers) { worker in
                                         NotchAgentRow(session: worker, workspace: store.workspaceLabel(for: worker),
                                             available: !group.unavailableIDs.contains(worker.id),
+                                            animate: presentation.expanded,
                                             select: { onSelect(worker) }, inspect: { onInspect(worker) })
                                             .padding(.leading, 18)
                                     }
@@ -202,8 +229,8 @@ struct NotchView: View {
                     Label(page.title, systemImage: page.symbol)
                         .font(.system(size: 10, weight: .semibold))
                         .padding(.horizontal, 9).frame(height: 24)
-                        .foregroundStyle(selected || preview ? .white : .gray)
-                        .background(.white.opacity(selected ? 0.12 : (preview ? 0.06 : 0)), in: Capsule())
+                        .foregroundStyle(selected || preview ? AppAppearance.text : AppAppearance.secondary)
+                        .background(selected ? AppAppearance.background : (preview ? AppAppearance.surface : .clear), in: Capsule())
                         .overlay { Capsule().strokeBorder(.white.opacity(preview ? 0.28 : 0), lineWidth: 1) }
                         .contentShape(Capsule())
                 }.buttonStyle(.plain)
@@ -218,16 +245,18 @@ struct NotchView: View {
                         }
                     }
             }
-        }.fixedSize()
+        }.padding(2).background(AppAppearance.raised, in: Capsule()).fixedSize()
     }
     @ViewBuilder private func groupRow(_ group: NotchGroup) -> some View {
         if let session = group.root {
             HStack(spacing: 0) {
                 NotchAgentRow(session: session, workspace: session.remote?.hostName ?? "This Mac",
                     available: !group.unavailableIDs.contains(session.id), workerState: workerState(group),
+                    animate: presentation.expanded,
                     select: { onSelect(session) }, inspect: { onInspect(session) })
                 if !group.workers.isEmpty { workerDisclosure(group) }
-            }
+            }.background(AppAppearance.surface.opacity(reduceTransparency ? 1 : 0.25),
+                in: RoundedRectangle(cornerRadius: AppAppearance.cardRadius))
         } else {
             Button { toggleGroup(group.id) } label: {
                 HStack(spacing: 11) {
@@ -275,6 +304,18 @@ struct NotchView: View {
                 Text("Remaining · all machines").foregroundStyle(.secondary)
             } else if showingHealth {
                 Button { showingHealth = false; onSelectPage(.agents) } label: { Label("Agents", systemImage: "chevron.left") }
+            } else if presentation.chatScope == .today {
+                Text("Today · Last active").foregroundStyle(.secondary)
+                if !store.notchNotices.isEmpty {
+                    Button { showingHealth = true } label: { Image(systemName: "info.circle") }
+                        .foregroundStyle(.secondary).help("Show monitoring and history coverage")
+                        .accessibilityLabel("Monitoring details")
+                }
+            } else if !activity.unverifiedSessions.isEmpty {
+                Button { showingHealth = true } label: {
+                    Label("\(activity.unverifiedSessions.count) chat statuses unavailable", systemImage: "info.circle")
+                        .lineLimit(1)
+                }.foregroundStyle(.secondary).help("Show unverified chats and monitoring details")
             } else if let notice = store.notchNotices.first {
                 Button { showingHealth = true } label: {
                     Label(store.notchNotices.count == 1 ? notice.summary : "\(store.notchNotices.count) monitoring notices", systemImage: "info.circle")
@@ -305,9 +346,13 @@ struct NotchView: View {
     }
     private var empty: some View {
         VStack(spacing: 8) {
-            Image(systemName: "checkmark").font(.system(size: 20, weight: .light)).foregroundStyle(NotchStyle.accent)
-            Text(activity.warnings.isEmpty ? "All quiet" : "No activity detected").font(.system(size: 13, weight: .medium))
-            Text("Chats needing you will appear here.").font(.system(size: 11)).foregroundStyle(.secondary)
+            Image(systemName: presentation.chatScope == .today ? "clock" : "checkmark")
+                .font(.system(size: 20, weight: .light)).foregroundStyle(NotchStyle.accent)
+            Text(presentation.chatScope == .today ? "No chats today" :
+                (activity.warnings.isEmpty && activity.unverifiedSessions.isEmpty ? "All quiet" : "No confirmed activity"))
+                .font(.system(size: 13, weight: .medium))
+            Text(presentation.chatScope == .today ? "Chats active today will appear here." : "Chats needing you will appear here.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(12)
     }
     private var loading: some View {
@@ -340,7 +385,7 @@ private struct NotchIconButtonStyle: ButtonStyle {
 }
 enum NotchStyle {
     static let background = Color.black
-    static let accent = Color(red: 0.78, green: 0.87, blue: 0.66)
-    static let attention = Color(red: 0.96, green: 0.70, blue: 0.36)
-    static let claude = Color(red: 0.85, green: 0.64, blue: 0.47)
+    static let accent = AppAppearance.green
+    static let attention = AppAppearance.amber
+    static let claude = AppAppearance.claude
 }

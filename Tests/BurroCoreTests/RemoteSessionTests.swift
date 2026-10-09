@@ -4,6 +4,33 @@ import XCTest
 @testable import Burro
 
 final class RemoteSessionTests: XCTestCase {
+    @MainActor func testClosedRemoteHistoryIsBrowsableWithoutAddingToActiveQueue() throws {
+        let instant = Date()
+        let host = RemoteHost(name: "Other Mac", destination: "fixture")
+        let input = Data(String(decoding: payload(), as: UTF8.self)
+            .replacingOccurrences(of: "Working", with: "Inactive")
+            .replacingOccurrences(of: "Needs input", with: "Inactive")
+            .replacingOccurrences(of: "1800000000", with: String(instant.timeIntervalSince1970 - 1)).utf8)
+        let snapshot = try RemoteAgentMonitor.decode(input, host: host, receivedAt: instant)
+        XCTAssertEqual(snapshot.sessions.count, 2)
+        let suite = "burro-today-remote-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = AppStore(defaults: defaults)
+        store.remoteSnapshots[host.id] = snapshot
+        store.remoteHosts = [host]
+        XCTAssertTrue(store.agentActivity.sessions.isEmpty)
+        XCTAssertTrue(store.remoteSessions.isEmpty)
+        let feed = NotchFeed(sessions: store.notchChatSessions, includeIdle: false, scope: .today, now: instant)
+        XCTAssertEqual(feed.groups.count, 2)
+        XCTAssertEqual(feed.groups.first?.root?.remote?.hostName, "Other Mac")
+        store.selectAgent(try XCTUnwrap(feed.groups.first?.root))
+        XCTAssertEqual(store.selectedRemote?.id, feed.groups.first?.id)
+        store.remoteHosts[0].enabled = false
+        XCTAssertTrue(store.notchChatSessions.isEmpty)
+        XCTAssertNil(store.selectedRemote)
+    }
+
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private func payload(version: Int = 1) -> Data {
         Data("""

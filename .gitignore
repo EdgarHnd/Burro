@@ -1,5 +1,6 @@
 # Build products and local delivery
 .build/
+Rust/target/
 .swiftpm/
 dist/
 .backups/
@@ -7,7 +8,7 @@ dist/
 __pycache__/
 *.py[cod]
 
-# Locally generated system emoji artwork
+# Reproducible app icon exports; editable brand geometry and vector assets are tracked.
 Resources/AppIcon.icns
 Resources/AppIcon.iconset/
 

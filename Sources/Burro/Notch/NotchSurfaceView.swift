@@ -7,6 +7,9 @@ import BurroCore
 @MainActor final class NotchSurfaceView: NSView {
     let background = CAShapeLayer()
     private let surfaceMask = CAShapeLayer()
+    let glassBackdrop = NotchGlassView(frame: .zero)
+    private let glassMask = CAShapeLayer()
+    private let reduceTransparency: () -> Bool
     let attentionGlow = CAShapeLayer()
     private let glowContainer = CALayer()
     private let glowClip = CAShapeLayer()
@@ -24,13 +27,19 @@ import BurroCore
     private var expanded = false
     override var isFlipped: Bool { true }
 
-    init(compact: NotchView, expanded: NotchView) {
+    init(compact: NotchView, expanded: NotchView,
+         reduceTransparency: @escaping () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency }) {
+        self.reduceTransparency = reduceTransparency
         compactHost = NSHostingView(rootView: compact)
         expandedHost = NSHostingView(rootView: expanded)
         super.init(frame: .zero)
         wantsLayer = true
         background.fillColor = NSColor.black.cgColor
         layer?.addSublayer(background)
+        addSubview(glassBackdrop)
+        glassBackdrop.layer?.mask = glassMask
+        glassBackdrop.layer?.opacity = 0
+        glassBackdrop.isHidden = true
         // An inner rim leaves the window and hover footprint unchanged. The top edge stays black.
         layer?.addSublayer(glowContainer)
         glowContainer.mask = glowClip
@@ -61,6 +70,7 @@ import BurroCore
     required init?(coder: NSCoder) { nil }
 
     func setContentSizes(compact: CGSize, expanded: CGSize) {
+        guard compactSize != compact || expandedSize != expanded else { return }
         compactSize = compact; expandedSize = expanded
         needsLayout = true
     }
@@ -74,6 +84,8 @@ import BurroCore
                                         width: expandedSize.width, height: expandedSize.height)
             background.frame = bounds
             surfaceMask.frame = content.bounds
+            glassBackdrop.frame = bounds
+            glassMask.frame = bounds
             glowContainer.frame = bounds; glowClip.frame = bounds
             attentionGlow.frame = bounds
             let compactRect = CGRect(x: (bounds.width - compactSize.width) / 2, y: 0,
@@ -94,7 +106,7 @@ import BurroCore
         layoutSubtreeIfNeeded()
         compactHost.setAccessibilityHidden(expanded)
         expandedHost.setAccessibilityHidden(!expanded)
-        let layers: [CALayer] = [background, surfaceMask, compactHost.layer!, expandedHost.layer!]
+        let layers: [CALayer] = [background, surfaceMask, glassMask, glassBackdrop.layer!, compactHost.layer!, expandedHost.layer!]
         let end = motion.sample(at: now + motion.duration)
         guard animated else {
             withoutActions {
@@ -125,6 +137,7 @@ import BurroCore
             Task { @MainActor in
                 guard let self, self.generation == id else { return }
                 self.isAnimating = false
+                self.glassBackdrop.isHidden = !self.expanded || self.reduceTransparency()
                 self.updateAttentionGlow(animated: self.attentionAnimated)
                 completion()
             }
@@ -132,6 +145,9 @@ import BurroCore
         setModel(end)
         background.add(animation("path", values: paths), forKey: "notch.path")
         surfaceMask.add(animation("path", values: paths), forKey: "notch.path")
+        glassMask.add(animation("path", values: paths), forKey: "notch.path")
+        glassBackdrop.layer?.add(animation("opacity", values: samples.map { glassOpacity($0.expansion) }), forKey: "notch.glass")
+        background.add(animation("opacity", values: samples.map { 1 - glassOpacity($0.expansion) }), forKey: "notch.glass")
         compactHost.layer?.add(animation("opacity", values: samples.map { compactOpacity($0.expansion) }), forKey: "notch.fade")
         expandedHost.layer?.add(animation("opacity", values: samples.map { expandedOpacity($0.expansion) }), forKey: "notch.fade")
         expandedHost.layer?.add(animation("transform.translation.y", values: samples.map { -6 * (1 - $0.expansion) }), forKey: "notch.lift")
@@ -167,7 +183,17 @@ import BurroCore
     }
     func cancel() {
         generation = UUID(); isAnimating = false
-        withoutActions { [background, surfaceMask, attentionGlow, compactHost.layer, expandedHost.layer].forEach { $0?.removeAllAnimations() } }
+        withoutActions { [background, surfaceMask, glassMask, glassBackdrop.layer, attentionGlow, compactHost.layer, expandedHost.layer].forEach { $0?.removeAllAnimations() } }
+    }
+    func updateGlassAccessibility() {
+        withoutActions {
+            glassBackdrop.layer?.removeAnimation(forKey: "notch.glass")
+            background.removeAnimation(forKey: "notch.glass")
+            let opacity = glassOpacity(expanded ? 1 : 0)
+            glassBackdrop.layer?.opacity = Float(opacity)
+            background.opacity = Float(1 - opacity)
+            glassBackdrop.isHidden = opacity == 0
+        }
     }
     override func hitTest(_ point: NSPoint) -> NSView? {
         // Layer opacity does not control NSView hit testing. Route only to the intended content.
@@ -177,12 +203,17 @@ import BurroCore
     }
     private func setModel(_ sample: NotchMotion.Sample) {
         let path = outline(sample)
-        background.path = path; surfaceMask.path = path
+        background.path = path; surfaceMask.path = path; glassMask.path = path
+        let glass = glassOpacity(sample.expansion)
+        glassBackdrop.layer?.opacity = Float(glass)
+        background.opacity = Float(1 - glass)
+        glassBackdrop.isHidden = reduceTransparency() || (!expanded && !isAnimating)
         compactHost.layer?.opacity = Float(compactOpacity(sample.expansion))
         expandedHost.layer?.opacity = Float(expandedOpacity(sample.expansion))
         expandedHost.layer?.transform = CATransform3DMakeTranslation(0, -6 * (1 - sample.expansion), 0)
     }
     private func compactOpacity(_ progress: Double) -> Double { max(0, 1 - progress * 3) }
+    private func glassOpacity(_ progress: Double) -> Double { reduceTransparency() ? 0 : expandedOpacity(progress) }
     private func expandedOpacity(_ progress: Double) -> Double { max(0, (progress - 0.12) / 0.88) }
     private func outline(_ sample: NotchMotion.Sample) -> CGPath {
         outline(size: sample.size, expansion: sample.expansion)

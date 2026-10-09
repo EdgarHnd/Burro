@@ -46,6 +46,7 @@ struct ContentView: View {
             if filter != .usage { store.reconcileSelection(selectFirst: true) }
         }
         .onChange(of: store.search) { _, _ in store.reconcileSelection() }
+        .modifier(AppTheme())
     }
     private var sidebar: some View {
         SidebarView(store: store).navigationSplitViewColumnWidth(min: 180, ideal: Layout.sidebar, max: 260)
@@ -57,12 +58,12 @@ struct ContentView: View {
             Group {
                 if store.filter == .remote { RemoteSessionsView(store: store) }
                 else { WorktreeListView(store: store) }
-            }.navigationSplitViewColumnWidth(min: 440, ideal: 650)
+            }.background(AppAppearance.background).navigationSplitViewColumnWidth(min: 440, ideal: 650)
         } detail: {
             if store.filter == .remote { RemoteSessionDetailView(store: store) }
             else if store.selectedWorktrees.count > 1 { WorktreeSelectionView(store: store) }
             else if let tree = store.selected { WorktreeDetailView(store: store, tree: tree) }
-            else { ContentUnavailableView("Select a worktree", systemImage: "arrow.triangle.branch", description: Text("Agent activity and cleanup checks appear here.")) }
+            else { AppEmptyState("Select a worktree", symbol: "arrow.triangle.branch", detail: "Agent activity and cleanup checks appear here.") }
         }
     }
 }

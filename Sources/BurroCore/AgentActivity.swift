@@ -16,6 +16,7 @@ public struct AgentActivitySnapshot: Sendable {
         var seen: Set<String> = []
         return sessions.filter { seen.insert($0.id).inserted }
     }
+    public var unverifiedSessions: [AgentSession] { uniqueSessions.filter { $0.state == .unknown }.sorted { $0.id < $1.id } }
     public var attention: AgentAttention { waitingCount > 0 ? .waiting : (doneCount > 0 ? .done : .none) }
     public var attentionCount: Int { waitingCount + doneCount }
     public var workingCount: Int { uniqueSessions.filter { $0.state == .working }.count }
@@ -49,6 +50,9 @@ public struct AgentActivitySnapshot: Sendable {
 public struct AgentMonitor: Sendable {
     public init() {}
     public func sample(home: String = FileManager.default.homeDirectoryForCurrentUser.path) -> AgentActivitySnapshot {
+        autoreleasepool { sampleScoped(home: home) }
+    }
+    private func sampleScoped(home: String) -> AgentActivitySnapshot {
         let now = Date(), processes = ProcessReader.snapshot()
         let readState = ProviderReadState.read(home: home)
         let inventory = AgentReader().read(home: home, processes: processes, now: now, readState: readState)

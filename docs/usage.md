@@ -1,6 +1,6 @@
 # Burro
 
-A small native macOS monitor for Git worktrees and Codex / Claude Code agents, with a live agent panel at the camera notch. Built with SwiftUI, Swift 6, and system libraries. Requires macOS 14 or newer. Monitoring needs no additional accounts or hooks; optional usage limits use your existing provider sign-ins. Local monitoring stays on this Mac; remote monitoring uses SSH only for machines you explicitly add.
+A small native macOS monitor for Git worktrees and Codex / Claude Code agents, with a live agent panel at the camera notch. Built with SwiftUI, Swift 6, a bundled Rust log worker, and system libraries. Requires macOS 14 or newer. Monitoring needs no additional accounts or hooks; optional usage limits use your existing provider sign-ins. Local monitoring stays on this Mac; remote monitoring uses SSH only for machines you explicitly add.
 
 ## Run
 
@@ -8,16 +8,19 @@ A small native macOS monitor for Git worktrees and Codex / Claude Code agents, w
 ./script/build_and_run.sh
 ```
 
-The script builds and ad-hoc signs `dist/Burro.app`. You can launch that bundle directly or copy it to Applications. Other modes: `--build-only`, `--verify`, `--debug`, `--logs`, `--telemetry`.
+Source builds require Swift 6 and Rust through rustup; the repository pins the Rust toolchain. The script builds `dist/Burro.app` and its Rust helper, preserving the existing signing identity (ad-hoc on fresh setups without a certificate). You can launch that bundle directly or copy it to Applications. Other modes: `--build-only`, `--verify`, `--debug`, `--logs`, `--telemetry`.
 
 ```sh
-swift test
+./script/build_rust_worker.sh
+BURRO_REQUIRE_RUST_WORKER=1 swift test
 swift run burro-inspect --agents            # fast agent status, including unread results
 swift run burro-inspect                     # JSON snapshot, automatic discovery
 swift run burro-inspect /path/to/repository # limit to specified repositories
 ```
 
 ## Agent notch
+
+Local Codex log inspection and Claude delegated-worker discovery/lifecycle parsing run in a private Rust child process, which reuses parsed lifecycle summaries while a file is unchanged. The app still checks live writer locks and event age on each poll. If that child fails, the existing Swift reader takes over and a later poll can restart it. Unverified chats remain protected and appear in Monitoring details, with a count in the notch footer. The active queue omits these rows by default; “Include idle and unverified chats” can show them alongside active chats. There is no separate service to install or configure; the worker exits with Burro.
 
 - The notch is enabled by default. **Hover** over the black strip at the top of the screen to expand it; **click** to open or close; use the **pin button** to keep it open. Move away to collapse an unpinned panel, or use its chevron to collapse explicitly.
 - **Agents / Usage** tabs stay visible in the expanded notch. Click a tab to keep it selected, including after closing and reopening the panel during this app session. Hover the other tab for 160 ms to preview it without changing your selection; move away to return. A Preview label and outlined tab distinguish temporary content. Quick crossings do not switch views; clicking during a preview commits it. Collapse/Escape clears any preview, while pinning keeps its existing meaning.

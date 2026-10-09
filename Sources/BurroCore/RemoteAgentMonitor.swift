@@ -33,7 +33,7 @@ public struct RemoteAgentMonitor: Sendable {
         let response = try decoder.decode(Response.self, from: data)
         guard response.version == 1, response.sessions.count <= 2000 else { throw CocoaError(.coderReadCorrupt) }
         var seen = Set<String>()
-        let sessions = response.sessions.filter { ($0.state != .inactive || $0.turnCompleted == true) && seen.insert($0.id).inserted }.map { source in
+        let sessions = response.sessions.filter { seen.insert($0.id).inserted }.map { source in
             var value = source
             value.id = "remote:\(host.id.uuidString):\(source.id)"
             value.parentSessionID = source.parentSessionID.map { "remote:\(host.id.uuidString):\($0)" }

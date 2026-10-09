@@ -32,11 +32,20 @@ public struct LocalUsageCost: Sendable {
     public var apiValue: Double { days.reduce(0) { $0 + $1.apiValue } }
 }
 public enum LocalUsageScanner {
-    public static func scan(provider: UsageProvider, profile: String? = nil, now: Date = Date()) -> LocalUsageCost {
+    public static func scan(provider: UsageProvider, profile: String? = nil, now: Date = Date(), useRust: Bool = true) -> LocalUsageCost {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let folder = profile.map { URL(fileURLWithPath: $0) } ?? home.appendingPathComponent("." + provider.rawValue)
         let roots = provider == .claude ? [folder.appendingPathComponent("projects")] :
             (provider == .codex ? [folder.appendingPathComponent("sessions"), folder.appendingPathComponent("archived_sessions")] : [folder.appendingPathComponent("sessions")])
+        return scan(provider: provider, roots: roots, now: now, worker: useRust ? .usage : nil)
+    }
+    static func scan(provider: UsageProvider, roots: [URL], now: Date, worker: AgentLogWorker?) -> LocalUsageCost {
+        if let batch = worker?.exchange([], usage: UsageLogRequest(provider: provider, roots: roots, now: now))?.usage {
+            return batch.result(now: now)
+        }
+        return autoreleasepool { swiftScan(provider: provider, roots: roots, now: now) }
+    }
+    static func swiftScan(provider: UsageProvider, roots: [URL], now: Date) -> LocalUsageCost {
         let since = now.addingTimeInterval(-30 * 86400)
         let deadline = ProcessInfo.processInfo.systemUptime + 20
         var bytes = 0, visited = 0, partial = false
