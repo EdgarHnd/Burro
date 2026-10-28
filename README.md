@@ -14,6 +14,7 @@ Early-stage software. Provider metadata formats are private and may change; Burr
 
 - **Agent notch:** hover to expand, pin when needed, and see needs-input, unread Done, and running chats in that order. Background workers stay grouped under their parent when the relationship is known.
 - **Usage dashboard:** compact notch quotas and full desktop controls for Codex, Claude, and Grok. See account/plan labels, model limits (including Fable), resets, pace, history, and local token/cost estimates. Connect directly using coding-app sign-ins; no CodexBar dependency.
+- **Mac Health:** CPU, memory pressure, swap, and disk in the notch and a desktop page, plus processes and simulators left running after their work ended (stuck scripts, idle dev servers, orphaned watchers). Stopping one always asks first.
 - **Open the conversation:** click a chat to open it in Codex or Claude when the provider exposes a usable link.
 - **One view across machines:** add another laptop or server through your existing SSH connection. Disconnected machines show their last-seen state.
 - **Worktree inventory:** find registered, detached, inactive, locked, and missing worktrees; inspect branches, changes, processes, and agent activity.

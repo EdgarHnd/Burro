@@ -71,6 +71,7 @@ import BurroCore
     var providerUsage: ProviderUsageSnapshot { usage.snapshot }
     var checkingUsage: Bool { usage.checking }
     var usageEnabled: Bool { get { usage.enabled } set { usage.enabled = newValue } }
+    let health: MacHealthStore
     var remoteHosts: [RemoteHost] { didSet { save(); rebuildAgentActivity() } }
     var remoteSnapshots: [UUID: RemoteHostSnapshot] = [:]
     var checkingRemotes = false
@@ -104,6 +105,7 @@ import BurroCore
         self.scan = scan
         self.cleanupBatch = cleanupBatch ?? CleanupBatchStore()
         usage = UsageStore(defaults: defaults)
+        health = MacHealthStore(defaults: defaults)
         remoteHosts = defaults.data(forKey: "remoteHosts").flatMap { try? JSONDecoder().decode([RemoteHost].self, from: $0) } ?? []
         PreferencesMigration.migrate(into: defaults, legacy: defaults.persistentDomain(forName: "local.grove.worktrees") ?? [:])
         notchEnabled = defaults.object(forKey: "notchEnabled") as? Bool ?? true

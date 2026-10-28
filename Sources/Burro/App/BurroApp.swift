@@ -71,6 +71,7 @@ struct MonitorMenu: View {
         Button("Show Agent Notch") { notch.show() }
         Toggle("Enable Notch", isOn: $store.notchEnabled)
         Button("Open Usage") { store.filter = .usage; notch.openDashboardWindow() }
+        Button("Open Mac Health") { store.filter = .health; notch.openDashboardWindow() }
         Button("Open Burro") { notch.openDashboardWindow() }
         Button("Refresh") { Task { await store.refreshAgents(); await store.refreshRemotes(); await store.refresh() } }.disabled(store.scanning)
         SettingsLink()

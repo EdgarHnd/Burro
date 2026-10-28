@@ -27,6 +27,16 @@ struct SidebarView: View {
                 Section("Accounts") {
                     Label("Usage", systemImage: WorktreeFilter.usage.icon).tag(WorktreeFilter.usage)
                 }
+                Section("This Mac") {
+                    HStack {
+                        Label(WorktreeFilter.health.title, systemImage: WorktreeFilter.health.icon)
+                        Spacer()
+                        if !store.health.report.leftovers.isEmpty {
+                            Text("\(store.health.report.leftovers.count)").font(.caption.monospacedDigit()).foregroundStyle(AppAppearance.amber)
+                                .help("Processes or simulators left running")
+                        }
+                    }.tag(WorktreeFilter.health)
+                }
                 Section("Repositories") {
                     ForEach(store.repositoriesFound, id: \.path) { repository in
                         Label(repository.name, systemImage: "folder").lineLimit(1)

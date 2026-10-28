@@ -2,9 +2,13 @@
 import Foundation
 
 public enum NotchPage: String, CaseIterable, Sendable {
-    case agents, usage
-    public var title: String { self == .agents ? "Agents" : "Usage" }
-    public var symbol: String { self == .agents ? "waveform.path" : "gauge.with.dots.needle.33percent" }
+    case agents, usage, mac
+    public var title: String {
+        switch self { case .agents: "Agents"; case .usage: "Usage"; case .mac: "Mac" }
+    }
+    public var symbol: String {
+        switch self { case .agents: "waveform.path"; case .usage: "gauge.with.dots.needle.33percent"; case .mac: "cpu" }
+    }
 }
 
 public struct NotchNavigation: Equatable, Sendable {

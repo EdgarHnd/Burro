@@ -24,6 +24,7 @@ struct NotchView: View {
         NotchWorkspace.grouped(list.groups) { workspacePaths[$0.id] ?? store.workspacePath(for: $0) }
     }
     private var showingUsage: Bool { presentation.navigation.visible == .usage }
+    private var showingMac: Bool { presentation.navigation.visible == .mac }
     private var activity: AgentActivitySnapshot { store.agentActivity }
     private var chatSessions: [AgentSession] { presentation.chatScope == .today ? store.notchChatSessions : activity.sessions }
     private var rowCount: Int {
@@ -86,7 +87,7 @@ struct NotchView: View {
     }
     private func updateGeometry() {
         guard !compact else { return }
-        let rows = showingHealth || showingUsage || presentation.navigation.isPreviewing ? 5 : min(5, rowCount)
+        let rows = showingHealth || showingUsage || showingMac || presentation.navigation.isPreviewing ? 5 : min(5, rowCount)
         if presentation.visibleRows != rows { presentation.visibleRows = rows }
         onContentChange()
     }
@@ -134,6 +135,10 @@ struct NotchView: View {
                 if presentation.navigation.isPreviewing {
                     Label("Preview", systemImage: "eye").foregroundStyle(.secondary)
                         .help("Move away to return; click the tab to keep this view")
+                } else if showingMac {
+                    if !store.health.report.leftovers.isEmpty {
+                        count(store.health.report.leftovers.count, "left running", NotchStyle.attention)
+                    }
                 } else if !showingUsage && !showingHealth && presentation.chatScope == .today {
                     count(list.groups.count, "today", AppAppearance.text)
                 } else if !showingUsage {
@@ -158,6 +163,7 @@ struct NotchView: View {
                     }
                     Button("Refresh status") { Task { await store.refreshAgents(); await store.refreshRemotes() } }
                     Button("Usage limits") { onSelectPage(.usage); showingHealth = false; Task { await store.refreshUsage() } }
+                    Button("Mac health") { onSelectPage(.mac); showingHealth = false }
                     Button("Monitoring details") { onSelectPage(.agents); showingHealth = true }
                 } label: { Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold)) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
@@ -167,6 +173,9 @@ struct NotchView: View {
             if showingUsage {
                 NotchUsageView(snapshot: store.providerUsage, enabled: store.usageEnabled,
                     onEnable: { store.usageEnabled = true }, onConnectClaude: store.connectClaudeUsage, checking: store.checkingUsage)
+            }
+            else if showingMac {
+                NotchMacView(health: store.health, active: presentation.expanded) { store.filter = .health; onOpenDashboard() }
             }
             else if showingHealth && !presentation.navigation.isPreviewing { NotchHealthView(store: store) }
             else if !store.didCheckAgents { loading }
@@ -302,6 +311,8 @@ struct NotchView: View {
         HStack(spacing: 10) {
             if showingUsage {
                 Text("Remaining · all machines").foregroundStyle(.secondary)
+            } else if showingMac {
+                Text("This Mac · live").foregroundStyle(.secondary)
             } else if showingHealth {
                 Button { showingHealth = false; onSelectPage(.agents) } label: { Label("Agents", systemImage: "chevron.left") }
             } else if presentation.chatScope == .today {
@@ -331,15 +342,20 @@ struct NotchView: View {
                 Button(store.checkingUsage ? "Refreshing…" : "Refresh") { Task { await store.refreshUsage(force: true) } }
                     .disabled(store.checkingUsage).help("Fetch current limits from your connected accounts")
             }
-            if list.pendingChanges > 0 && !showingHealth && !showingUsage {
+            if list.pendingChanges > 0 && !showingHealth && !showingUsage && !showingMac {
                 Button("Update list") { reconcile(force: true) }.foregroundStyle(NotchStyle.accent)
                     .help("Apply pending list changes; rows stay still while you interact")
             }
-            Button { if showingUsage { store.filter = .usage }; onOpenDashboard() } label: { Image(systemName: "arrow.up.right") }
-                .help(showingUsage ? "Open usage dashboard in Burro" : "Open worktrees in Burro")
-                .accessibilityLabel(showingUsage ? "Open usage dashboard in Burro" : "Open worktrees in Burro")
+            Button {
+                if showingUsage { store.filter = .usage } else if showingMac { store.filter = .health }
+                onOpenDashboard()
+            } label: { Image(systemName: "arrow.up.right") }
+                .help(dashboardLabel).accessibilityLabel(dashboardLabel)
         }.buttonStyle(.plain).font(.system(size: 10, weight: .medium))
             .padding(.horizontal, 22).frame(height: 37).background(.white.opacity(0.035))
+    }
+    private var dashboardLabel: String {
+        showingUsage ? "Open usage dashboard in Burro" : (showingMac ? "Open Mac Health in Burro" : "Open worktrees in Burro")
     }
     private func count(_ number: Int, _ title: String, _ color: Color) -> some View {
         HStack(spacing: 3) { Text("\(number)").foregroundStyle(color).monospacedDigit(); Text(title).foregroundStyle(.secondary) }

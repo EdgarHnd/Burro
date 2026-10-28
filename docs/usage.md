@@ -73,6 +73,21 @@ Claude's `epitaxy-unread-v1` preference is read from its Chromium Local Storage,
 
 Remote SQLite reads can use a stable, journal-free checkpoint when read-only WAL access is unavailable; a changed checkpoint or live journal cancels that fallback. Remote hosts return completion metadata; this Mac applies its own unread list using Codex thread UUIDs and Claude bridge IDs. Local unread IDs are never sent over SSH. Remote Codex completion history shares the existing 2,000-row/inspection-time limits; unread results beyond that coverage may be missing. Another laptop's `local_` Claude ID is never treated as a local read marker. Offline results become Last seen, not Done.
 
+## Mac Health
+
+**Mac Health** (sidebar, menu bar, or the notch **Mac** tab) shows CPU use and load, memory used and pressure, swap, startup-disk space, thermal state, and your busiest processes. It samples every three seconds only while one of those views is open.
+
+**Left running** lists things that usually outlived the work that started them:
+
+- **Still busy:** a process outside any app still using at least 25% of a core after an hour of CPU time.
+- **Long-running watcher:** a test runner, bundler, or `tail -f` running for over two hours. Jest/Vitest workers count toward their runner.
+- **Idle server:** a process listening on a port with no open connections for over 12 hours.
+- **Agent script:** a script started from a coding agent's temporary folder over six hours ago.
+- **Orphaned:** a process outside any app whose parent exited at least an hour ago.
+- **Headless simulator:** a booted iOS simulator with no Simulator window open for over 30 minutes.
+
+Apps, macOS services, common background tools (watchman, syncthing, ssh-agent and similar), open Claude/Codex sessions, and helpers an app or agent started directly are never listed. **Stop…** asks first, then sends a normal quit request only if the process still has the same start time and executable; if it ignores that, the action becomes **Force Quit…**. **Shut Down…** runs `xcrun simctl shutdown` for that simulator. **Ignore** hides that tool in that folder until you choose **Show ignored**. The notch tab only shows a summary; actions stay in the desktop page.
+
 ## Use
 
 - Burro automatically discovers repositories from Codex projects, Claude sessions, `~/Dev` (two directory levels), and `~/.codex/worktrees` (three levels). **Add repository** covers other locations. Git's registered worktree list includes inactive, detached, locked, and missing worktrees.

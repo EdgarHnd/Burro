@@ -1,4 +1,4 @@
-// Source-list navigation gives worktree evidence and account usage their own desktop layouts.
+// Source-list navigation gives worktree evidence, account usage and Mac health their own desktop layouts.
 import SwiftUI
 import BurroCore
 
@@ -13,18 +13,24 @@ struct ContentView: View {
                 } detail: {
                     UsageDashboardView(usage: store.usage)
                 }
+            } else if store.filter == .health {
+                NavigationSplitView {
+                    sidebar
+                } detail: {
+                    MacHealthView(health: store.health)
+                }
             } else {
                 workspace
                     .searchable(text: $store.search, placement: .toolbar, prompt: "Branch, repository, or agent")
             }
         }
         .navigationTitle("Burro")
-        .navigationSubtitle(store.filter == .usage ? "Accounts & usage" : "Worktrees & agents")
+        .navigationSubtitle(store.filter == .usage ? "Accounts & usage" : (store.filter == .health ? "This Mac" : "Worktrees & agents"))
         .toolbar {
             ToolbarItemGroup {
                 Button { notch.show() } label: { Label("Agent notch", systemImage: "rectangle.topthird.inset.filled") }
                     .help("Show agent notch (⇧⌘B)")
-                if store.filter != .usage {
+                if store.filter.isWorkspace {
                     if store.scanning { ProgressView().controlSize(.small).accessibilityLabel("Refreshing worktrees") }
                     Button { Task { await store.refreshRemotes(); await store.refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                         .help("Refresh worktrees (⌘R)").disabled(store.scanning)
@@ -43,7 +49,7 @@ struct ContentView: View {
         }
         .frame(minWidth: 1000, minHeight: 590)
         .onChange(of: store.filter) { _, filter in
-            if filter != .usage { store.reconcileSelection(selectFirst: true) }
+            if filter.isWorkspace { store.reconcileSelection(selectFirst: true) }
         }
         .onChange(of: store.search) { _, _ in store.reconcileSelection() }
         .modifier(AppTheme())

@@ -3,7 +3,9 @@ import SwiftUI
 import BurroCore
 
 enum WorktreeFilter: Hashable {
-    case all, working, inUse, inactive, candidates, cleanup, protected, remote, usage, repository(String)
+    case all, working, inUse, inactive, candidates, cleanup, protected, remote, usage, health, repository(String)
+    /// Usage and Mac Health have their own full-width pages outside the worktree list.
+    var isWorkspace: Bool { self != .usage && self != .health }
     var title: String {
         switch self {
         case .all: "All worktrees"
@@ -15,6 +17,7 @@ enum WorktreeFilter: Hashable {
         case .protected: "Protected"
         case .remote: "Remote sessions"
         case .usage: "Usage"
+        case .health: "Mac Health"
         case .repository: "Repository"
         }
     }
@@ -29,6 +32,7 @@ enum WorktreeFilter: Hashable {
         case .protected: "lock"
         case .remote: "network"
         case .usage: "gauge.with.dots.needle.33percent"
+        case .health: NotchPage.mac.symbol
         }
     }
     func matches(_ tree: Worktree) -> Bool {
@@ -40,7 +44,7 @@ enum WorktreeFilter: Hashable {
         case .candidates: false // Resolved by AppStore with current cleanup evidence.
         case .cleanup: !tree.isInUse && !tree.isPrimary
         case .protected: tree.protectedByUser || tree.isPrimary || tree.isLocked || tree.agents.contains { $0.pinned }
-        case .remote, .usage: false
+        case .remote, .usage, .health: false
         case .repository(let path): tree.repositoryPath == path
         }
     }
