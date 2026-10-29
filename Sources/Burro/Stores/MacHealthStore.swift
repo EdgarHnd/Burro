@@ -1,13 +1,18 @@
-// Samples Mac resources and leftovers only while a Mac view is visible; stopping anything needs explicit confirmation.
+// Samples Mac resources and leftovers only while a Mac view is on screen; stopping anything needs explicit confirmation.
 import AppKit
 import Foundation
 import Observation
 import BurroCore
 
 @MainActor @Observable final class MacHealthStore {
+    /// Cheap kernel counters; the process scan and purgeable-space query run on their own slower clocks.
+    static let interval: Duration = .seconds(5)
+    static let scanInterval: TimeInterval = 15
+    static let storageInterval: TimeInterval = 60
     var snapshot: MacHealthSnapshot?
     var report = LeftoverReport.empty
-    var sampling = false
+    /// True only for an explicit refresh, so routine samples do not redraw the header.
+    var refreshing = false
     var message: String?
     var pending: Leftover?
     var acting: Set<String> = []
@@ -16,6 +21,9 @@ import BurroCore
     var ignored: Set<String> { didSet { defaults.set(Array(ignored).sorted(), forKey: "macHealthIgnored") } }
     @ObservationIgnored private var ticks: CPUTicks?
     @ObservationIgnored private var inventory: ProcessInventory?
+    @ObservationIgnored private var scans = 0
+    @ObservationIgnored private var storageRead: Date?
+    @ObservationIgnored private var sampling = false
     @ObservationIgnored private var observers = 0
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private let defaults: UserDefaults
@@ -27,37 +35,47 @@ import BurroCore
     }
     var level: HealthLevel { max(snapshot?.level ?? .normal, report.leftovers.isEmpty ? .normal : .elevated) }
 
-    /// Keeps sampling while at least one caller's task is alive; cancelling the task (view disappears) releases it.
+    /// Keeps sampling while at least one on-screen view's task is alive; cancelling the task (view hidden, covered or closed) releases it.
     func observe() async {
         observers += 1
         if loop == nil {
             loop = Task { [weak self] in
-                while !Task.isCancelled {
-                    await self?.refresh()
-                    try? await Task.sleep(for: .seconds(3))
+                while !Task.isCancelled, let self {
+                    await self.refresh()
+                    try? await Task.sleep(for: Self.interval)
                 }
             }
         }
         while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
         observers -= 1
-        if observers == 0 { loop?.cancel(); loop = nil; inventory = nil; ticks = nil }
+        if observers == 0 { loop?.cancel(); loop = nil; inventory = nil; ticks = nil; scans = 0 }
     }
-    func refresh() async {
+    func refresh(force: Bool = false) async {
         guard !sampling else { return }
-        sampling = true
+        sampling = true; refreshing = force
+        let now = Date()
+        // The second scan follows quickly so per-process CPU can be compared; later scans are spaced out.
+        let scan = force || inventory.map { now.timeIntervalSince($0.sampledAt) >= (scans < 2 ? 3 : Self.scanInterval) } ?? true
+        let readStorage = force || storageRead.map { now.timeIntervalSince($0) >= Self.storageInterval } ?? true
         let previousTicks = ticks, previousInventory = inventory, ignored = ignored, home = home
         let result = await Task.detached(priority: .utility) {
-            let (snapshot, ticks) = MacHealthSampler.sample(previous: previousTicks)
+            let (snapshot, ticks) = MacHealthSampler.sample(previous: previousTicks, storage: readStorage)
+            guard scan else { return (snapshot, ticks, nil as (ProcessInventory, LeftoverReport)?) }
             let inventory = ProcessInventory.read()
             let report = LeftoverPolicy.report(inventory, cpu: inventory.cpuPercent(since: previousInventory), home: home,
                 ignored: ignored, deviceName: { LeftoverPolicy.simulatorName(udid: $0, home: home) })
-            return (snapshot, ticks, inventory, report)
+            return (snapshot, ticks, (inventory, report))
         }.value
-        snapshot = result.0; ticks = result.1; inventory = result.2
-        // The first pass has no CPU deltas; keep the previous list until busy processes can be judged.
-        if previousInventory != nil || report.leftovers.isEmpty { report = result.3 }
+        var sample = result.0
+        if readStorage { storageRead = now } else { sample.storage = snapshot?.storage }
+        snapshot = sample; ticks = result.1
+        if let (inventory, report) = result.2 {
+            self.inventory = inventory; scans += 1
+            // The first pass has no CPU deltas; keep the previous list until busy processes can be judged.
+            if (previousInventory != nil || self.report.leftovers.isEmpty) && self.report != report { self.report = report }
+        }
         stubborn.formIntersection(Set(report.leftovers.map(\.id)))
-        sampling = false
+        sampling = false; refreshing = false
     }
     func review(_ leftover: Leftover) { pending = leftover }
     func confirm(_ leftover: Leftover) {
@@ -96,14 +114,14 @@ import BurroCore
             case .failed(let reason):
                 message = "Couldn't stop \(leftover.name): \(reason)"
             }
-            await refresh()
+            await refresh(force: true)
         }
     }
     func ignore(_ leftover: Leftover) {
         ignored.insert(leftover.signature)
         report.leftovers.removeAll { $0.signature == leftover.signature }
     }
-    func resetIgnored() { ignored = []; Task { await refresh() } }
+    func resetIgnored() { ignored = []; Task { await refresh(force: true) } }
     func reveal(_ leftover: Leftover) {
         let path = leftover.folder.hasPrefix("~") ? home + leftover.folder.dropFirst() : leftover.folder
         guard path.hasPrefix("/") else { return }

@@ -49,14 +49,21 @@ public struct ProcessInventory: Sendable, Equatable {
             let cwd = withUnsafePointer(to: &info.cwd) { String(cString: UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self)) }
             var usage = BurroTaskUsage()
             let measured = burro_process_usage(pid, &usage) == 1
-            var length: Int32 = 0
-            let argc = argumentBuffer.withUnsafeMutableBufferPointer { burro_process_arguments(pid, $0.baseAddress, Int32($0.count), &length) }
-            let arguments = argc > 0 ? argumentBuffer.prefix(Int(length)).split(separator: 0, omittingEmptySubsequences: false)
-                .prefix(Int(argc)).map { String(decoding: $0.map { UInt8(bitPattern: $0) }, as: UTF8.self) } : []
+            // Apps and macOS services are never classified by arguments; launchd_sim's name its simulator.
+            let app = LeftoverPolicy.isApp(executable), system = LeftoverPolicy.isSystem(executable)
+            var arguments: [String] = []
+            if !app && (!system || LeftoverPolicy.baseName(executable) == "launchd_sim") {
+                var length: Int32 = 0
+                let argc = argumentBuffer.withUnsafeMutableBufferPointer { burro_process_arguments(pid, $0.baseAddress, Int32($0.count), &length) }
+                if argc > 0 {
+                    arguments = argumentBuffer.prefix(Int(length)).split(separator: 0, omittingEmptySubsequences: false)
+                        .prefix(Int(argc)).map { String(decoding: $0.map { UInt8(bitPattern: $0) }, as: UTF8.self) }
+                }
+            }
             var sample = ProcessSample(pid: Int(pid), parentPID: Int(info.ppid), started: Date(timeIntervalSince1970: Double(info.started)),
                 executable: executable, arguments: arguments, cwd: cwd,
                 cpuTime: measured ? Double(usage.cpu_ns) / 1_000_000_000 : nil, resident: measured ? usage.resident : nil)
-            if !LeftoverPolicy.isApp(executable) && !LeftoverPolicy.isSystem(executable) {
+            if !app && !system {
                 let sockets = socketBuffer.withUnsafeMutableBufferPointer { burro_process_sockets(pid, $0.baseAddress, Int32($0.count)) }
                 if sockets > 0 {
                     let open = socketBuffer.prefix(Int(sockets))
@@ -185,7 +192,7 @@ public enum LeftoverPolicy {
         // Helpers an open app or agent spawned directly (extension backends, MCP servers) belong to it.
         func ownedByOpenParent(_ process: ProcessSample) -> Bool {
             guard let parent = byPID[process.parentPID] else { return false }
-            return isApp(parent.executable) || agents.contains(label(executable: parent.executable, arguments: []))
+            return isApp(parent.executable) || isAgentCLI(parent.executable)
         }
         var leftovers: [Leftover] = []
         // One launchd_sim runs per booted simulator; everything inside it belongs to that device.
@@ -210,10 +217,8 @@ public enum LeftoverPolicy {
         var flagged: [Int: Leftover] = [:]
         for process in processes where !simulated.contains(process.pid) && !process.executable.isEmpty {
             guard !isApp(process.executable), !isSystem(process.executable), !process.executable.contains("/CoreSimulator/") else { continue }
-            let name = label(executable: process.executable, arguments: process.arguments)
-            let base = name.components(separatedBy: " · ")[0]
             // Open agent CLIs are in use, not disposable; they are summarized separately.
-            guard !services.contains(base), !agents.contains(base) else { continue }
+            guard !services.contains(baseName(process.executable)), !isAgentCLI(process.executable) else { continue }
             let age = now.timeIntervalSince(process.started), percent = cpu[process.id]
             let kind: LeftoverKind, reason: String
             if let used = process.cpuTime, used >= 3600, let percent, percent >= 25 {
@@ -229,6 +234,7 @@ public enum LeftoverPolicy {
             } else if process.parentPID == 1, age >= 3600 {
                 kind = .orphan; reason = "The program that started it has exited, so nothing is waiting for it. Up \(duration(age))."
             } else { continue }
+            let name = label(executable: process.executable, arguments: process.arguments)
             let folder = abbreviate(process.cwd, home: home)
             let signature = "\(kind.rawValue)|\(name)|\(folder)"
             guard !ignored.contains(signature) else { continue }
@@ -258,15 +264,21 @@ public enum LeftoverPolicy {
             return (a.resident ?? 0) > (b.resident ?? 0)
         }
 
-        let agentProcesses = processes.filter { agents.contains(label(executable: $0.executable, arguments: []).components(separatedBy: " · ")[0]) }
+        let agentProcesses = processes.filter { isAgentCLI($0.executable) }
+        // Name only the rows that are shown.
         let busiest = processes.filter { !simulated.contains($0.pid) }
-            .map { ProcessLine(id: $0.id, name: label(executable: $0.executable, arguments: $0.arguments), cpuPercent: cpu[$0.id], resident: $0.resident) }
             .sorted { a, b in
-                if (a.cpuPercent ?? -1) != (b.cpuPercent ?? -1) { return (a.cpuPercent ?? -1) > (b.cpuPercent ?? -1) }
+                let left = cpu[a.id] ?? -1, right = cpu[b.id] ?? -1
+                if left != right { return left > right }
                 return (a.resident ?? 0) > (b.resident ?? 0)
             }
-        return LeftoverReport(leftovers: leftovers, busiest: Array(busiest.prefix(6)), agentProcesses: agentProcesses.count,
+            .prefix(6)
+            .map { ProcessLine(id: $0.id, name: label(executable: $0.executable, arguments: $0.arguments), cpuPercent: cpu[$0.id], resident: $0.resident) }
+        return LeftoverReport(leftovers: leftovers, busiest: Array(busiest), agentProcesses: agentProcesses.count,
             agentMemory: agentProcesses.compactMap(\.resident).reduce(0, +), complete: inventory.complete)
+    }
+    static func isAgentCLI(_ executable: String) -> Bool {
+        executable.contains("/claude/versions/") || executable.hasSuffix("/claude.app/Contents/MacOS/claude") || agents.contains(baseName(executable))
     }
 
     /// A short display name built from the executable and, for interpreters, the script's file name only.
@@ -286,7 +298,7 @@ public enum LeftoverPolicy {
             case "-m": return rest.first.map { "\(base) · \(String($0.prefix(40)))" } ?? base
             default:
                 if argument.hasPrefix("-") { continue }
-                return "\(base) · \(String(URL(fileURLWithPath: argument).lastPathComponent.prefix(48)))"
+                return "\(base) · \(String(baseName(argument).prefix(48)))"
             }
         }
         return base
@@ -294,7 +306,7 @@ public enum LeftoverPolicy {
     static func runner(_ arguments: [String]) -> String? {
         if arguments.contains(where: { $0.hasSuffix("jest-worker/build/workers/processChild.js") }) { return "jest worker" }
         for argument in arguments.dropFirst().prefix(3) {
-            var name = URL(fileURLWithPath: argument).lastPathComponent
+            var name = baseName(argument)
             for suffix in [".js", ".cjs", ".mjs", ".ts"] where name.hasSuffix(suffix) { name = String(name.dropLast(suffix.count)) }
             if runners.contains(name) { return name }
         }
@@ -331,7 +343,11 @@ public enum LeftoverPolicy {
     static func appName(_ executable: String) -> String? {
         executable.split(separator: "/").last { $0.hasSuffix(".app") }.map { String($0.dropLast(4)) }
     }
-    static func baseName(_ executable: String) -> String { URL(fileURLWithPath: executable).lastPathComponent }
+    /// The last path component without building a URL; this runs for every process on each sample.
+    static func baseName(_ path: String) -> String {
+        guard let slash = path.lastIndex(of: "/") else { return path }
+        return String(path[path.index(after: slash)...])
+    }
     static func abbreviate(_ path: String, home: String) -> String {
         guard !home.isEmpty, path == home || path.hasPrefix(home + "/") else { return path }
         return "~" + path.dropFirst(home.count)

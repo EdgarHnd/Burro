@@ -96,8 +96,9 @@ public enum MacHealthSampler {
         guard let previous, let current, current.total > previous.total, current.busy >= previous.busy else { return nil }
         return min(1, Double(current.busy - previous.busy) / Double(current.total - previous.total))
     }
-    /// Returns the snapshot and the CPU ticks to pass as `previous` next time.
-    public static func sample(previous: CPUTicks?, now: Date = Date()) -> (MacHealthSnapshot, CPUTicks?) {
+    /// Returns the snapshot and the CPU ticks to pass as `previous` next time. Startup-volume capacity
+    /// (purgeable-space accounting, the costly part) is read only when `storage` is true.
+    public static func sample(previous: CPUTicks?, storage readStorage: Bool = true, now: Date = Date()) -> (MacHealthSnapshot, CPUTicks?) {
         let current = ticks()
         var averages = [Double](repeating: 0, count: 3)
         let load = getloadavg(&averages, 3) == 3 ? averages : []
@@ -105,7 +106,7 @@ public enum MacHealthSampler {
         let memory = burro_memory(&raw) == 1 ? MacHealthSnapshot.Memory(total: raw.total, app: raw.app, wired: raw.wired,
             compressed: raw.compressed, cached: raw.cached, free: raw.free, swapTotal: raw.swap_total, swapUsed: raw.swap_used,
             pressure: pressure(raw.pressure)) : nil
-        let values = try? URL(fileURLWithPath: "/").resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey])
+        let values = readStorage ? try? URL(fileURLWithPath: "/").resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey]) : nil
         var storage: MacHealthSnapshot.Storage?
         if let total = values?.volumeTotalCapacity, let available = values?.volumeAvailableCapacityForImportantUsage, total > 0 {
             storage = .init(total: UInt64(total), available: UInt64(max(0, available)))

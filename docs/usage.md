@@ -75,7 +75,7 @@ Remote SQLite reads can use a stable, journal-free checkpoint when read-only WAL
 
 ## Mac Health
 
-**Mac Health** (sidebar, menu bar, or the notch **Mac** tab) shows CPU use and load, memory used and pressure, swap, startup-disk space, thermal state, and your busiest processes. It samples every three seconds only while one of those views is open.
+**Mac Health** (sidebar, menu bar, or the notch **Mac** tab) shows CPU use and load, memory used and pressure, swap, startup-disk space, thermal state, and your busiest processes. It samples only while one of those views is on screen: system counters every five seconds, the process list every 15 seconds, and disk space every minute. A covered, minimized or hidden window, or a sleeping display, pauses it.
 
 **Left running** lists things that usually outlived the work that started them:
 

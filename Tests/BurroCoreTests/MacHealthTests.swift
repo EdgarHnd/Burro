@@ -182,6 +182,17 @@ final class MacHealthTests: XCTestCase {
         XCTAssertFalse(inventory.processes.contains { $0.pid == Int(getpid()) }, "Burro never reports itself")
     }
 
+    func testRoutineSamplesSkipTheCostlyReads() {
+        let (snapshot, _) = MacHealthSampler.sample(previous: nil, storage: false)
+        XCTAssertNil(snapshot.storage, "Purgeable-space accounting runs on its own slower clock")
+        XCTAssertGreaterThan(snapshot.memory?.total ?? 0, 0)
+        let apps = ProcessInventory.read().processes.filter { LeftoverPolicy.isApp($0.executable) }
+        XCTAssertFalse(apps.isEmpty)
+        XCTAssertTrue(apps.allSatisfy { $0.arguments.isEmpty }, "App arguments are never needed, so they are never read")
+        XCTAssertEqual(LeftoverPolicy.baseName("/opt/homebrew/bin/node"), "node")
+        XCTAssertEqual(LeftoverPolicy.baseName("node"), "node")
+    }
+
     func testStopSignalsOnlyTheSameProcess() throws {
         let child = Process()
         child.executableURL = URL(fileURLWithPath: "/bin/sleep"); child.arguments = ["30"]

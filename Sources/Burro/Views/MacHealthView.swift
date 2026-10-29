@@ -1,4 +1,5 @@
 // The desktop home for this Mac's CPU, memory, swap, storage and anything left running after its work ended.
+import AppKit
 import SwiftUI
 import BurroCore
 
@@ -54,8 +55,40 @@ struct HealthBar: View {
     }
 }
 
+/// Reports whether the hosting window is actually on screen: not covered, minimized, hidden, or on a sleeping or locked display.
+struct WindowOcclusionReader: NSViewRepresentable {
+    var onChange: (Bool) -> Void
+    func makeNSView(context: Context) -> ReaderView { ReaderView(onChange: onChange) }
+    func updateNSView(_ view: ReaderView, context: Context) { view.onChange = onChange }
+    final class ReaderView: NSView {
+        var onChange: (Bool) -> Void
+        private var observer: NSObjectProtocol?
+        private var reported: Bool?
+        init(onChange: @escaping (Bool) -> Void) { self.onChange = onChange; super.init(frame: .zero) }
+        required init?(coder: NSCoder) { nil }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = window.map { window in
+                NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.report() }
+                }
+            }
+            report()
+        }
+        private func report() {
+            let visible = window?.occlusionState.contains(.visible) == true
+            guard visible != reported else { return }
+            reported = visible
+            // Defer so SwiftUI state never changes inside its own view update.
+            DispatchQueue.main.async { [onChange] in onChange(visible) }
+        }
+    }
+}
+
 struct MacHealthView: View {
     @Bindable var health: MacHealthStore
+    @State private var onScreen = false
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center) {
@@ -64,9 +97,9 @@ struct MacHealthView: View {
                     Text("CPU, memory and storage, plus anything still running after its work ended.").font(.caption).foregroundStyle(AppAppearance.secondary)
                 }
                 Spacer()
-                if health.sampling { ProgressView().controlSize(.small).accessibilityLabel("Sampling") }
-                Button { Task { await health.refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                    .disabled(health.sampling)
+                if health.refreshing { ProgressView().controlSize(.small).accessibilityLabel("Refreshing") }
+                Button { Task { await health.refresh(force: true) } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                    .disabled(health.refreshing)
             }.padding(Layout.inset)
             Divider()
             ScrollView {
@@ -93,13 +126,14 @@ struct MacHealthView: View {
                     }
                     leftovers
                     busiest
-                    Text("Sampled every 3 seconds while Mac Health or the notch Mac tab is open. Monitoring is read-only; Burro stops a process or simulator only after you confirm, and only if it is still the same one.")
+                    Text("Updates every few seconds only while Mac Health or the notch Mac tab is on screen; the process list refreshes every 15 seconds. Monitoring is read-only; Burro stops a process or simulator only after you confirm, and only if it is still the same one.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(Layout.inset).frame(maxWidth: 1060).frame(maxWidth: .infinity)
             }
         }
         .modifier(AppTheme())
-        .task { await health.observe() }
+        .background(WindowOcclusionReader { onScreen = $0 })
+        .task(id: onScreen) { if onScreen { await health.observe() } }
         .confirmationDialog(health.pending.map(confirmTitle) ?? "", isPresented: Binding(get: { health.pending != nil }, set: { if !$0 { health.pending = nil } }),
                             titleVisibility: .visible, presenting: health.pending) { item in
             Button(confirmVerb(item), role: .destructive) { health.confirm(item) }

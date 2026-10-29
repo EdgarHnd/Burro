@@ -4,9 +4,10 @@ import BurroCore
 
 struct NotchMacView: View {
     var health: MacHealthStore
-    /// Samples only while the panel is expanded on this page.
+    /// Samples only while the panel is expanded on this page and actually on screen.
     var active: Bool
     var onOpen: () -> Void
+    @State private var onScreen = false
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
@@ -26,7 +27,8 @@ struct NotchMacView: View {
             }.padding(.horizontal, 12).padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
         }
         .foregroundStyle(AppAppearance.text)
-        .task(id: active) { if active { await health.observe() } }
+        .background(WindowOcclusionReader { onScreen = $0 })
+        .task(id: active && onScreen) { if active && onScreen { await health.observe() } }
     }
     @ViewBuilder private func rows(_ snapshot: MacHealthSnapshot) -> some View {
         row("CPU", fraction: snapshot.cpuBusy, value: HealthFormat.percent(snapshot.cpuBusy),
