@@ -15,7 +15,9 @@ public struct NotchGeometry: Equatable, Sendable {
         let header: CGFloat = hasNotch ? max(32, safeTop) + (expanded ? 5 : 2) : (expanded ? 36 : 26)
         let compactWidth = hasNotch ? gap + 96 : 108
         let width = min(expanded ? max(480, compactWidth) : compactWidth, max(1, screen.width - 24))
-        let bodyHeight: CGFloat = visibleAgents == 0 ? 148 : 78 + CGFloat(min(visibleAgents, 5)) * 56
+        let rows = min(visibleAgents, 5)
+        // Include the list's 8-point top/bottom insets and 6-point gaps between cards.
+        let bodyHeight: CGFloat = rows == 0 ? 148 : 86 + CGFloat(rows) * 56 + CGFloat(max(0, rows - 1)) * 6
         let desiredHeight = expanded ? header + bodyHeight : header
         let top = screen.maxY
         let height = min(desiredHeight, max(1, top - visibleFrame.minY - 12))

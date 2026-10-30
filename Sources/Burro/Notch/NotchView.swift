@@ -185,7 +185,7 @@ struct NotchView: View {
             }
             else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(spacing: 6) {
                         ForEach(workspaces) { workspace in
                             if !workspace.path.isEmpty { workspaceHeader(workspace) }
                             ForEach(workspace.groups) { group in
@@ -201,7 +201,7 @@ struct NotchView: View {
                                 }
                             }
                         }
-                    }.padding(.horizontal, 12).padding(.vertical, 4)
+                    }.padding(.horizontal, 20).padding(.vertical, 8)
                 }.scrollIndicators(.automatic)
             }
             footer

@@ -10,7 +10,7 @@ struct NotchTodayView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
+            LazyVStack(spacing: 6) {
                 ForEach(groups) { group in
                     if let session = group.root {
                         NotchAgentRow(session: session,
@@ -19,7 +19,7 @@ struct NotchTodayView: View {
                             animate: active, select: { select(session) }, inspect: { inspect(session) })
                     }
                 }
-            }.padding(.horizontal, 12).padding(.vertical, 4)
+            }.padding(.horizontal, 20).padding(.vertical, 8)
         }.scrollIndicators(.automatic).accessibilityLabel("Today's chats, most recently active first")
     }
 }
