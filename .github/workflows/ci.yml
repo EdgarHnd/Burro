@@ -23,7 +23,7 @@ jobs:
       - name: Toolchain
         run: |
           swift --version
-          rustup toolchain install 1.90.0 --profile minimal
+          rustup toolchain install 1.98.0 --profile minimal
       - name: Rust worker tests and build
         run: |
           cargo test --manifest-path Rust/Cargo.toml --target-dir .build/rust --locked
@@ -56,5 +56,5 @@ jobs:
       - run: python3 -B script/test_remote_probe.py
       - name: Rust worker portability tests
         run: |
-          rustup toolchain install 1.90.0 --profile minimal
+          rustup toolchain install 1.98.0 --profile minimal
           cargo test --manifest-path Rust/Cargo.toml --target-dir .build/rust --locked

@@ -25,7 +25,7 @@ Background monitoring is read-only. **Move to Trash** is an explicit, confirmed 
 
 ## Build and run
 
-Requirements: **macOS 14 or later**, **Swift 6** (Xcode 16+ or compatible Command Line Tools), **Rust via [rustup](https://rustup.rs/)**, and Git. Check `swift --version` first. `rust-toolchain.toml` pins Rust 1.90.0; Cargo dependencies are locked. Python 3 is needed for probe tests and on each remote host. The app bundles its Rust executable; users and remote hosts do not need Rust installed.
+Requirements: **macOS 14 or later**, **Swift 6** (Xcode 16+ or compatible Command Line Tools), **Rust via [rustup](https://rustup.rs/)**, and Git. Check `swift --version` first. `rust-toolchain.toml` pins Rust 1.98.0 (older toolchains build proc-macros that macOS 27 refuses to load); Cargo dependencies are locked. Python 3 is needed for probe tests and on each remote host. The app bundles its Rust executable; users and remote hosts do not need Rust installed.
 
 ```sh
 git clone https://github.com/EdgarHnd/Burro.git
