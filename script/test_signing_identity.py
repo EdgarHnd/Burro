@@ -76,6 +76,17 @@ class SigningIdentityTests(unittest.TestCase):
         value = "designated => identifier Burro and anchor apple generic"
         self.assertEqual(call("burro_check_signing_requirement", value, value, "yes", "").returncode, 0)
 
+    def test_ad_hoc_requirement_is_readable(self):
+        # Exact `codesign -dr -` output for an ad-hoc signature, as on certificate-less CI runners.
+        ad_hoc = '# designated => cdhash H"39dea2e175fd97386a435d96ed26b203a4e310b5"'
+        self.assertEqual(call("burro_check_signing_requirement", "", ad_hoc, "no", "").returncode, 0)
+        self.assertEqual(call("burro_check_signing_requirement", ad_hoc, ad_hoc, "no", "").returncode, 0)
+        # Replacing a trusted signed build with ad-hoc is still a signing change that needs an explicit choice.
+        signed = "designated => identifier Burro and anchor apple generic"
+        self.assertNotEqual(call("burro_check_signing_requirement", signed, ad_hoc, "yes", "").returncode, 0)
+        self.assertEqual(call("burro_check_signing_requirement", signed, ad_hoc, "yes", "-").returncode, 0)
+        self.assertNotEqual(call("burro_check_signing_requirement", "", "# some other comment", "no", "").returncode, 0)
+
     def test_implicit_requirement_change_is_rejected(self):
         self.assertNotEqual(call("burro_check_signing_requirement", "designated => old", "designated => new", "yes", "").returncode, 0)
         self.assertEqual(call("burro_check_signing_requirement", "designated => old", "designated => new", "yes", B).returncode, 0)

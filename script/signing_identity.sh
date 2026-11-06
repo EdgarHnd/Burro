@@ -26,7 +26,8 @@ burro_signing_identity() {
 
 burro_check_signing_requirement() {
   local previous="$1" current="$2" trusted="$3" requested="$4"
-  if [[ "$current" != 'designated => '* ]]; then
+  # codesign prints an ad-hoc signature's implicit requirement as a comment: `# designated => cdhash H"…"`.
+  if [[ "$current" != 'designated => '* && "$current" != '# designated => cdhash '* ]]; then
     echo "Cannot verify Burro's signing requirement." >&2; return 1
   fi
   if [[ "$trusted" == yes && "$previous" != "$current" ]]; then
