@@ -12,14 +12,15 @@ public struct ProcessSample: Sendable, Equatable, Identifiable {
     public var arguments: [String]
     public var cwd: String
     public var cpuTime: TimeInterval?
-    public var resident: UInt64?
+    /// Physical footprint, so sums over many processes do not count shared libraries repeatedly.
+    public var memory: UInt64?
     public var listeningPorts: [Int]
     public var connections: Int
     public var id: String { "\(pid)@\(Int(started.timeIntervalSince1970))" }
     public init(pid: Int, parentPID: Int, started: Date, executable: String, arguments: [String] = [], cwd: String = "",
-                cpuTime: TimeInterval? = nil, resident: UInt64? = nil, listeningPorts: [Int] = [], connections: Int = 0) {
+                cpuTime: TimeInterval? = nil, memory: UInt64? = nil, listeningPorts: [Int] = [], connections: Int = 0) {
         self.pid = pid; self.parentPID = parentPID; self.started = started; self.executable = executable
-        self.arguments = arguments; self.cwd = cwd; self.cpuTime = cpuTime; self.resident = resident
+        self.arguments = arguments; self.cwd = cwd; self.cpuTime = cpuTime; self.memory = memory
         self.listeningPorts = listeningPorts; self.connections = connections
     }
 }
@@ -62,7 +63,7 @@ public struct ProcessInventory: Sendable, Equatable {
             }
             var sample = ProcessSample(pid: Int(pid), parentPID: Int(info.ppid), started: Date(timeIntervalSince1970: Double(info.started)),
                 executable: executable, arguments: arguments, cwd: cwd,
-                cpuTime: measured ? Double(usage.cpu_ns) / 1_000_000_000 : nil, resident: measured ? usage.resident : nil)
+                cpuTime: measured ? Double(usage.cpu_ns) / 1_000_000_000 : nil, memory: measured ? usage.footprint : nil)
             if !app && !system {
                 let sockets = socketBuffer.withUnsafeMutableBufferPointer { burro_process_sockets(pid, $0.baseAddress, Int32($0.count)) }
                 if sockets > 0 {
@@ -122,7 +123,7 @@ public struct Leftover: Identifiable, Sendable, Equatable {
     public var started: Date
     public var cpuTime: TimeInterval?
     public var cpuPercent: Double?
-    public var resident: UInt64?
+    public var memory: UInt64?
     public var children: Int
     public var target: Target
     /// Stable across restarts so Ignore keeps working for the same tool in the same folder.
@@ -140,7 +141,7 @@ public struct ProcessLine: Identifiable, Sendable, Equatable {
     public var id: String
     public var name: String
     public var cpuPercent: Double?
-    public var resident: UInt64?
+    public var memory: UInt64?
 }
 
 public struct LeftoverReport: Sendable, Equatable {
@@ -150,7 +151,7 @@ public struct LeftoverReport: Sendable, Equatable {
     public var agentMemory: UInt64
     public var complete: Bool
     public static let empty = LeftoverReport(leftovers: [], busiest: [], agentProcesses: 0, agentMemory: 0, complete: false)
-    public var reclaimable: UInt64 { leftovers.compactMap(\.resident).reduce(0, +) }
+    public var reclaimable: UInt64 { leftovers.compactMap(\.memory).reduce(0, +) }
 }
 
 public enum LeftoverPolicy {
@@ -184,8 +185,8 @@ public enum LeftoverPolicy {
             }
             return result
         }
-        func total(_ tree: [ProcessSample]) -> (cpu: Double?, resident: UInt64?) {
-            let percents = tree.compactMap { cpu[$0.id] }, sizes = tree.compactMap(\.resident)
+        func total(_ tree: [ProcessSample]) -> (cpu: Double?, memory: UInt64?) {
+            let percents = tree.compactMap { cpu[$0.id] }, sizes = tree.compactMap(\.memory)
             return (percents.isEmpty ? nil : percents.reduce(0, +), sizes.isEmpty ? nil : sizes.reduce(0, +))
         }
 
@@ -210,7 +211,7 @@ public enum LeftoverPolicy {
             leftovers.append(Leftover(kind: .simulator, name: deviceName(udid) ?? "iOS Simulator",
                 folder: apps.isEmpty ? "No apps running" : "Running " + apps.joined(separator: ", "),
                 reason: "Booted \(duration(now.timeIntervalSince(sim.started))) ago with no Simulator window open.",
-                started: sim.started, cpuPercent: usage.cpu, resident: usage.resident, children: tree.count - 1,
+                started: sim.started, cpuPercent: usage.cpu, memory: usage.memory, children: tree.count - 1,
                 target: .simulator(udid: udid), signature: signature))
         }
 
@@ -223,7 +224,9 @@ public enum LeftoverPolicy {
             let kind: LeftoverKind, reason: String
             if let used = process.cpuTime, used >= 3600, let percent, percent >= 25 {
                 kind = .runaway; reason = "Still using \(Int(percent.rounded()))% CPU after \(duration(used)) of CPU time."
-            } else if isWatcher(process), process.listeningPorts.isEmpty, age >= 2 * 3600 {
+            } else if isWatcher(process), process.listeningPorts.isEmpty, age >= 2 * 3600,
+                      process.parentPID == 1 || runner(process.arguments) != "jest worker" {
+                // Pooled workers (Jest, Metro) live and die with their parent; only an orphaned pool is reported on its own.
                 // Runners that serve clients (expo, vite) are judged as servers below instead.
                 kind = .watcher; reason = "Running for \(duration(age)). Test runners and watchers normally stop when the work is done."
             } else if !process.listeningPorts.isEmpty, process.connections == 0, age >= 12 * 3600, !ownedByOpenParent(process) {
@@ -239,7 +242,7 @@ public enum LeftoverPolicy {
             let signature = "\(kind.rawValue)|\(name)|\(folder)"
             guard !ignored.contains(signature) else { continue }
             flagged[process.pid] = Leftover(kind: kind, name: name, folder: folder, reason: reason, started: process.started,
-                cpuTime: process.cpuTime, cpuPercent: percent, resident: process.resident, children: 0,
+                cpuTime: process.cpuTime, cpuPercent: percent, memory: process.memory, children: 0,
                 target: .process(pid: process.pid, started: process.started, executable: process.executable), signature: signature)
         }
         // Workers and wrappers under a flagged process are reported as part of it.
@@ -254,14 +257,14 @@ public enum LeftoverPolicy {
             let tree = descendants(of: pid)
             guard !tree.isEmpty, let root = byPID[pid] else { continue }
             let usage = total([root] + tree)
-            item.cpuPercent = usage.cpu; item.resident = usage.resident; item.children = tree.count
+            item.cpuPercent = usage.cpu; item.memory = usage.memory; item.children = tree.count
             flagged[pid] = item
         }
         let order = Dictionary(uniqueKeysWithValues: LeftoverKind.allCases.enumerated().map { ($1, $0) })
         leftovers += flagged.values
         leftovers.sort { a, b in
             if a.kind != b.kind { return order[a.kind, default: 0] < order[b.kind, default: 0] }
-            return (a.resident ?? 0) > (b.resident ?? 0)
+            return (a.memory ?? 0) > (b.memory ?? 0)
         }
 
         let agentProcesses = processes.filter { isAgentCLI($0.executable) }
@@ -270,12 +273,12 @@ public enum LeftoverPolicy {
             .sorted { a, b in
                 let left = cpu[a.id] ?? -1, right = cpu[b.id] ?? -1
                 if left != right { return left > right }
-                return (a.resident ?? 0) > (b.resident ?? 0)
+                return (a.memory ?? 0) > (b.memory ?? 0)
             }
             .prefix(6)
-            .map { ProcessLine(id: $0.id, name: label(executable: $0.executable, arguments: $0.arguments), cpuPercent: cpu[$0.id], resident: $0.resident) }
+            .map { ProcessLine(id: $0.id, name: label(executable: $0.executable, arguments: $0.arguments), cpuPercent: cpu[$0.id], memory: $0.memory) }
         return LeftoverReport(leftovers: leftovers, busiest: Array(busiest), agentProcesses: agentProcesses.count,
-            agentMemory: agentProcesses.compactMap(\.resident).reduce(0, +), complete: inventory.complete)
+            agentMemory: agentProcesses.compactMap(\.memory).reduce(0, +), complete: inventory.complete)
     }
     static func isAgentCLI(_ executable: String) -> Bool {
         executable.contains("/claude/versions/") || executable.hasSuffix("/claude.app/Contents/MacOS/claude") || agents.contains(baseName(executable))
