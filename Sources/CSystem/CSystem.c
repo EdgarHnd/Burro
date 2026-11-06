@@ -63,7 +63,10 @@ int burro_process_usage(int pid, BurroTaskUsage *result) {
     mach_timebase_info_data_t timebase;
     if (mach_timebase_info(&timebase) != KERN_SUCCESS || timebase.denom == 0) return 0;
     result->cpu_ns = (task.pti_total_user + task.pti_total_system) * timebase.numer / timebase.denom;
-    result->resident = task.pti_resident_size;
+    // Resident size counts shared libraries in every process, so totals over many processes overstate memory.
+    struct rusage_info_v2 usage;
+    result->footprint = proc_pid_rusage(pid, RUSAGE_INFO_V2, (rusage_info_t *)&usage) == 0
+        ? usage.ri_phys_footprint : task.pti_resident_size;
     return 1;
 }
 

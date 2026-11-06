@@ -23,7 +23,7 @@ int burro_process_output_path(int pid, int fd, char *path, int capacity);
 // Mac Health: read-only resource sampling. Each returns 1 when read, 0 when unavailable.
 typedef struct {
     uint64_t cpu_ns;      // user + system CPU time, converted from Mach ticks
-    uint64_t resident;    // bytes
+    uint64_t footprint;   // bytes; Activity Monitor's Memory (excludes shared pages, includes compressed)
 } BurroTaskUsage;
 int burro_process_usage(int pid, BurroTaskUsage *result);
 // NUL-separated argv (argv[0] first), truncated to capacity. Returns the copied argument count, -1 if unreadable.
