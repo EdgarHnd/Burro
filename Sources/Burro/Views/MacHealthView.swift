@@ -91,17 +91,11 @@ struct MacHealthView: View {
     @State private var onScreen = false
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Mac Health").font(AppAppearance.pageTitle)
-                    Text("CPU, memory and storage, plus anything still running after its work ended.").font(.caption).foregroundStyle(AppAppearance.secondary)
-                }
-                Spacer()
+            PageHeader(title: "Mac Health", subtitle: "CPU, memory and storage, plus anything still running after its work ended.") {
                 if health.refreshing { ProgressView().controlSize(.small).accessibilityLabel("Refreshing") }
-                Button { Task { await health.refresh(force: true) } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                PillButton(title: "Refresh", symbol: "arrow.clockwise") { Task { await health.refresh(force: true) } }
                     .disabled(health.refreshing)
-            }.padding(Layout.inset)
-            Divider()
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if let message = health.message {

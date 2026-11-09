@@ -6,7 +6,13 @@ import OSLog
 import BurroCore
 
 @MainActor @Observable final class AppStore {
-    var snapshot = ScanSnapshot.empty
+    var snapshot = ScanSnapshot.empty { didSet { eligibilityCache.removeAll(keepingCapacity: true); registeredPaths = snapshot.worktrees.map(\.path) } }
+    /// Readiness is a pure function of the scanned tree, so it is computed once per scan rather
+    /// than on every redraw (it resolves paths on disk). Keyed by path and the identity fields
+    /// views compare; a protection change replaces the snapshot and clears it.
+    @ObservationIgnored private var eligibilityCache: [String: (key: String, value: CleanupEligibility)] = [:]
+    @ObservationIgnored private var registeredPaths: [String] = []
+    @ObservationIgnored private lazy var homePath = FileManager.default.homeDirectoryForCurrentUser.path
     var scanning = false
     var didScan = false
     var cleanupTarget: CleanupRequest?
@@ -23,7 +29,11 @@ import BurroCore
             protectedPaths: protectedPaths, baseOverrides: baseOverrides)
     }
     func cleanupEligibility(_ tree: Worktree) -> CleanupEligibility {
-        WorktreeCleanup.eligibility(tree, home: scanConfiguration.home, warnings: snapshot.warnings, registeredPaths: snapshot.worktrees.map(\.path))
+        let key = "\(tree.head)|\(tree.branch)|\(tree.protectedByUser)|\(tree.agents.count)|\(tree.processes.count)"
+        if let cached = eligibilityCache[tree.path], cached.key == key { return cached.value }
+        let value = WorktreeCleanup.eligibility(tree, home: homePath, warnings: snapshot.warnings, registeredPaths: registeredPaths)
+        eligibilityCache[tree.path] = (key, value)
+        return value
     }
     func reviewCleanup(_ trees: [Worktree]) {
         guard !cleaningWorktree, !trees.isEmpty else { return }
@@ -101,6 +111,7 @@ import BurroCore
     let today = TodayStore()
     let machines = MachinesStore()
     let notes: NotesStore
+    let benches: BenchesStore
     // New chat launcher
     var newChatPresented = false
     var codexModels: [LaunchModel] = []
@@ -124,6 +135,7 @@ import BurroCore
         self.todos = todos ?? TodoStore(cacheURL: FileManager.default.temporaryDirectory
             .appendingPathComponent("burro-todos-\(UUID().uuidString).json"), config: nil)
         // The app passes its real notes store; tests and previews get a throwaway folder.
+        benches = BenchesStore(defaults: defaults)
         self.notes = notes ?? NotesStore(folder: FileManager.default.temporaryDirectory.appendingPathComponent("burro-notes-\(UUID().uuidString)"))
         self.cleanupBatch = cleanupBatch ?? CleanupBatchStore()
         usage = UsageStore(defaults: defaults)
@@ -141,6 +153,7 @@ import BurroCore
     func matches(_ filter: WorktreeFilter, tree: Worktree) -> Bool {
         if filter == .candidates { return cleanupEligibility(tree).allowed }
         if filter == .protected { return cleanupEligibility(tree).status == .protected }
+        if case .bench(let id) = filter { return benches.bench(id)?.projects.contains(tree.repositoryPath) ?? false }
         return filter.matches(tree)
     }
     var visibleWorktrees: [Worktree] {

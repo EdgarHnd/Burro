@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .onAppear { delegate.notchController = notch; delegate.store = store }
         }
         .defaultSize(width: 1240, height: 800)
-        .windowToolbarStyle(.unified(showsTitle: false))
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat…") { store.page = .home; store.newChatPresented = true; notch.openDashboardWindow() }
@@ -61,7 +61,11 @@ private struct DesktopRootView: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         ContentView(store: store, notch: notch)
-            .background(WindowProbe(onAttach: notch.registerDashboard, onVisibilityChange: store.dashboardVisibilityChanged))
+            .background(WindowProbe(onAttach: { window in
+                notch.registerDashboard(window)
+                // The top bar replaces the title bar; macOS 14 has no drag gesture, so drag by the background.
+                if #unavailable(macOS 15.0) { window.isMovableByWindowBackground = true }
+            }, onVisibilityChange: store.dashboardVisibilityChanged))
             .task {
                 store.start()
                 notch.start(store: store) { openWindow(id: "main") }

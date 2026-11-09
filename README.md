@@ -13,6 +13,7 @@ Early-stage software. Provider metadata formats are private and may change; Burr
 ## What it does
 
 - **Home:** a cover (your desktop picture or any image you choose) with live counts, quick actions, your projects and machines as cards, a plain-language summary, to-dos, notes, a scratchpad, an inbox of chats waiting on you, and a dock of live agents and machines. Click anything to open the chat or the page behind it. Light, dark or match the system. An icon top bar (Today, Home, inbox, worktrees, machines, usage, health, New chat) shows badges for what needs you.
+- **Benches:** group projects into your own benches (Work, Homelab, Personal…) with an icon and colour. Home shows each bench's combined live counts; clicking one filters the worktree list to it.
 - **Machines (⌘4):** this Mac, your SSH machines and every device on your Tailscale network, with OS, presence, running agents and project folders, plus a table of agent tools (Claude Code, Codex, opencode, Grok, Cursor, Gemini) per machine with the latest release and a confirmed **Update** that runs the tool's own updater.
 - **Today page (⌘2):** one day at a glance: chats grouped by status or project with the first line of their latest reply, how long you've been at it with an hourly bar, messages sent vs replies, to-dos, questions agents asked you, and [Dayflow](https://github.com/JerryZLiu/Dayflow)'s timeline when it's installed. Step back through earlier days.
 - **Today card:** a minimal to-do list for the day on Home. Tick, type to add, double-click to edit; unfinished items roll over. Syncs with Maurice's Convex backend (so the Maurice app can show it) or stays on this Mac until you connect.
@@ -47,6 +48,8 @@ Local monitoring wakes on relevant provider filesystem changes (ignoring unrelat
 The live Codex view reads today's and recently active chats, plus writer-lock, unread and pinned chats and their parents. Worktree inventories and cleanup checks read the complete catalog. Lock filenames are indexed for one refresh; existing locks are checked live, and directory changes fall back to complete per-file checks.
 
 Git refreshes when the worktree dashboard opens or you switch back to a worktree view, if its snapshot is at least 30 seconds old. Repositories are not polled on a timer; live agent monitoring continues independently. Scans reuse unchanged worktree facts, invalidating them on checkout/shared-Git/configuration filesystem changes, watcher overflow, HEAD/base changes, or a fifteen-minute maximum age. Failed watchers and incomplete facts do not cache. Manual refresh and cleanup preflight always inspect fresh state. Claude unread preferences are cached only while all database file identities and modification stamps remain unchanged. Active Codex catalog updates transfer changed chat records instead of resending historical titles.
+
+Daily use: build optimized (`CONFIGURATION=release ./script/build_and_run.sh`). Debug builds are noticeably slower to draw and scroll.
 
 For an optimized local build without launching:
 

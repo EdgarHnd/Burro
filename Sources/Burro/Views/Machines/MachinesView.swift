@@ -99,7 +99,7 @@ enum MachinesModel {
         }
         var models: [MachineModel] = []
         let local = summary.machines.first { $0.connection == .local }
-        models.append(MachineModel(id: MachinesStore.localID, name: Host.current().localizedName ?? "This Mac", kind: .local,
+        models.append(MachineModel(id: MachinesStore.localID, name: computerName, kind: .local,
                                    os: store.machines.facts[MachinesStore.localID]?.os, online: true,
                                    running: local?.counts.running ?? 0, waiting: local?.counts.waiting ?? 0,
                                    roots: roots(store.repositoriesFound.map(\.path)), peer: peers.first(where: \.isSelf), host: nil,
@@ -121,6 +121,8 @@ enum MachinesModel {
         }
         return models
     }
+    /// Read once: `Host.current()` can block on name resolution, which must never happen during a redraw.
+    @MainActor static let computerName: String = Host.current().localizedName ?? "This Mac"
     /// The folders projects live in, most common first ("~/Dev"), up to three.
     static func roots(_ paths: [String]) -> [String] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -146,9 +148,8 @@ struct PillButton: View {
         Button(action: action) {
             Label(title, systemImage: symbol).font(.system(size: 13, weight: .medium))
                 .padding(.horizontal, 14).padding(.vertical, 7)
-                .background(hovering ? AppAppearance.raised : AppAppearance.surface, in: Capsule())
+                .background { Capsule().fill(hovering ? AppAppearance.raised : AppAppearance.surface).shadow(color: AppAppearance.shadow, radius: 6, y: 2) }
                 .overlay(Capsule().strokeBorder(AppAppearance.separator))
-                .shadow(color: AppAppearance.shadow, radius: 6, y: 2)
         }.buttonStyle(.plain).onHover { hovering = $0 }
     }
 }

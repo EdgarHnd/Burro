@@ -47,11 +47,9 @@ struct HomeCardButtonStyle: ButtonStyle {
     @State private var hovering = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(AppAppearance.surface, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
             .background(hovering ? AppAppearance.hover : .clear, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .strokeBorder(hovering ? AppAppearance.hairline : AppAppearance.separator))
-            .shadow(color: AppAppearance.shadow, radius: hovering ? 14 : 8, y: hovering ? 5 : 2)
+            .modifier(SoftSurface(radius: radius, shadowRadius: hovering ? 14 : 8, y: hovering ? 5 : 2,
+                                  stroke: hovering ? AppAppearance.hairline : AppAppearance.separator))
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
             .onHover { hovering = $0 }
@@ -428,16 +426,16 @@ struct HomeDock: View {
             .modifier(FloatingSurface())
             Button { store.newChatPresented = true } label: {
                 Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 48, height: 48).background(Color(white: 0.12), in: Circle())
+                    .frame(width: 48, height: 48)
+                    .background { Circle().fill(Color(white: 0.12)).shadow(color: .black.opacity(0.25), radius: 10, y: 4) }
                     .overlay(Circle().strokeBorder(.white.opacity(0.12)))
-                    .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
             }.buttonStyle(PressableStyle()).help("New chat (⌘N)").accessibilityLabel("New chat")
             HStack(spacing: 2) {
                 action("rectangle.topthird.inset.filled", "Show agent notch (⇧⌘B)") { notch.show() }
                 action("calendar", "Today (⌘2)") { store.page = .today }
                 action("arrow.clockwise", "Refresh everything") { Task { await store.refreshCurrentPage() } }
                 SettingsLink { Image(systemName: "slider.horizontal.3").frame(width: 34, height: 34).contentShape(Rectangle()) }
-                    .buttonStyle(HomeDockButtonStyle()).help("Settings")
+                    .buttonStyle(HomeDockButtonStyle()).help("Settings").accessibilityLabel("Settings")
             }
             .padding(.horizontal, 6).frame(height: 48)
             .modifier(FloatingSurface())
@@ -495,8 +493,10 @@ struct FloatingSurface: ViewModifier {
     }
     private func frosted(_ content: Content) -> some View {
         content
-            .background(reduceTransparency ? AnyShapeStyle(AppAppearance.surface) : AnyShapeStyle(.regularMaterial), in: Capsule())
+            .background {
+                Capsule().fill(reduceTransparency ? AnyShapeStyle(AppAppearance.surface) : AnyShapeStyle(.regularMaterial))
+                    .shadow(color: AppAppearance.shadow, radius: 16, y: 6)
+            }
             .overlay(Capsule().strokeBorder(AppAppearance.separator))
-            .shadow(color: AppAppearance.shadow, radius: 16, y: 6)
     }
 }

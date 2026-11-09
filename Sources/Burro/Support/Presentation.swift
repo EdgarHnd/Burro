@@ -36,7 +36,7 @@ enum AppPage: String, CaseIterable, Identifiable, Hashable {
 }
 
 enum WorktreeFilter: Hashable {
-    case all, working, inUse, inactive, candidates, cleanup, protected, repository(String)
+    case all, working, inUse, inactive, candidates, cleanup, protected, repository(String), bench(UUID)
     var title: String {
         switch self {
         case .all: "All worktrees"
@@ -47,11 +47,12 @@ enum WorktreeFilter: Hashable {
         case .cleanup: "Cleanup"
         case .protected: "Protected"
         case .repository: "Repository"
+        case .bench: "Bench"
         }
     }
     var icon: String {
         switch self {
-        case .all, .repository: "square.stack.3d.up"
+        case .all, .repository, .bench: "square.stack.3d.up"
         case .working: "waveform.path"
         case .inUse: "person.2"
         case .inactive: "moon"
@@ -70,6 +71,7 @@ enum WorktreeFilter: Hashable {
         case .cleanup: !tree.isInUse && !tree.isPrimary
         case .protected: tree.protectedByUser || tree.isPrimary || tree.isLocked || tree.agents.contains { $0.pinned }
         case .repository(let path): tree.repositoryPath == path
+        case .bench: false // Resolved by AppStore from the bench's projects.
         }
     }
 }

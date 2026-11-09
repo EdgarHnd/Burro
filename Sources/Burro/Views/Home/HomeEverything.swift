@@ -28,9 +28,11 @@ struct HomeCover: View {
             HStack(alignment: .bottom, spacing: 18) {
                 BurroMark(active: true, working: summary.counts.running > 0, tint: HomeStyle.butter)
                     .frame(width: 44, height: 44).frame(width: 82, height: 82)
-                    .background(HomeStyle.charcoal.opacity(0.92), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .background {
+                        RoundedRectangle(cornerRadius: 22, style: .continuous).fill(HomeStyle.charcoal.opacity(0.92))
+                            .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
+                    }
                     .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(.white.opacity(0.18)))
-                    .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
                 VStack(alignment: .leading, spacing: 12) {
                     Text(greeting).font(.system(size: 40, weight: .bold, design: .rounded)).foregroundStyle(.white)
                         .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
@@ -59,7 +61,7 @@ struct HomeCover: View {
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(18).help("Change the cover image")
         }
         .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .shadow(color: AppAppearance.shadow, radius: 18, y: 6)
+        .background { RoundedRectangle(cornerRadius: 26, style: .continuous).fill(AppAppearance.surface).shadow(color: AppAppearance.shadow, radius: 18, y: 6) }
         .task(id: coverPath) { image = await CoverImage.load(path: coverPath) }
     }
     private var greeting: String {
@@ -151,7 +153,10 @@ struct BenchCard: View {
             }
             .padding(.horizontal, 22).padding(.vertical, 22)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppAppearance.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background {
+                RoundedRectangle(cornerRadius: 22, style: .continuous).fill(AppAppearance.surface)
+                    .shadow(color: AppAppearance.shadow, radius: hovering ? 18 : 12, y: hovering ? 7 : 4)
+            }
             .background(alignment: .top) {
                 // A second card peeking out behind, like a stack.
                 RoundedRectangle(cornerRadius: 20, style: .continuous).fill(AppAppearance.surface.opacity(0.7))
@@ -159,7 +164,6 @@ struct BenchCard: View {
                     .padding(.horizontal, 18).offset(y: -7).frame(height: 40)
             }
             .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(hovering ? AppAppearance.hairline : AppAppearance.separator))
-            .shadow(color: AppAppearance.shadow, radius: hovering ? 18 : 12, y: hovering ? 7 : 4)
             .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .animation(.easeOut(duration: 0.15), value: hovering)
         }
@@ -187,10 +191,12 @@ struct GradientTile: View {
             Group {
                 if let symbol { Image(systemName: symbol).font(.system(size: size * 0.4, weight: .medium)) }
                 else { Text(initial ?? "?").font(.system(size: size * 0.42, weight: .semibold, design: .rounded)) }
-            }.foregroundStyle(.white).shadow(color: .black.opacity(0.15), radius: 1, y: 1)
+            }.foregroundStyle(.white)
         }
         .frame(width: size, height: size)
-        .shadow(color: tint.opacity(0.35), radius: 8, y: 4)
+        .background {
+            RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).fill(tint).shadow(color: tint.opacity(0.35), radius: 8, y: 4)
+        }
         .accessibilityHidden(true)
     }
 }
@@ -241,8 +247,7 @@ private struct NoteCardShell<Content: View>: View {
             content().frame(maxWidth: .infinity, alignment: .leading).background(NoteStyle.wash)
         }
         .clipShape(RoundedRectangle(cornerRadius: HomeStyle.cardRadius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: HomeStyle.cardRadius, style: .continuous).strokeBorder(AppAppearance.separator))
-        .shadow(color: AppAppearance.shadow, radius: 10, y: 3)
+        .modifier(SoftSurface(radius: HomeStyle.cardRadius))
     }
 }
 

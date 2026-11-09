@@ -12,17 +12,11 @@ struct UsageDashboardView: View {
     @State private var days = 7
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Usage").font(AppAppearance.pageTitle)
-                    Text("Your accounts. Every limit in one place.").font(.caption).foregroundStyle(AppAppearance.secondary)
-                }
-                Spacer()
-                Button { settings = true } label: { Image(systemName: "slider.horizontal.3") }.help("Usage settings")
-                Button { Task { await usage.refresh(force: true) } } label: {
-                    Label(usage.checking ? "Refreshing…" : "Refresh", systemImage: "arrow.clockwise")
-                }.disabled(usage.checking || !usage.enabled)
-            }.padding(Layout.inset)
+            PageHeader(title: "Usage", subtitle: "Your accounts. Every limit in one place.") {
+                PillButton(title: "Settings", symbol: "slider.horizontal.3") { settings = true }.help("Usage settings")
+                PillButton(title: usage.checking ? "Refreshing…" : "Refresh", symbol: "arrow.clockwise") { Task { await usage.refresh(force: true) } }
+                    .disabled(usage.checking || !usage.enabled)
+            }
             HStack(spacing: 12) {
                 HStack(spacing: 3) {
                     tab("Overview", provider: nil)
@@ -30,8 +24,7 @@ struct UsageDashboardView: View {
                 }.padding(3).background(AppAppearance.raised, in: Capsule())
                 Spacer()
                 Text("Account limits · all machines").font(.caption).foregroundStyle(AppAppearance.secondary)
-            }.padding(.horizontal, Layout.inset).padding(.bottom, 12)
-            Divider()
+            }.padding(.horizontal, 30).padding(.bottom, 12)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if let message = usage.message {

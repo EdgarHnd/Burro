@@ -9,6 +9,7 @@ struct HomeView: View {
     @Bindable var store: AppStore
     var notch: NotchController
     @State private var onScreen = false
+    @State private var editingBench: Bench?
 
     var body: some View {
         let summary = store.homeSummary
@@ -19,6 +20,7 @@ struct HomeView: View {
                     HStack(alignment: .top, spacing: 28) {
                         VStack(alignment: .leading, spacing: 30) {
                             quickActions
+                            benches(summary)
                             projects(summary)
                             machines(summary)
                             summaryText(summary)
@@ -35,10 +37,17 @@ struct HomeView: View {
                 .frame(maxWidth: 1240).frame(maxWidth: .infinity)
             }
             .scrollIndicators(.automatic)
+            // Content fades out under the floating dock instead of colliding with it.
+            LinearGradient(colors: [AppAppearance.background.opacity(0), AppAppearance.background.opacity(0.92)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: 96).allowsHitTesting(false)
             HomeDock(store: store, summary: summary, notch: notch).padding(.bottom, 20).padding(.horizontal, 24)
         }
         .background(AppAppearance.background)
         .background(WindowOcclusionReader { onScreen = $0 })
+        .sheet(item: $editingBench) { bench in
+            BenchEditor(bench: bench, benches: store.benches, projects: store.repositoriesFound)
+        }
         // Each task ends when Home is hidden, covered or closed.
         .task(id: onScreen) { if onScreen { await store.health.observe() } }
         .task(id: onScreen) { if onScreen { await store.refreshUsage() } }
@@ -64,21 +73,56 @@ struct HomeView: View {
         }
     }
 
-    @ViewBuilder private func projects(_ summary: HomeSummary) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HomeSectionHeader(title: "Projects") {
-                Button(summary.projects.count > 6 ? "View all \(summary.projects.count)" : "All worktrees") {
-                    store.filter = .all; store.page = .worktrees
+    private func newBench() -> Bench {
+        Bench(id: UUID(), name: "", symbol: Bench.symbols[store.benches.benches.count % Bench.symbols.count],
+              color: store.benches.benches.count % Bench.colors.count, projects: [])
+    }
+
+    @ViewBuilder private func benches(_ summary: HomeSummary) -> some View {
+        if !store.benches.benches.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                HomeSectionHeader(title: "Benches") { Button("New bench") { editingBench = newBench() } }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 16)], spacing: 18) {
+                    ForEach(store.benches.benches) { bench in
+                        let rollup = store.benches.rollup(bench, projects: summary.projects)
+                        BenchCard(title: bench.name, symbol: bench.symbol, tint: bench.tint, counts: rollup.counts,
+                                  quiet: rollup.tokens > 0 ? HomeFormat.tokens(rollup.tokens) + " tokens today"
+                                         : "\(bench.projects.count) project\(bench.projects.count == 1 ? "" : "s") · Quiet",
+                                  help: "Show \(bench.name)'s worktrees") {
+                            store.search = ""; store.filter = .bench(bench.id); store.page = .worktrees
+                        }
+                        .contextMenu {
+                            Button("Edit Bench…") { editingBench = bench }
+                            Button("Delete Bench", role: .destructive) { store.benches.remove(bench.id) }
+                        }
+                    }
                 }
             }
-            if summary.projects.isEmpty {
+        }
+    }
+
+    @ViewBuilder private func projects(_ summary: HomeSummary) -> some View {
+        // With benches, show only the projects that aren't on one.
+        let benched = Set(store.benches.benches.flatMap(\.projects))
+        let loose = summary.projects.filter { !benched.contains($0.id) }
+        if !(loose.isEmpty && !benched.isEmpty) {
+        VStack(alignment: .leading, spacing: 14) {
+            HomeSectionHeader(title: benched.isEmpty ? "Projects" : "Other projects") {
+                HStack(spacing: 14) {
+                    if store.benches.benches.isEmpty { Button("Group into benches") { editingBench = newBench() } }
+                    Button(loose.count > 6 ? "View all \(loose.count)" : "All worktrees") {
+                        store.filter = .all; store.page = .worktrees
+                    }
+                }
+            }
+            if loose.isEmpty && benched.isEmpty {
                 HomeEmptyCard(symbol: "folder.badge.plus", title: store.didScan ? "No projects yet" : "Looking for projects…",
                               detail: "Burro finds repositories in ~/Dev and wherever your agents work.") {
                     Button("Add repository") { store.addRepository() }
                 }
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 16)], spacing: 18) {
-                    ForEach(summary.projects.prefix(6)) { project in
+                    ForEach(loose.prefix(6)) { project in
                         BenchCard(title: project.name, symbol: project.isRepository ? nil : "folder",
                                   tint: HomeStyle.tint(for: project.name), counts: project.counts,
                                   quiet: project.tokensToday > 0 ? HomeFormat.tokens(project.tokensToday) + " tokens today" : "Quiet",
@@ -86,6 +130,7 @@ struct HomeView: View {
                     }
                 }
             }
+        }
         }
     }
 

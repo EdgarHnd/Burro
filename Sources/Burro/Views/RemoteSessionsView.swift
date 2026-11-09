@@ -8,16 +8,9 @@ struct RemoteSessionsView: View {
     @State private var adding: RemoteHost?
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Remote sessions").font(AppAppearance.pageTitle)
-                    Text("Codex and Claude Code across your machines").font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button { Task { await store.refreshRemotes() } } label: { Image(systemName: "arrow.clockwise") }
-                    .disabled(store.checkingRemotes).help("Refresh remote sessions")
-                Button { adding = RemoteHost(name: "", destination: "") } label: { Image(systemName: "plus") }.help("Add remote machine")
-            }.padding(Layout.inset).background(AppAppearance.surface)
+            PageHeader(title: "Remote sessions", subtitle: "Codex and Claude Code across your machines") {
+                PillButton(title: "Add", symbol: "plus") { adding = RemoteHost(name: "", destination: "") }.help("Add remote machine")
+            }
             if store.remoteHosts.isEmpty {
                 AppEmptyState(title: "Connect your other laptop", symbol: "laptopcomputer.and.arrow.down",
                     detail: "Add an SSH address to see its Codex and Claude Code sessions here and in the notch.") {

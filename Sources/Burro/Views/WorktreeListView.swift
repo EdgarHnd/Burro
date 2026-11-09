@@ -7,19 +7,13 @@ struct WorktreeListView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: Layout.inset) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(title).font(AppAppearance.pageTitle)
-                    Spacer()
-                    Text("\(store.visibleWorktrees.count) worktrees").font(.subheadline).foregroundStyle(.secondary)
-                }
-                HStack(spacing: 28) {
-                    metric("Working", value: metricWorktrees.filter(\.isWorking).count, color: AppAppearance.green)
-                    metric("In use", value: metricWorktrees.filter(\.isInUse).count, color: .primary)
-                    metric("Inactive", value: metricWorktrees.filter { !$0.isInUse }.count, color: .secondary)
-                    metric("Ready to remove", value: metricWorktrees.filter { store.cleanupEligibility($0).allowed }.count, color: AppAppearance.green)
-                }
-            }.padding(Layout.inset).frame(maxWidth: .infinity, alignment: .leading).background(AppAppearance.surface)
+            PageHeader(title: title, subtitle: "\(store.visibleWorktrees.count) worktree\(store.visibleWorktrees.count == 1 ? "" : "s")") { EmptyView() }
+            HStack(spacing: 12) {
+                metric("Working", value: metricWorktrees.filter(\.isWorking).count, color: AppAppearance.green)
+                metric("In use", value: metricWorktrees.filter(\.isInUse).count, color: AppAppearance.blue)
+                metric("Inactive", value: metricWorktrees.filter { !$0.isInUse }.count, color: AppAppearance.secondary)
+                metric("Ready to remove", value: metricWorktrees.filter { store.cleanupEligibility($0).allowed }.count, color: AppAppearance.green)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 30).padding(.bottom, 14)
             HStack(spacing: Layout.gap) {
                 Button("Select ready (\(store.readyWorktrees.count))") { store.selectReadyWorktrees() }
                     .disabled(store.readyWorktrees.isEmpty || store.cleaningWorktree)
@@ -33,8 +27,7 @@ struct WorktreeListView: View {
                 }.disabled(store.selectedReadyCount == 0 || store.cleaningWorktree)
                     .help("Move selected ready worktrees to Trash (⌘⌫)")
                     .keyboardShortcut(.delete, modifiers: .command)
-            }.controlSize(.small).padding(.horizontal, Layout.inset).padding(.bottom, Layout.gap).background(AppAppearance.surface)
-            Divider()
+            }.controlSize(.small).padding(.horizontal, 30).padding(.bottom, 12)
             if !store.didScan {
                 skeleton
             } else if store.visibleWorktrees.isEmpty {
@@ -77,8 +70,12 @@ struct WorktreeListView: View {
                         }.help(store.cleanupEligibility(tree).reasons.joined(separator: "\n") + "\n" + tree.facts.integrationSummary)
                     }.width(min: 155, ideal: 190, max: 240)
                 }
+                .tableStyle(.inset(alternatesRowBackgrounds: false))
                 .scrollContentBackground(.hidden)
-                .background(AppAppearance.background)
+                .padding(.vertical, 6)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .modifier(SoftSurface(radius: 16, shadowRadius: 8, y: 2))
+                .padding(.horizontal, 24).padding(.bottom, 8)
                 .tint(AppAppearance.raised)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.cleanupBatch.hiddenPaths)
                 .contextMenu(forSelectionType: String.self) { paths in
@@ -118,13 +115,16 @@ struct WorktreeListView: View {
     private var metricWorktrees: [Worktree] { store.visibleWorktrees }
     private var title: String {
         if case .repository(let path) = store.filter { return URL(fileURLWithPath: path).lastPathComponent }
+        if case .bench(let id) = store.filter { return store.benches.bench(id)?.name ?? "Bench" }
         return store.filter.title
     }
     private func metric(_ label: String, value: Int, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("\(value)").font(AppAppearance.metric).monospacedDigit().foregroundStyle(color)
-            Text(label).font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(value)").font(.system(size: 24, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(color)
+            Text(label).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
         }
+        .padding(.horizontal, 16).padding(.vertical, 10).frame(minWidth: 110, alignment: .leading)
+        .modifier(SoftSurface(radius: 14, shadowRadius: 6, y: 2))
     }
     private var skeleton: some View {
         VStack(spacing: Layout.inset) {

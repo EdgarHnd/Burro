@@ -138,9 +138,7 @@ struct HarnessTable: View {
                         }
                     }
                 }
-                .background(AppAppearance.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(AppAppearance.separator))
-                .shadow(color: AppAppearance.shadow, radius: 8, y: 2)
+                .modifier(SoftSurface(radius: 16, shadowRadius: 8, y: 2))
                 Text("Versions are read on each machine with the tool's own --version; latest releases come from npm. Update runs the tool's own updater after you confirm.")
                     .font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
             }

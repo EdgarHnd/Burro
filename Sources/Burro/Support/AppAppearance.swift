@@ -66,10 +66,45 @@ struct AppCardSurface: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     func body(content: Content) -> some View {
         content
-            .background(AppAppearance.surface.opacity(translucent && !reduceTransparency ? 0.5 : 1),
-                in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(AppAppearance.separator))
-            .shadow(color: AppAppearance.shadow, radius: 10, y: 3)
+            .modifier(SoftSurface(radius: radius, fill: AppAppearance.surface.opacity(translucent && !reduceTransparency ? 0.5 : 1)))
+    }
+}
+
+/// A rounded card background whose shadow is cast by the shape alone. Shadowing the whole view
+/// would make SwiftUI render its text offscreen to find the outline, on every frame it changes.
+struct SoftSurface: ViewModifier {
+    var radius: CGFloat
+    var fill: Color = AppAppearance.surface
+    var shadowRadius: CGFloat = 10
+    var y: CGFloat = 3
+    var stroke: Color = AppAppearance.separator
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: radius, style: .continuous).fill(fill)
+                    .shadow(color: AppAppearance.shadow, radius: shadowRadius, y: y)
+            }
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(stroke))
+    }
+}
+
+/// The shared page header: a large rounded title, an optional subtitle and trailing actions,
+/// sitting on the page background with no divider.
+struct PageHeader<Trailing: View>: View {
+    var title: String
+    var subtitle: String? = nil
+    @ViewBuilder var trailing: () -> Trailing
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.system(size: 28, weight: .bold, design: .rounded)).foregroundStyle(AppAppearance.text)
+                if let subtitle { Text(subtitle).font(.system(size: 13)).foregroundStyle(AppAppearance.secondary) }
+            }
+            Spacer(minLength: 12)
+            trailing()
+        }
+        .padding(.horizontal, 30).padding(.top, 20).padding(.bottom, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

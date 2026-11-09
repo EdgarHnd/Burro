@@ -32,12 +32,12 @@ struct TodayHeader: View {
         .padding(28)
         .background {
             RoundedRectangle(cornerRadius: 22, style: .continuous).fill(AppAppearance.surface)
+                .shadow(color: AppAppearance.shadow, radius: 14, y: 4)
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(LinearGradient(colors: [AppAppearance.blue.opacity(0.07), .clear, HomeStyle.heroWash],
                                      startPoint: .topLeading, endPoint: .bottomTrailing))
         }
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(AppAppearance.separator))
-        .shadow(color: AppAppearance.shadow, radius: 14, y: 4)
     }
     private func stepButton(_ symbol: String, _ label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -71,9 +71,8 @@ struct TodayChatGroup: View {
                         TodayChatRow(row: row) { open(row) }
                     }
                 }
-                .background(AppAppearance.surface, in: RoundedRectangle(cornerRadius: HomeStyle.cardRadius, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: HomeStyle.cardRadius, style: .continuous).strokeBorder(AppAppearance.separator))
-                .shadow(color: AppAppearance.shadow, radius: 8, y: 2)
+                .clipShape(RoundedRectangle(cornerRadius: HomeStyle.cardRadius, style: .continuous))
+                .modifier(SoftSurface(radius: HomeStyle.cardRadius, shadowRadius: 8, y: 2))
             }
         }
     }

@@ -17,6 +17,14 @@ struct SidebarView: View {
                         }.tag(filter)
                     }
                 }
+                if !store.benches.benches.isEmpty {
+                    Section("Benches") {
+                        ForEach(store.benches.benches) { bench in
+                            Label { Text(bench.name).lineLimit(1) } icon: { Image(systemName: bench.symbol).foregroundStyle(bench.tint) }
+                                .tag(WorktreeFilter.bench(bench.id))
+                        }
+                    }
+                }
                 Section("Repositories") {
                     ForEach(store.repositoriesFound, id: \.path) { repository in
                         Label(repository.name, systemImage: "folder").lineLimit(1)
@@ -37,6 +45,6 @@ struct SidebarView: View {
                 }
                 HStack { Spacer(); SettingsLink { Image(systemName: "gearshape") }.buttonStyle(.plain).help("Settings") }
             }.foregroundStyle(.secondary).padding(Layout.inset)
-        }.background(AppAppearance.surface)
+        }.background(AppAppearance.background)
     }
 }

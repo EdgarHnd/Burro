@@ -48,9 +48,13 @@ Use the toolbar's page switcher or **⌘1–⌘5** for Home, Worktrees, Usage, M
 
 ### Home and navigation
 
-The top bar has **Today** and **Home** on the left (with the current page as a breadcrumb), and on the right the **inbox** (badge: chats that need you or have results to read; opens Today), **Worktrees**, **Machines**, **Usage**, **Mac Health** (badge: leftover processes) and **New chat**. ⌘1–⌘6 jump to Home, Today, Worktrees, Machines, Usage and Mac Health.
+The window has its own top bar (drag it to move the window; double-click to zoom), with **Today** and **Home** on the left (with the current page as a breadcrumb), and on the right the **inbox** (badge: chats that need you or have results to read; opens Today), **Worktrees**, **Machines**, **Usage**, **Mac Health** (badge: leftover processes) and **New chat**. ⌘1–⌘6 jump to Home, Today, Worktrees, Machines, Usage and Mac Health.
 
 Home's cover shows your current desktop picture; use the photo button to choose any image or go back to the desktop picture. The chips on it open the matching pages. Below: **Chat**, **Project** and **Machine** quick actions, project and machine cards (gradient tile, live counts or "Quiet"), the plain-language summary, and on the right **To-dos**, the inbox when something needs you, **Notes** (click + or a note to edit; stored on this Mac) and a **Scratchpad** that saves as you type. The dock shows running and attention avatars (click to open the chat), your machines with status dots, the **+** New chat button, and shortcuts.
+
+### Benches
+
+Benches group projects the way you think about them. Choose **Group into benches** (or **New bench** once you have some), name it, pick an icon and colour, and tick its projects. Home then shows your benches with their combined running, needs-you and to-read counts (or today's tokens when they're quiet), and the projects that aren't on a bench below them. Click a bench to see its worktrees; right-click to edit or delete it. Benches also appear in the Worktrees sidebar. A project can sit on more than one bench.
 
 ### Machines
 
