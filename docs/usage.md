@@ -38,9 +38,17 @@ Local Codex log inspection and Claude delegated-worker discovery/lifecycle parsi
 
 Chat navigation uses `codex://threads/<UUID>` and Claude's existing desktop/bridge session IDs. These are navigation-only links: Burro does not send a prompt, import/resume a CLI session, or change remote access settings. Bare Claude CLI sessions without desktop/bridge metadata open their Burro details. Exact Code-session routes were checked against the installed apps; private provider routes can change. See [Claude's URL scheme documentation](https://support.claude.com/en/articles/14729294-open-claude-desktop-with-a-link) for the public deep-link overview.
 
+### Home
+
+The Burro window opens on **Home**. The summary line, chips and cards come from the same live feed as the notch: **running**, **need you** (input requests) and **to read** (unread Done results). Projects are your repositories plus any folder holding an active chat; each card shows live chats, worktree count, folders ready to clean and today's tokens. Machines are this Mac and each remote you added. Click a project for its worktrees, a machine for Mac Health or remote sessions, an inbox row or dock avatar to open that chat (or its Burro details when the provider has no link), and a tile for its page.
+
+"Tokens today" counts local Codex and Claude logs on this Mac since midnight, read by the bundled Rust worker in the background while Home is on screen (at most every 90 seconds). It is an estimate, like the Usage page's local history, and is hidden if the worker is unavailable. Home samples Mac Health only while visible and starts no other polling; worktree inventories refresh on opening Home or Worktrees under the same rules as before.
+
+Use the toolbar's page switcher or **⌘1–⌘5** for Home, Worktrees, Usage, Mac Health and Remote. **⌘R** refreshes the current page. **Settings → Appearance** chooses Match System, Light or Dark; the notch always stays dark.
+
 ### Usage limits
 
-Open **Usage** in the notch for a compact remaining-limit summary, including Claude's separate **Fable weekly** quota when reported. The arrow opens **Usage** in the desktop sidebar. The desktop dashboard has an overview and Codex, Claude, and Grok tabs with account/plan labels, full limit bars, resets, optional linear pace markers, extra-usage balances, quota history, and links to each provider's usage dashboard and status page. Burro connects directly; it never reads, launches, or requires CodexBar.
+Open **Usage** in the notch for a compact remaining-limit summary, including Claude's separate **Fable weekly** quota when reported. The arrow opens the desktop **Usage** page. The desktop dashboard has an overview and Codex, Claude, and Grok tabs with account/plan labels, full limit bars, resets, optional linear pace markers, extra-usage balances, quota history, and links to each provider's usage dashboard and status page. Burro connects directly; it never reads, launches, or requires CodexBar.
 
 **Account selection matters.** Quotas belong to the account shown on the card, across all its machines. Claude Code can be signed into a different account from Claude Desktop, your browser, or CodexBar. Different totals are then expected. Use **Account → Sign in / switch account** to run the provider's official CLI login in Terminal (after confirming that this changes the coding app's selected account), complete browser authentication, then refresh Burro. Burro does not enter credentials or copy another app's token cache. **Choose existing profile** reads an already configured profile folder; **Use default account** restores the default. Custom Claude profiles must contain their own `.credentials.json`; they never fall back to the default Keychain account. No remote credentials are imported.
 
@@ -75,7 +83,7 @@ Remote SQLite reads can use a stable, journal-free checkpoint when read-only WAL
 
 ## Mac Health
 
-**Mac Health** (sidebar, menu bar, or the notch **Mac** tab) shows CPU use and load, memory used and pressure, swap, startup-disk space, thermal state, and your busiest processes. It samples only while one of those views is on screen: system counters every five seconds, the process list every 15 seconds, and disk space every minute. A covered, minimized or hidden window, or a sleeping display, pauses it.
+**Mac Health** (Home's Mac tile, the toolbar, the menu bar, or the notch **Mac** tab) shows CPU use and load, memory used and pressure, swap, startup-disk space, thermal state, and your busiest processes. It samples only while one of those views is on screen: system counters every five seconds, the process list every 15 seconds, and disk space every minute. A covered, minimized or hidden window, or a sleeping display, pauses it.
 
 **Left running** lists things that usually outlived the work that started them:
 

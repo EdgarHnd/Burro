@@ -92,6 +92,11 @@ import BurroCore
         set { worktreeSelection = Set([newValue].compactMap { $0 }) }
     }
     var filter: WorktreeFilter = .all
+    var page: AppPage = .home
+    var appearance: AppearancePreference { didSet { save(); appearance.apply() } }
+    /// Today's tokens per working folder from the Rust history worker; nil until scanned or if unavailable.
+    var projectActivity: ProjectActivity?
+    @ObservationIgnored private var activityScan: Task<Void, Never>?
     var repositories: [String] { didSet { save() } }
     var protectedPaths: Set<String> { didSet { save() } }
     var discover: Bool { didSet { save() } }
@@ -114,6 +119,7 @@ import BurroCore
         PreferencesMigration.migrate(into: defaults, legacy: defaults.persistentDomain(forName: "local.grove.worktrees") ?? [:])
         notchEnabled = defaults.object(forKey: "notchEnabled") as? Bool ?? true
         notchPreferMainDisplay = defaults.bool(forKey: "notchPreferMainDisplay")
+        appearance = AppearancePreference.load(defaults)
         repositories = defaults.stringArray(forKey: "repositories") ?? []
         protectedPaths = Set(defaults.stringArray(forKey: "protectedPaths") ?? [])
         discover = defaults.object(forKey: "discover") as? Bool ?? true
@@ -211,7 +217,7 @@ import BurroCore
     }
     func refreshWorktreesIfDue(now: Date = Date(), trigger: String = "navigation") async {
         guard WorktreeRefreshPolicy.isDue(lastScan: didScan ? snapshot.scannedAt : nil, now: now,
-                                         visible: !visibleDashboards.isEmpty && filter.isWorkspace) else { return }
+                                         visible: !visibleDashboards.isEmpty && page.showsWorktrees) else { return }
         await refresh(incremental: true, trigger: trigger)
     }
     func stop() {
@@ -255,9 +261,73 @@ import BurroCore
     }
     func selectAgent(_ session: AgentSession) {
         search = ""
-        if session.remote != nil { filter = .remote; remoteSelection = session.id; return }
+        if session.remote != nil { page = .remote; remoteSelection = session.id; return }
+        page = .worktrees
         filter = .all
         selection = worktree(for: session)?.path
+    }
+    /// Opens the chat in its provider when a link exists; otherwise shows its details in Burro.
+    func open(_ session: AgentSession) {
+        if let url = session.chatURL, NSWorkspace.shared.open(url) { return }
+        selectAgent(session)
+    }
+    func showProject(_ project: HomeProject) {
+        search = ""
+        page = .worktrees
+        filter = project.isRepository ? .repository(project.id) : .all
+        if !project.isRepository { search = project.name }
+    }
+    /// ⌘R and the dock's refresh: refresh what the current page shows.
+    func refreshCurrentPage() async {
+        switch page {
+        case .usage: await refreshUsage(force: true)
+        case .health: await health.refresh(force: true)
+        case .remote: await refreshRemotes()
+        case .worktrees: await refreshRemotes(); await refresh()
+        case .home:
+            refreshProjectActivity(force: true)
+            await refreshAgents(); await refreshRemotes(); await refresh()
+        }
+    }
+    var refreshingCurrentPage: Bool {
+        switch page {
+        case .usage: checkingUsage
+        case .health: health.refreshing
+        case .remote: checkingRemotes
+        case .home, .worktrees: scanning
+        }
+    }
+    // MARK: Home
+    var homeSummary: HomeSummary {
+        let ready = Set(availableWorktrees.filter { cleanupEligibility($0).allowed }.map(\.path))
+        let providers = usage.enabled ? usage.snapshot.providers : []
+        return HomeSummary.build(sessions: agentActivity.sessions, worktrees: availableWorktrees, readyPaths: ready,
+                                 hosts: homeHosts, activity: projectActivity, usage: providers,
+                                 leftovers: health.report.leftovers.count)
+    }
+    private var homeHosts: [HomeHost] {
+        remoteHosts.map { host in
+            let result = connection(for: host)
+            let connection: HomeMachine.Connection
+            switch result.state {
+            case .disabled: connection = .paused
+            case .notChecked: connection = .connecting
+            case .offline: connection = .offline
+            case .online: connection = result.sampledAt.map { Date().timeIntervalSince($0) > 30 } ?? true ? .stale : .online
+            }
+            return HomeHost(id: host.id, name: host.name, connection: connection, lastSeen: result.sampledAt)
+        }
+    }
+    /// Scans today's local logs in the Rust worker's separate history child, at most every 90 seconds.
+    func refreshProjectActivity(force: Bool = false) {
+        guard activityScan == nil else { return }
+        if !force, let last = projectActivity?.scannedAt, Date().timeIntervalSince(last) < 90 { return }
+        let profiles = usage.preferences.profiles
+        activityScan = Task {
+            let result = await Task.detached(priority: .utility) { ProjectActivityScanner.today(profiles: profiles) }.value
+            if let result { projectActivity = result }
+            activityScan = nil
+        }
     }
     private func worktree(for session: AgentSession) -> Worktree? {
         guard session.remote == nil else { return nil }
@@ -394,6 +464,7 @@ import BurroCore
         if let data = try? JSONEncoder().encode(remoteHosts) { defaults.set(data, forKey: "remoteHosts") }
         defaults.set(notchEnabled, forKey: "notchEnabled")
         defaults.set(notchPreferMainDisplay, forKey: "notchPreferMainDisplay")
+        defaults.set(appearance.rawValue, forKey: AppearancePreference.key)
         defaults.set(repositories, forKey: "repositories")
         defaults.set(Array(protectedPaths), forKey: "protectedPaths")
         defaults.set(discover, forKey: "discover")

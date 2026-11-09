@@ -62,11 +62,11 @@ final class BackgroundRefreshTests: XCTestCase {
         await store.refreshWorktreesIfDue(now: now)
         count = await calls.value(); XCTAssertEqual(count, 1)
         store.snapshot.scannedAt = now.addingTimeInterval(-60)
-        store.filter = .usage
+        store.page = .usage
         await store.refreshWorktreesIfDue(now: now)
         count = await calls.value(); XCTAssertEqual(count, 1)
         store.dashboardVisibilityChanged(ObjectIdentifier(second), false)
-        store.filter = .all
+        store.page = .worktrees
         await store.refreshWorktreesIfDue(now: now)
         count = await calls.value(); XCTAssertEqual(count, 1)
         // An explicit refresh must not inherit the background delay.

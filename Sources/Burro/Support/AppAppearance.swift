@@ -1,18 +1,27 @@
 // Compact desktop styling shared by every Burro surface; no layout or state ownership.
+// Every token resolves per appearance: warm paper in light mode, charcoal in dark mode.
+// The notch panel pins itself to dark, so it keeps its black, camera-housing look.
+import AppKit
 import SwiftUI
 
 enum AppAppearance {
-    static let background = Color(red: 0.105, green: 0.105, blue: 0.10)
-    static let surface = Color(red: 0.155, green: 0.155, blue: 0.15)
-    static let raised = Color(red: 0.205, green: 0.205, blue: 0.20)
-    static let text = Color.white.opacity(0.88)
-    static let secondary = Color.white.opacity(0.58)
-    static let green = Color(red: 0.19, green: 0.79, blue: 0.34)
-    static let lime = Color(red: 0.76, green: 0.90, blue: 0.29)
-    static let amber = Color(red: 1, green: 0.73, blue: 0.05)
-    static let blue = Color(red: 0.40, green: 0.68, blue: 1)
-    static let claude = Color(red: 0.84, green: 0.46, blue: 0.29)
-    static let separator = Color.white.opacity(0.07)
+    typealias RGBA = (Double, Double, Double, Double)
+    static let background = adaptive(light: (0.957, 0.953, 0.941, 1), dark: (0.105, 0.105, 0.10, 1))
+    static let surface = adaptive(light: (1, 1, 1, 1), dark: (0.155, 0.155, 0.15, 1))
+    static let raised = adaptive(light: (0.925, 0.920, 0.905, 1), dark: (0.205, 0.205, 0.20, 1))
+    static let text = adaptive(light: (0.11, 0.11, 0.10, 0.92), dark: (1, 1, 1, 0.88))
+    static let secondary = adaptive(light: (0.11, 0.11, 0.10, 0.56), dark: (1, 1, 1, 0.58))
+    static let tertiary = adaptive(light: (0.11, 0.11, 0.10, 0.36), dark: (1, 1, 1, 0.36))
+    static let green = adaptive(light: (0.10, 0.58, 0.25, 1), dark: (0.19, 0.79, 0.34, 1))
+    static let lime = adaptive(light: (0.42, 0.62, 0.08, 1), dark: (0.76, 0.90, 0.29, 1))
+    static let amber = adaptive(light: (0.80, 0.50, 0.0, 1), dark: (1, 0.73, 0.05, 1))
+    static let blue = adaptive(light: (0.14, 0.45, 0.88, 1), dark: (0.40, 0.68, 1, 1))
+    static let claude = adaptive(light: (0.78, 0.38, 0.20, 1), dark: (0.84, 0.46, 0.29, 1))
+    static let butter = adaptive(light: (0.93, 0.70, 0.12, 1), dark: (1, 0.83, 0.33, 1))
+    static let separator = adaptive(light: (0, 0, 0, 0.08), dark: (1, 1, 1, 0.07))
+    static let hairline = adaptive(light: (0, 0, 0, 0.14), dark: (1, 1, 1, 0.14))
+    static let hover = adaptive(light: (0, 0, 0, 0.035), dark: (1, 1, 1, 0.045))
+    static let shadow = adaptive(light: (0.25, 0.20, 0.10, 0.07), dark: (0, 0, 0, 0))
     static let pageTitle = Font.system(size: 18, weight: .semibold)
     static let sectionTitle = Font.system(size: 13, weight: .semibold)
     static let metric = Font.system(size: 20, weight: .semibold, design: .rounded)
@@ -25,6 +34,30 @@ enum AppAppearance {
         else { colors = [green, lime] }
         return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
     }
+    /// Resolves against the drawing appearance, so one token serves both themes and the dark notch.
+    static func adaptive(light: RGBA, dark: RGBA) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let c = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: c.3)
+        })
+    }
+}
+
+/// The desktop window follows this choice; the notch always stays dark.
+enum AppearancePreference: String, CaseIterable, Identifiable {
+    case system, light, dark
+    static let key = "appearance"
+    var id: String { rawValue }
+    var title: String {
+        switch self { case .system: "Match System"; case .light: "Light"; case .dark: "Dark" }
+    }
+    var nsAppearance: NSAppearance? {
+        switch self { case .system: nil; case .light: NSAppearance(named: .aqua); case .dark: NSAppearance(named: .darkAqua) }
+    }
+    static func load(_ defaults: UserDefaults = .standard) -> Self {
+        defaults.string(forKey: key).flatMap(Self.init(rawValue:)) ?? .system
+    }
+    @MainActor func apply() { NSApp?.appearance = nsAppearance }
 }
 
 struct AppCardSurface: ViewModifier {
@@ -36,6 +69,7 @@ struct AppCardSurface: ViewModifier {
             .background(AppAppearance.surface.opacity(translucent && !reduceTransparency ? 0.5 : 1),
                 in: RoundedRectangle(cornerRadius: radius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(AppAppearance.separator))
+            .shadow(color: AppAppearance.shadow, radius: 10, y: 3)
     }
 }
 
@@ -49,7 +83,7 @@ struct AppButtonStyle: ButtonStyle {
             .foregroundStyle((configuration.role == .destructive ? Color.red : AppAppearance.text).opacity(enabled ? 1 : 0.4))
             .padding(.horizontal, size == .mini ? 8 : 10).padding(.vertical, size == .mini ? 3 : 5)
             .background(AppAppearance.raised.opacity(configuration.isPressed ? 0.65 : 1), in: Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(hovering && enabled ? 0.14 : 0.025)))
+            .overlay(Capsule().strokeBorder(hovering && enabled ? AppAppearance.hairline : AppAppearance.separator))
             .contentShape(Capsule())
             .onHover { hovering = $0 }
     }
@@ -64,8 +98,6 @@ struct AppTheme: ViewModifier {
             .buttonStyle(AppButtonStyle())
             .controlSize(.small)
             .background(AppAppearance.background)
-            .preferredColorScheme(.dark)
-            .environment(\.colorScheme, .dark)
     }
 }
 

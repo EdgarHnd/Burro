@@ -58,6 +58,8 @@ import BurroCore
         let panel = AgentNotchPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Burro — Agents"
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
+        // Shared colour tokens adapt to the app theme; the notch always resolves them as dark.
+        panel.appearance = NSAppearance(named: .darkAqua)
         panel.hidesOnDeactivate = false; panel.isFloatingPanel = true; panel.becomesKeyOnlyIfNeeded = true
         // isFloatingPanel resets the level to floating; apply the overlay level afterwards.
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)

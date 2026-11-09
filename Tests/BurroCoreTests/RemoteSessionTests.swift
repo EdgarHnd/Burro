@@ -158,7 +158,7 @@ final class RemoteSessionTests: XCTestCase {
         let remote = try RemoteAgentMonitor.decode(payload(), host: host, receivedAt: now).sessions[0]
         store.selection = "/same/path"
         store.selectAgent(remote)
-        XCTAssertEqual(store.filter, .remote)
+        XCTAssertEqual(store.page, .remote)
         XCTAssertEqual(store.remoteSelection, remote.id)
         XCTAssertNil(store.selectedRemote) // Not present in the current host feed, never falls back to local data.
     }

@@ -5,6 +5,13 @@ struct SettingsView: View {
     @Bindable var store: AppStore
     var body: some View {
         Form {
+            Section("Appearance") {
+                Picker("Theme", selection: $store.appearance) {
+                    ForEach(AppearancePreference.allCases) { Text($0.title).tag($0) }
+                }.pickerStyle(.segmented)
+                Text("Applies to the Burro window and Settings. The agent notch stays dark so it blends with the camera housing.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Agent notch") {
                 Toggle("Show agent notch", isOn: $store.notchEnabled)
                 Toggle("Prefer the main display", isOn: $store.notchPreferMainDisplay)
@@ -14,7 +21,7 @@ struct SettingsView: View {
             }
             Section("Usage limits") {
                 Toggle("Show usage limits", isOn: $store.usageEnabled)
-                Text("Connects directly to Codex, Claude, and Grok. Open Usage in the sidebar for accounts, refresh settings, history and display controls.")
+                Text("Connects directly to Codex, Claude, and Grok. Open Usage from Home or the toolbar for accounts, refresh settings, history and display controls.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Connect Claude", action: store.connectClaudeUsage).disabled(store.checkingUsage || !store.usageEnabled)
             }

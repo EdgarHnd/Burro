@@ -175,7 +175,7 @@ struct NotchView: View {
                     onEnable: { store.usageEnabled = true }, onConnectClaude: store.connectClaudeUsage, checking: store.checkingUsage)
             }
             else if showingMac {
-                NotchMacView(health: store.health, active: presentation.expanded) { store.filter = .health; onOpenDashboard() }
+                NotchMacView(health: store.health, active: presentation.expanded) { store.page = .health; onOpenDashboard() }
             }
             else if showingHealth && !presentation.navigation.isPreviewing { NotchHealthView(store: store) }
             else if !store.didCheckAgents { loading }
@@ -347,7 +347,7 @@ struct NotchView: View {
                     .help("Apply pending list changes; rows stay still while you interact")
             }
             Button {
-                if showingUsage { store.filter = .usage } else if showingMac { store.filter = .health }
+                store.page = showingUsage ? .usage : (showingMac ? .health : .home)
                 onOpenDashboard()
             } label: { Image(systemName: "arrow.up.right") }
                 .help(dashboardLabel).accessibilityLabel(dashboardLabel)
@@ -355,7 +355,7 @@ struct NotchView: View {
             .padding(.horizontal, 22).frame(height: 37).background(.white.opacity(0.035))
     }
     private var dashboardLabel: String {
-        showingUsage ? "Open usage dashboard in Burro" : (showingMac ? "Open Mac Health in Burro" : "Open worktrees in Burro")
+        showingUsage ? "Open usage dashboard in Burro" : (showingMac ? "Open Mac Health in Burro" : "Open Burro")
     }
     private func count(_ number: Int, _ title: String, _ color: Color) -> some View {
         HStack(spacing: 3) { Text("\(number)").foregroundStyle(color).monospacedDigit(); Text(title).foregroundStyle(.secondary) }

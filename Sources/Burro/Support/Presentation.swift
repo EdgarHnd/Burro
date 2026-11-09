@@ -2,10 +2,35 @@
 import SwiftUI
 import BurroCore
 
+/// Top-level destinations. Home is the landing page; the others open from it, the toolbar or ⌘1–⌘5.
+enum AppPage: String, CaseIterable, Identifiable, Hashable {
+    case home, worktrees, usage, health, remote
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .home: "Home"
+        case .worktrees: "Worktrees"
+        case .usage: "Usage"
+        case .health: "Mac Health"
+        case .remote: "Remote"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .home: "house"
+        case .worktrees: "arrow.triangle.branch"
+        case .usage: "gauge.with.dots.needle.33percent"
+        case .health: NotchPage.mac.symbol
+        case .remote: "network"
+        }
+    }
+    var shortcut: KeyEquivalent { KeyEquivalent(Character(String((Self.allCases.firstIndex(of: self) ?? 0) + 1))) }
+    /// Pages that show worktree facts, so opening them refreshes a stale inventory.
+    var showsWorktrees: Bool { self == .home || self == .worktrees }
+}
+
 enum WorktreeFilter: Hashable {
-    case all, working, inUse, inactive, candidates, cleanup, protected, remote, usage, health, repository(String)
-    /// Usage and Mac Health have their own full-width pages outside the worktree list.
-    var isWorkspace: Bool { self != .usage && self != .health }
+    case all, working, inUse, inactive, candidates, cleanup, protected, repository(String)
     var title: String {
         switch self {
         case .all: "All worktrees"
@@ -15,9 +40,6 @@ enum WorktreeFilter: Hashable {
         case .candidates: "Ready to remove"
         case .cleanup: "Cleanup"
         case .protected: "Protected"
-        case .remote: "Remote sessions"
-        case .usage: "Usage"
-        case .health: "Mac Health"
         case .repository: "Repository"
         }
     }
@@ -30,9 +52,6 @@ enum WorktreeFilter: Hashable {
         case .candidates: "checkmark.circle"
         case .cleanup: "trash"
         case .protected: "lock"
-        case .remote: "network"
-        case .usage: "gauge.with.dots.needle.33percent"
-        case .health: NotchPage.mac.symbol
         }
     }
     func matches(_ tree: Worktree) -> Bool {
@@ -44,7 +63,6 @@ enum WorktreeFilter: Hashable {
         case .candidates: false // Resolved by AppStore with current cleanup evidence.
         case .cleanup: !tree.isInUse && !tree.isPrimary
         case .protected: tree.protectedByUser || tree.isPrimary || tree.isLocked || tree.agents.contains { $0.pinned }
-        case .remote, .usage, .health: false
         case .repository(let path): tree.repositoryPath == path
         }
     }

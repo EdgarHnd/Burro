@@ -12,6 +12,7 @@ Early-stage software. Provider metadata formats are private and may change; Burr
 
 ## What it does
 
+- **Home:** a calm landing page with a one-line summary of what your agents are doing, project and machine cards (running, needs you, ready to read, cleanup and today's tokens), an inbox of chats waiting on you, usage and Mac Health tiles, and a dock of live agents. Click anything to open the chat or the page behind it. Light, dark or match the system.
 - **Agent notch:** hover to expand, pin when needed, and see needs-input, unread Done, and running chats in that order. Background workers stay grouped under their parent when the relationship is known.
 - **Usage dashboard:** compact notch quotas and full desktop controls for Codex, Claude, and Grok. See account/plan labels, model limits (including Fable), resets, pace, history, and local token/cost estimates. Connect directly using coding-app sign-ins; no CodexBar dependency.
 - **Mac Health:** CPU, memory pressure, swap, and disk in the notch and a desktop page, plus processes and simulators left running after their work ended (stuck scripts, idle dev servers, orphaned watchers). Stopping one always asks first.

@@ -33,11 +33,13 @@ public struct LocalUsageCost: Sendable {
 }
 public enum LocalUsageScanner {
     public static func scan(provider: UsageProvider, profile: String? = nil, now: Date = Date(), useRust: Bool = true) -> LocalUsageCost {
+        scan(provider: provider, roots: roots(provider: provider, profile: profile), now: now, worker: useRust ? .usage : nil)
+    }
+    static func roots(provider: UsageProvider, profile: String?) -> [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let folder = profile.map { URL(fileURLWithPath: $0) } ?? home.appendingPathComponent("." + provider.rawValue)
-        let roots = provider == .claude ? [folder.appendingPathComponent("projects")] :
+        return provider == .claude ? [folder.appendingPathComponent("projects")] :
             (provider == .codex ? [folder.appendingPathComponent("sessions"), folder.appendingPathComponent("archived_sessions")] : [folder.appendingPathComponent("sessions")])
-        return scan(provider: provider, roots: roots, now: now, worker: useRust ? .usage : nil)
     }
     static func scan(provider: UsageProvider, roots: [URL], now: Date, worker: AgentLogWorker?) -> LocalUsageCost {
         if let batch = worker?.exchange([], usage: UsageLogRequest(provider: provider, roots: roots, now: now))?.usage {

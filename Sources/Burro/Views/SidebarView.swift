@@ -1,4 +1,4 @@
-// Lightweight native filters expose inactive worktrees without hiding their risks.
+// Worktree filters for the Worktrees page; other destinations live in the page switcher.
 import SwiftUI
 import BurroCore
 
@@ -17,26 +17,6 @@ struct SidebarView: View {
                         }.tag(filter)
                     }
                 }
-                Section("Agents") {
-                    HStack {
-                        Label("Remote sessions", systemImage: "network")
-                        Spacer()
-                        Text("\(store.remoteSessions.count)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
-                    }.tag(WorktreeFilter.remote)
-                }
-                Section("Accounts") {
-                    Label("Usage", systemImage: WorktreeFilter.usage.icon).tag(WorktreeFilter.usage)
-                }
-                Section("This Mac") {
-                    HStack {
-                        Label(WorktreeFilter.health.title, systemImage: WorktreeFilter.health.icon)
-                        Spacer()
-                        if !store.health.report.leftovers.isEmpty {
-                            Text("\(store.health.report.leftovers.count)").font(.caption.monospacedDigit()).foregroundStyle(AppAppearance.amber)
-                                .help("Processes or simulators left running")
-                        }
-                    }.tag(WorktreeFilter.health)
-                }
                 Section("Repositories") {
                     ForEach(store.repositoriesFound, id: \.path) { repository in
                         Label(repository.name, systemImage: "folder").lineLimit(1)
@@ -51,8 +31,10 @@ struct SidebarView: View {
             VStack(alignment: .leading, spacing: Layout.small) {
                 Label(store.remoteHosts.isEmpty ? "Local on this Mac" : "This Mac + \(store.remoteHosts.count) remote", systemImage: "desktopcomputer")
                     .font(.caption.weight(.medium))
-                Text("Refreshes every 30 seconds")
-                    .font(.caption2).foregroundStyle(.secondary)
+                if store.didScan {
+                    Text("Checked \(store.snapshot.scannedAt.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 HStack { Spacer(); SettingsLink { Image(systemName: "gearshape") }.buttonStyle(.plain).help("Settings") }
             }.foregroundStyle(.secondary).padding(Layout.inset)
         }.background(AppAppearance.surface)

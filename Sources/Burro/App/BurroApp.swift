@@ -7,8 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var notchController: NotchController?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        // Match native menus, toolbars and sheets to Burro's shared charcoal surfaces.
-        NSApp.appearance = NSAppearance(named: .darkAqua)
+        // Native menus, toolbars and sheets follow the chosen theme (system by default).
+        AppearancePreference.load().apply()
         // Set the running Dock image directly; Launch Services can retain an older bundle icon.
         if let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") as? String,
            let url = Bundle.main.url(forResource: name, withExtension: "icns"),
@@ -28,12 +28,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DesktopRootView(store: store, notch: notch)
                 .onAppear { delegate.notchController = notch; delegate.store = store }
         }
-        .defaultSize(width: 1240, height: 760)
+        .defaultSize(width: 1240, height: 800)
+        .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(after: .newItem) {
                 Button("Add Repository…") { store.addRepository() }.keyboardShortcut("o", modifiers: [.command, .shift])
-                Button(store.filter == .usage ? "Refresh Usage" : "Refresh Worktrees") { Task { if store.filter == .usage { await store.refreshUsage(force: true) } else { await store.refresh() } } }.keyboardShortcut("r").disabled(store.filter == .usage ? store.checkingUsage : store.scanning)
+                Button("Refresh \(store.page.title)") { Task { await store.refreshCurrentPage() } }
+                    .keyboardShortcut("r").disabled(store.refreshingCurrentPage)
                 Button("Show Agent Notch") { notch.show() }.keyboardShortcut("b", modifiers: [.command, .shift])
+            }
+            CommandMenu("Go") {
+                ForEach(AppPage.allCases) { page in
+                    Button(page.title) { store.page = page; notch.openDashboardWindow() }.keyboardShortcut(page.shortcut)
+                }
             }
         }
         MenuBarExtra {
@@ -70,9 +77,9 @@ struct MonitorMenu: View {
         Divider()
         Button("Show Agent Notch") { notch.show() }
         Toggle("Enable Notch", isOn: $store.notchEnabled)
-        Button("Open Usage") { store.filter = .usage; notch.openDashboardWindow() }
-        Button("Open Mac Health") { store.filter = .health; notch.openDashboardWindow() }
-        Button("Open Burro") { notch.openDashboardWindow() }
+        Button("Open Burro") { store.page = .home; notch.openDashboardWindow() }
+        Button("Open Usage") { store.page = .usage; notch.openDashboardWindow() }
+        Button("Open Mac Health") { store.page = .health; notch.openDashboardWindow() }
         Button("Refresh") { Task { await store.refreshAgents(); await store.refreshRemotes(); await store.refresh() } }.disabled(store.scanning)
         SettingsLink()
         Divider()

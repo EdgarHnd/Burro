@@ -13,6 +13,7 @@ import QuartzCore
     private var working = false
     private var reduceMotion = false
     private var phase: Double = 0
+    private var tint: NSColor = .white
     override var isFlipped: Bool { true }
 
     init() {
@@ -49,12 +50,23 @@ import QuartzCore
         self.working = working
         self.reduceMotion = reduceMotion
         if self.phase != phase { stopAnimating(); self.phase = phase }
+        self.tint = tint
+        applyTint()
+        reconcileAnimation()
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyTint()
+    }
+    /// Resolve adaptive tints against this view (the notch is dark even when the app is light).
+    private func applyTint() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        bodyFill.backgroundColor = tint.cgColor
-        plate.backgroundColor = tint.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            bodyFill.backgroundColor = tint.cgColor
+            plate.backgroundColor = tint.cgColor
+        }
         CATransaction.commit()
-        reconcileAnimation()
     }
 
     override func layout() {
