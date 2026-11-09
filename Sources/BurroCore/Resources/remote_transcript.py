@@ -29,7 +29,7 @@ def summary(name, value):
         except Exception:
             text = value.splitlines()[0] if value else ""
     elif isinstance(value, dict):
-        for key in ("command", "file_path", "path", "pattern", "description", "url", "query", "prompt"):
+        for key in ("command", "file_path", "path", "pattern", "description", "url", "query", "prompt", "id"):
             if isinstance(value.get(key), str):
                 text = value[key]; break
         else:

@@ -25,11 +25,6 @@ struct ChatsView: View {
                 }.padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 12)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
-                        if query.isEmpty {
-                            OrchestratorRow(orchestrator: store.orchestrator, selected: store.remoteSelection == Orchestrator.chatID) {
-                                store.remoteSelection = Orchestrator.chatID
-                            }.padding(.top, 4)
-                        }
                         ForEach(ChatsModel.groups(sessions), id: \.title) { group in
                             Section {
                                 ForEach(group.sessions) { session in
@@ -57,9 +52,7 @@ struct ChatsView: View {
             .frame(width: 380)
             Rectangle().fill(AppAppearance.separator).frame(width: 1)
             Group {
-                if store.remoteSelection == Orchestrator.chatID {
-                    OrchestratorDetail(store: store)
-                } else if let session = store.notchChatSessions.first(where: { $0.id == store.remoteSelection }) {
+                if let session = store.notchChatSessions.first(where: { $0.id == store.remoteSelection }) {
                     ChatDetail(store: store, session: session).id(session.id)
                 } else {
                     AppEmptyState("Pick a chat", symbol: "bubble.left.and.bubble.right",
@@ -69,7 +62,7 @@ struct ChatsView: View {
         }
         .background(AppAppearance.background)
         .onAppear {
-            if store.remoteSelection == nil { store.remoteSelection = sessions.first?.id ?? Orchestrator.chatID }
+            if store.remoteSelection == nil || store.remoteSelection == Orchestrator.chatID { store.remoteSelection = sessions.first?.id }
         }
     }
 }

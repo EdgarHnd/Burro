@@ -124,36 +124,76 @@ private struct MessageRow: View {
     }
 }
 
-/// Prose with inline Markdown, plus fenced code blocks in monospace.
+/// Markdown for chat replies: headings, bullet and numbered lists, paragraphs with inline
+/// styling, and fenced code blocks in monospace. Parsed per render from the message text.
 struct MarkdownBlock: View {
     var text: String
+    var size: CGFloat = 14
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                if segment.code {
-                    Text(segment.text).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(Array(Self.blocks(text).enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .code(let code):
+                    Text(code).font(.system(size: size - 2, design: .monospaced)).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(12)
                         .background(AppAppearance.raised.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                } else {
-                    Text(prose(segment.text)).font(.system(size: 14)).lineSpacing(3).textSelection(.enabled)
+                case .heading(let line, let level):
+                    Text(Self.inline(line)).font(.system(size: level <= 1 ? size + 4 : size + 1, weight: .semibold))
+                        .padding(.top, 4).frame(maxWidth: .infinity, alignment: .leading)
+                case .item(let marker, let line, let depth):
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(marker).font(.system(size: size, weight: .medium)).monospacedDigit().foregroundStyle(AppAppearance.tertiary)
+                            .frame(width: 18, alignment: .trailing)
+                        Text(Self.inline(line)).font(.system(size: size)).lineSpacing(3).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.leading, CGFloat(depth) * 18)
+                case .paragraph(let line):
+                    Text(Self.inline(line)).font(.system(size: size)).lineSpacing(3).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
     }
-    private var segments: [(text: String, code: Bool)] {
-        text.components(separatedBy: "```").enumerated().compactMap { index, part in
+
+    enum Block: Equatable { case code(String), heading(String, Int), item(String, String, Int), paragraph(String) }
+
+    static func blocks(_ text: String) -> [Block] {
+        var blocks: [Block] = []
+        for (index, part) in text.components(separatedBy: "```").enumerated() {
             if index % 2 == 1 {
                 // Drop the language tag on the fence's first line.
                 let lines = part.split(separator: "\n", omittingEmptySubsequences: false)
                 let body = lines.count > 1 && !lines[0].contains(" ") ? lines.dropFirst().joined(separator: "\n") : part
-                return (body.trimmingCharacters(in: .newlines), true)
+                blocks.append(.code(body.trimmingCharacters(in: .newlines)))
+                continue
             }
-            let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : (trimmed, false)
+            var paragraph: [String] = []
+            func flush() {
+                let joined = paragraph.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !joined.isEmpty { blocks.append(.paragraph(joined)) }
+                paragraph = []
+            }
+            for raw in part.components(separatedBy: "\n") {
+                let indent = raw.prefix { $0 == " " || $0 == "\t" }.count
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.isEmpty { flush(); continue }
+                if let match = line.wholeMatch(of: /(#{1,6})\s+(.+)/) {
+                    flush(); blocks.append(.heading(String(match.2), match.1.count)); continue
+                }
+                if let match = line.wholeMatch(of: /[-*•]\s+(.+)/) {
+                    flush(); blocks.append(.item("•", String(match.1), indent / 2)); continue
+                }
+                if let match = line.wholeMatch(of: /(\d{1,3})[.)]\s+(.+)/) {
+                    flush(); blocks.append(.item(match.1 + ".", String(match.2), indent / 2)); continue
+                }
+                paragraph.append(line)
+            }
+            flush()
         }
+        return blocks
     }
-    private func prose(_ text: String) -> AttributedString { Self.inline(text) }
+
     static func inline(_ text: String) -> AttributedString {
         (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
     }

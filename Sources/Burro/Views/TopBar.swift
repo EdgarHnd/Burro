@@ -12,9 +12,11 @@ struct TopBar: View {
     var body: some View {
         HStack(spacing: 4) {
             Color.clear.frame(width: 74, height: 1) // traffic lights
-            TopBarIcon(symbol: "calendar", help: "Today (⌘2)", selected: store.page == .today) { store.page = .today }
-            TopBarIcon(symbol: "house", help: "Home (⌘1)", selected: store.page == .home) { store.page = .home }
-            if store.page != .home && store.page != .today {
+            TopBarIcon(symbol: "calendar", help: AppPage.today.help, selected: store.page == .today) { store.page = .today }
+            TopBarIcon(symbol: "house", help: AppPage.home.help, selected: store.page == .home) { store.page = .home }
+            TopBarIcon(symbol: "sparkles", help: AppPage.orchestrator.help + ": your agents' project manager",
+                       working: store.orchestrator.running, selected: store.page == .orchestrator) { store.page = .orchestrator }
+            if ![.home, .today, .orchestrator].contains(store.page) {
                 Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(AppAppearance.tertiary)
                     .padding(.horizontal, 4)
                 Label(store.page.title, systemImage: store.page.icon)
@@ -22,14 +24,14 @@ struct TopBar: View {
             }
             Spacer(minLength: 16)
             pageTools.padding(.trailing, 10)
-            TopBarIcon(symbol: "bubble.left.and.bubble.right", help: "Chats (⌘3): every conversation, badge = needs you or ready to read",
+            TopBarIcon(symbol: "bubble.left.and.bubble.right", help: AppPage.remote.help + ": every conversation, badge = needs you or ready to read",
                        badge: store.agentActivity.attentionCount, selected: store.page == .remote) { store.page = .remote }
-            TopBarIcon(symbol: "arrow.triangle.branch", help: "Worktrees (⌘4)", selected: store.page == .worktrees) { store.page = .worktrees }
-            TopBarIcon(symbol: "server.rack", help: "Machines (⌘5)", selected: store.page == .machines) { store.page = .machines }
-            TopBarIcon(symbol: "gauge.with.dots.needle.33percent", help: "Usage (⌘6)", selected: store.page == .usage) { store.page = .usage }
-            TopBarIcon(symbol: "heart.text.square", help: "Mac Health (⌘7)", badge: store.health.report.leftovers.count,
+            TopBarIcon(symbol: "arrow.triangle.branch", help: AppPage.worktrees.help, selected: store.page == .worktrees) { store.page = .worktrees }
+            TopBarIcon(symbol: "server.rack", help: AppPage.machines.help, selected: store.page == .machines) { store.page = .machines }
+            TopBarIcon(symbol: "gauge.with.dots.needle.33percent", help: AppPage.usage.help, selected: store.page == .usage) { store.page = .usage }
+            TopBarIcon(symbol: "heart.text.square", help: AppPage.health.help, badge: store.health.report.leftovers.count,
                        badgeColor: AppAppearance.amber, selected: store.page == .health) { store.page = .health }
-            TopBarIcon(symbol: "sparkles", help: "New chat (⌘N)", selected: false) { store.newChatPresented = true }
+            TopBarIcon(symbol: "square.and.pencil", help: "New chat (⌘N)", selected: false) { store.newChatPresented = true }
         }
         .padding(.horizontal, 14)
         .frame(height: 52)
@@ -72,6 +74,8 @@ struct TopBarIcon: View {
     var help: String
     var badge: Int = 0
     var badgeColor: Color = .red
+    /// A small pulsing dot while something runs behind this page.
+    var working = false
     var selected: Bool
     var action: () -> Void
     @State private var hovering = false
@@ -88,6 +92,11 @@ struct TopBarIcon: View {
                         .background(badgeColor, in: Capsule())
                         .overlay(Capsule().strokeBorder(AppAppearance.background, lineWidth: 1.5))
                         .offset(x: 4, y: -1)
+                } else if working {
+                    Circle().fill(OrchestratorStyle.tint).frame(width: 7, height: 7)
+                        .overlay(Circle().strokeBorder(AppAppearance.background, lineWidth: 1.5))
+                        .offset(x: -3, y: 4)
+                        .symbolEffect(.pulse, isActive: true)
                 }
             }
             .contentShape(Circle())

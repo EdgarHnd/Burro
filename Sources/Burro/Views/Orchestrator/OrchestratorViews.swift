@@ -1,5 +1,5 @@
-// The orchestrator in Burro: a card on Home to ask it anything, its pinned row in Chats, and
-// the full conversation with a composer.
+// Shared orchestrator pieces (avatar, composer, suggestion chips) and its Home card. The full
+// conversation lives on its own page (OrchestratorPage.swift).
 import SwiftUI
 import BurroCore
 
@@ -142,91 +142,5 @@ struct HomeOrchestrator: View {
                 .contentShape(Rectangle())
             }.buttonStyle(.plain).help("Open the conversation")
         }
-    }
-}
-
-// MARK: Chats
-
-struct OrchestratorRow: View {
-    var orchestrator: OrchestratorStore
-    var selected: Bool
-    var action: () -> Void
-    @State private var hovering = false
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 11) {
-                OrchestratorAvatar(size: 28, working: orchestrator.running)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Orchestrator").font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.text)
-                    Text(orchestrator.activity ?? orchestrator.lastReply.map(plain) ?? "\(Orchestrator.modelTitle) · sees every chat and machine")
-                        .font(.system(size: 11)).lineLimit(1).foregroundStyle(AppAppearance.tertiary)
-                }
-                Spacer(minLength: 6)
-                if orchestrator.running { ProgressView().controlSize(.mini) }
-            }
-            .padding(.horizontal, 10).padding(.vertical, 9)
-            .background(selected ? AppAppearance.surface : (hovering ? AppAppearance.hover : .clear),
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(selected ? OrchestratorStyle.tint.opacity(0.35) : .clear))
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain).onHover { hovering = $0 }
-    }
-    /// One line of the latest reply without Markdown marks.
-    private func plain(_ text: String) -> String {
-        String(MarkdownBlock.inline(text).characters).replacingOccurrences(of: "\n", with: " ")
-    }
-}
-
-struct OrchestratorDetail: View {
-    @Bindable var store: AppStore
-    var body: some View {
-        let orchestrator = store.orchestrator
-        let messages = orchestrator.messages
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                OrchestratorAvatar(size: 38, working: orchestrator.running)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Orchestrator").font(.system(size: 18, weight: .semibold))
-                    Text("Claude Code · \(Orchestrator.modelTitle) · runs in Burro with your chats, machines, projects and to-dos")
-                        .font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).lineLimit(1)
-                }
-                Spacer()
-                if !messages.isEmpty && !orchestrator.running {
-                    PillButton(title: "New conversation", symbol: "square.and.pencil") { orchestrator.newConversation() }
-                }
-            }
-            .padding(.horizontal, 26).padding(.vertical, 16)
-            Rectangle().fill(AppAppearance.separator).frame(height: 1)
-            Group {
-                if messages.isEmpty {
-                    VStack(spacing: 16) {
-                        OrchestratorAvatar(size: 56)
-                        Text("Your agents' project manager").font(.system(size: 20, weight: .semibold, design: .rounded))
-                        Text("It sees every Codex and Claude chat on your machines, reads them when it needs detail, and can start new chats on this Mac. Ask what needs you, where a project stands, or to get something going.")
-                            .font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).multilineTextAlignment(.center).frame(maxWidth: 460)
-                        SuggestionChips(suggestions: OrchestratorStyle.suggestions(store)) { store.askOrchestrator($0) }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ChatTranscriptView(transcript: ChatTranscript(messages: messages), provider: .claude)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            VStack(alignment: .leading, spacing: 8) {
-                if let activity = orchestrator.activity {
-                    HStack(spacing: 7) {
-                        ProgressView().controlSize(.mini)
-                        Text(activity).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                    }
-                }
-                if let error = orchestrator.error, !orchestrator.running {
-                    Label(error, systemImage: "exclamationmark.bubble").font(.system(size: 12)).foregroundStyle(AppAppearance.amber).lineLimit(4)
-                }
-                OrchestratorComposer(orchestrator: orchestrator)
-            }
-            .frame(maxWidth: 820).frame(maxWidth: .infinity)
-            .padding(.horizontal, 28).padding(.top, 10).padding(.bottom, 18)
-        }
-        .task { await orchestrator.loadHistory() }
     }
 }

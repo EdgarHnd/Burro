@@ -335,7 +335,7 @@ import BurroCore
         switch page {
         case .usage: await refreshUsage(force: true)
         case .health: await health.refresh(force: true)
-        case .remote: await refreshRemotes()
+        case .remote, .orchestrator: await refreshAgents(); await refreshRemotes()
         case .machines: machines.refresh(hosts: remoteHosts, force: true); await refreshRemotes()
         case .worktrees: await refreshRemotes(); await refresh()
         case .home:
@@ -350,7 +350,7 @@ import BurroCore
         switch page {
         case .usage: checkingUsage
         case .health: health.refreshing
-        case .remote: checkingRemotes
+        case .remote, .orchestrator: checkingRemotes
         case .machines: !machines.probing.isEmpty
         case .today: today.scanning
         case .home, .worktrees: scanning

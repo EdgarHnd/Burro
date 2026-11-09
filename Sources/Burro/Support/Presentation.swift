@@ -4,13 +4,14 @@ import BurroCore
 
 /// Top-level destinations. Home is the landing page; the others open from it, the toolbar or ⌘1–⌘5.
 enum AppPage: String, CaseIterable, Identifiable, Hashable {
-    case home, today, worktrees, machines, usage, health, remote
+    case home, orchestrator, today, worktrees, machines, usage, health, remote
     var id: String { rawValue }
-    /// Pages in the top bar and ⌘1–⌘6. Remote sessions open from a machine card.
-    static let navigable: [AppPage] = [.home, .today, .remote, .worktrees, .machines, .usage, .health]
+    /// Pages in the top bar, in ⌘1–⌘8 order.
+    static let navigable: [AppPage] = [.home, .orchestrator, .today, .remote, .worktrees, .machines, .usage, .health]
     var title: String {
         switch self {
         case .home: "Home"
+        case .orchestrator: "Orchestrator"
         case .today: "Today"
         case .machines: "Machines"
         case .worktrees: "Worktrees"
@@ -22,6 +23,7 @@ enum AppPage: String, CaseIterable, Identifiable, Hashable {
     var icon: String {
         switch self {
         case .home: "house"
+        case .orchestrator: "sparkles"
         case .today: "calendar"
         case .machines: "server.rack"
         case .worktrees: "arrow.triangle.branch"
@@ -31,6 +33,8 @@ enum AppPage: String, CaseIterable, Identifiable, Hashable {
         }
     }
     var shortcut: KeyEquivalent { KeyEquivalent(Character(String((Self.navigable.firstIndex(of: self) ?? 8) + 1))) }
+    /// "Title (⌘n)" for tooltips, from the real shortcut.
+    var help: String { "\(title) (⌘\(shortcut.character))" }
     /// Pages that show worktree facts, so opening them refreshes a stale inventory.
     var showsWorktrees: Bool { self == .home || self == .today || self == .worktrees }
 }

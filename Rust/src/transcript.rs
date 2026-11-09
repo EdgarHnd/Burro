@@ -90,7 +90,7 @@ fn summary(name: &str, input: &Value) -> String {
                 _ => String::new(),
             }))
             .unwrap_or_else(|| s.lines().next().unwrap_or_default().to_owned()),
-        _ => field(&["command", "file_path", "path", "pattern", "description", "url", "query", "prompt"])
+        _ => field(&["command", "file_path", "path", "pattern", "description", "url", "query", "prompt", "id"])
             .unwrap_or_else(|| name.to_owned()),
     };
     clip(text.lines().next().unwrap_or_default().trim(), MAX_TOOL)

@@ -12,6 +12,7 @@ struct ContentView: View {
             Group {
                 switch store.page {
                 case .home: HomeView(store: store, notch: notch)
+                case .orchestrator: OrchestratorPage(store: store)
                 case .today: TodayView(store: store)
                 case .worktrees: worktrees
                 case .machines: MachinesView(store: store)

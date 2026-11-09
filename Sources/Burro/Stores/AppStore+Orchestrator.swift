@@ -46,5 +46,5 @@ extension AppStore {
     }
 
     func askOrchestrator(_ text: String) { orchestrator.send(text) }
-    func showOrchestrator() { page = .remote; remoteSelection = Orchestrator.chatID }
+    func showOrchestrator() { page = .orchestrator }
 }

@@ -315,13 +315,19 @@ struct HomeScratchpadCard: View {
     var body: some View {
         NoteCardShell(title: "Scratchpad", symbol: "doc", count: nil, add: nil) {
             ZStack(alignment: .topLeading) {
+                // Grows with the text (about 42 characters a line at this width), then scrolls.
                 TextEditor(text: $notes.scratchpad).font(.system(size: 13)).scrollContentBackground(.hidden)
-                    .padding(.horizontal, 11).padding(.vertical, 10).frame(minHeight: 120)
+                    .padding(.horizontal, 11).padding(.vertical, 10).frame(height: height)
                 if notes.scratchpad.isEmpty {
                     Text("Scratch pad. Anything that doesn't deserve a to-do yet.").font(.system(size: 13))
                         .foregroundStyle(AppAppearance.tertiary).padding(.horizontal, 16).padding(.vertical, 10).allowsHitTesting(false)
                 }
             }
         }
+    }
+    private var height: CGFloat {
+        let lines = notes.scratchpad.split(separator: "\n", omittingEmptySubsequences: false)
+            .reduce(0) { $0 + max(1, ($1.count + 41) / 42) }
+        return min(320, max(120, CGFloat(lines) * 18 + 28))
     }
 }

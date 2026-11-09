@@ -40,6 +40,12 @@ import BurroCore
         if !streaming.isEmpty { all.append(ChatMessage(id: 0, kind: .assistant, text: streaming)) }
         return all.enumerated().map { index, message in var copy = message; copy.id = index; return copy }
     }
+    /// Chats it started this conversation, from its start_chat results.
+    var startedChatIDs: [String] {
+        messages.filter { $0.kind == .tool && $0.tool == "start_chat" }.compactMap { message in
+            message.output?.firstMatch(of: /(?:claude|codex):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/).map { String($0.0) }
+        }
+    }
     var lastReply: String? { (streaming.isEmpty ? nil : streaming) ?? messages.last { $0.kind == .assistant }?.text }
     var lastQuestion: String? { messages.last { $0.kind == .user }?.text }
     /// What the orchestrator is doing right now, for the Home card.
