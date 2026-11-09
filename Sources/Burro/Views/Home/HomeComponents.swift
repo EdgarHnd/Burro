@@ -392,55 +392,73 @@ struct HomeMacTile: View {
 
 // MARK: Dock
 
-/// Floating strip of live agents (click to open the chat) plus a few global actions.
+/// Floating strip of live agents (click to open the chat), machines, New chat and a few tools.
 struct HomeDock: View {
     var store: AppStore
     var summary: HomeSummary
     var notch: NotchController
     var body: some View {
         HStack(spacing: 10) {
-            HStack(spacing: 12) {
-                if agents.isEmpty {
+            HStack(spacing: 14) {
+                if summary.running.isEmpty && summary.needsYou.isEmpty && summary.unread.isEmpty {
                     BurroMark(active: false, working: false, tint: AppAppearance.tertiary).frame(width: 18, height: 18)
                     Text(store.didCheckAgents ? "No agents running" : "Checking…").font(.system(size: 12, weight: .medium))
                         .foregroundStyle(AppAppearance.secondary)
                 } else {
-                    group(summary.needsYou, color: AppAppearance.amber, symbol: "hand.raised.fill", label: "Needs you")
-                    group(summary.running, color: AppAppearance.green, symbol: "waveform.path", label: "Running")
-                    group(summary.unread, color: AppAppearance.blue, symbol: "checkmark.circle.fill", label: "Ready to read")
+                    group(summary.running, symbol: "arrow.triangle.2.circlepath", color: AppAppearance.green, label: "Running")
+                    group(summary.needsYou + summary.unread, symbol: "exclamationmark.bubble", color: AppAppearance.amber, label: "Needs you")
                 }
             }
-            .padding(.horizontal, 14).frame(height: 44)
+            .padding(.horizontal, 14).frame(height: 48)
             .modifier(FloatingSurface())
+            Spacer(minLength: 0)
+            HStack(spacing: 4) {
+                ForEach(summary.machines) { machine in
+                    Button { store.page = machine.connection == .local ? .health : .machines } label: {
+                        ZStack(alignment: .bottomTrailing) {
+                            Image(systemName: machine.connection == .local ? "laptopcomputer" : "desktopcomputer")
+                                .font(.system(size: 14, weight: .medium)).frame(width: 34, height: 34)
+                            Circle().fill(machine.connection == .local || machine.connection == .online ? AppAppearance.green : AppAppearance.tertiary)
+                                .frame(width: 7, height: 7).overlay(Circle().strokeBorder(AppAppearance.surface, lineWidth: 1.5)).offset(x: -5, y: -6)
+                        }
+                    }.buttonStyle(HomeDockButtonStyle()).help("\(machine.name): \(machine.counts.running) running")
+                }
+            }
+            .padding(.horizontal, 6).frame(height: 48)
+            .modifier(FloatingSurface())
+            Button { store.newChatPresented = true } label: {
+                Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 48, height: 48).background(Color(white: 0.12), in: Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.12)))
+                    .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+            }.buttonStyle(PressableStyle()).help("New chat (⌘N)").accessibilityLabel("New chat")
             HStack(spacing: 2) {
-                action("plus", "New chat (⌘N)") { store.newChatPresented = true }
                 action("rectangle.topthird.inset.filled", "Show agent notch (⇧⌘B)") { notch.show() }
-                action("folder.badge.plus", "Add repository") { store.addRepository() }
+                action("calendar", "Today (⌘2)") { store.page = .today }
                 action("arrow.clockwise", "Refresh everything") { Task { await store.refreshCurrentPage() } }
-                SettingsLink { Image(systemName: "gearshape").frame(width: 34, height: 34).contentShape(Rectangle()) }
+                SettingsLink { Image(systemName: "slider.horizontal.3").frame(width: 34, height: 34).contentShape(Rectangle()) }
                     .buttonStyle(HomeDockButtonStyle()).help("Settings")
             }
-            .padding(.horizontal, 5).frame(height: 44)
+            .padding(.horizontal, 6).frame(height: 48)
             .modifier(FloatingSurface())
         }
     }
-    private var agents: [AgentSession] { summary.needsYou + summary.running + summary.unread }
-    @ViewBuilder private func group(_ sessions: [AgentSession], color: Color, symbol: String, label: String) -> some View {
+    @ViewBuilder private func group(_ sessions: [AgentSession], symbol: String, color: Color, label: String) -> some View {
         if !sessions.isEmpty {
-            HStack(spacing: 6) {
-                Image(systemName: symbol).font(.system(size: 10, weight: .semibold)).foregroundStyle(color)
+            HStack(spacing: 8) {
+                Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).foregroundStyle(color)
                     .help("\(sessions.count) \(label.lowercased())")
-                HStack(spacing: -6) {
-                    ForEach(sessions.prefix(5)) { session in
+                HStack(spacing: -7) {
+                    ForEach(sessions.prefix(6)) { session in
                         Button { store.open(session) } label: {
-                            AgentAvatar(session: session, active: true, working: session.state == .working, size: 24)
-                                .padding(2)
-                                .background(AppAppearance.surface, in: Circle())
+                            AgentAvatar(session: session, active: true, working: session.state == .working, size: 26)
+                                .padding(2).background(AppAppearance.surface, in: Circle())
+                                .overlay(Circle().strokeBorder(AppAppearance.separator))
                         }.buttonStyle(.plain).help("\(label): \(session.title)")
                     }
                 }
-                if sessions.count > 5 {
-                    Text("+\(sessions.count - 5)").font(.system(size: 11, weight: .semibold)).monospacedDigit().foregroundStyle(AppAppearance.secondary)
+                if sessions.count > 6 {
+                    Text("+\(sessions.count - 6)").font(.system(size: 11, weight: .semibold)).monospacedDigit().foregroundStyle(AppAppearance.secondary)
                 }
             }
         }

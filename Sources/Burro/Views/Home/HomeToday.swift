@@ -12,13 +12,12 @@ struct HomeTodayCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Today").font(.system(size: 13, weight: .semibold))
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "checklist").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 30, height: 30).background(AppAppearance.blue, in: Circle())
+                Text("To-dos").font(.system(size: 16, weight: .semibold)).foregroundStyle(AppAppearance.blue)
                 Spacer()
-                if todos.openCount > 0 {
-                    Text("\(todos.openCount) left").font(.system(size: 11, weight: .medium)).monospacedDigit()
-                        .foregroundStyle(AppAppearance.tertiary)
-                }
+                Text("\(todos.openCount)").font(.system(size: 24, weight: .semibold, design: .rounded)).monospacedDigit()
             }
             VStack(alignment: .leading, spacing: 1) {
                 ForEach(todos.items) { item in row(item) }

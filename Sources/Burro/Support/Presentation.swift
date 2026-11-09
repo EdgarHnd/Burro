@@ -4,12 +4,15 @@ import BurroCore
 
 /// Top-level destinations. Home is the landing page; the others open from it, the toolbar or ⌘1–⌘5.
 enum AppPage: String, CaseIterable, Identifiable, Hashable {
-    case home, today, worktrees, usage, health, remote
+    case home, today, worktrees, machines, usage, health, remote
     var id: String { rawValue }
+    /// Pages in the top bar and ⌘1–⌘6. Remote sessions open from a machine card.
+    static let navigable: [AppPage] = [.home, .today, .worktrees, .machines, .usage, .health]
     var title: String {
         switch self {
         case .home: "Home"
         case .today: "Today"
+        case .machines: "Machines"
         case .worktrees: "Worktrees"
         case .usage: "Usage"
         case .health: "Mac Health"
@@ -20,13 +23,14 @@ enum AppPage: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .home: "house"
         case .today: "calendar"
+        case .machines: "server.rack"
         case .worktrees: "arrow.triangle.branch"
         case .usage: "gauge.with.dots.needle.33percent"
         case .health: NotchPage.mac.symbol
         case .remote: "network"
         }
     }
-    var shortcut: KeyEquivalent { KeyEquivalent(Character(String((Self.allCases.firstIndex(of: self) ?? 0) + 1))) }
+    var shortcut: KeyEquivalent { KeyEquivalent(Character(String((Self.navigable.firstIndex(of: self) ?? 8) + 1))) }
     /// Pages that show worktree facts, so opening them refreshes a stale inventory.
     var showsWorktrees: Bool { self == .home || self == .today || self == .worktrees }
 }

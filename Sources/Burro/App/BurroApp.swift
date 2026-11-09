@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 @main struct BurroApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @State private var store = AppStore(todos: TodoStore())
+    @State private var store = AppStore(todos: TodoStore(), notes: NotesStore())
     @State private var notch = NotchController()
     var body: some Scene {
         WindowGroup("Burro", id: "main") {
@@ -40,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Button("Show Agent Notch") { notch.show() }.keyboardShortcut("b", modifiers: [.command, .shift])
             }
             CommandMenu("Go") {
-                ForEach(AppPage.allCases) { page in
+                ForEach(AppPage.navigable) { page in
                     Button(page.title) { store.page = page; notch.openDashboardWindow() }.keyboardShortcut(page.shortcut)
                 }
             }

@@ -46,6 +46,18 @@ The Burro window opens on **Home**. The summary line, chips and cards come from 
 
 Use the toolbar's page switcher or **⌘1–⌘5** for Home, Worktrees, Usage, Mac Health and Remote. **⌘R** refreshes the current page. **Settings → Appearance** chooses Match System, Light or Dark; the notch always stays dark.
 
+### Home and navigation
+
+The top bar has **Today** and **Home** on the left (with the current page as a breadcrumb), and on the right the **inbox** (badge: chats that need you or have results to read; opens Today), **Worktrees**, **Machines**, **Usage**, **Mac Health** (badge: leftover processes) and **New chat**. ⌘1–⌘6 jump to Home, Today, Worktrees, Machines, Usage and Mac Health.
+
+Home's cover shows your current desktop picture; use the photo button to choose any image or go back to the desktop picture. The chips on it open the matching pages. Below: **Chat**, **Project** and **Machine** quick actions, project and machine cards (gradient tile, live counts or "Quiet"), the plain-language summary, and on the right **To-dos**, the inbox when something needs you, **Notes** (click + or a note to edit; stored on this Mac) and a **Scratchpad** that saves as you type. The dock shows running and attention avatars (click to open the chat), your machines with status dots, the **+** New chat button, and shortcuts.
+
+### Machines
+
+**Machines** lists this Mac, every SSH machine you added, and every device on your Tailscale network (if Tailscale is installed). Cards show the OS, presence, running agents, project folders and a **Software** list. Tailscale devices you haven't added get **Add over SSH**, which opens the remote-machine form prefilled with the device's tailnet name; SSH machines link to their **Sessions**.
+
+**Harnesses** compares agent tool versions across machines: each cell shows the installed version (green = latest, amber = older, grey = not installed) and the latest release from npm next to the tool's name. **Update** asks first, then runs the tool's own updater on that machine (`claude update`, `codex update`, `cursor-agent update`, `opencode upgrade`); chats that are already running keep the version they started with. Versions are re-read at most every ten minutes per machine and npm at most every six hours, only while the page is open.
+
 ### Today page
 
 **⌘2** (or **Today** in the toolbar) shows one day. The header has a live clock and a day stepper; past days are read once and kept until you quit.

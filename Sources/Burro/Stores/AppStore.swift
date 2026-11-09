@@ -99,6 +99,8 @@ import BurroCore
     @ObservationIgnored private var activityScan: Task<Void, Never>?
     let todos: TodoStore
     let today = TodayStore()
+    let machines = MachinesStore()
+    let notes: NotesStore
     // New chat launcher
     var newChatPresented = false
     var codexModels: [LaunchModel] = []
@@ -116,11 +118,13 @@ import BurroCore
 
     /// The app passes a persistent, synced `TodoStore`; tests get a throwaway local one.
     init(defaults: UserDefaults = .standard, cleanupBatch: CleanupBatchStore? = nil, todos: TodoStore? = nil,
-         scan: @escaping Scan = { await Scanner().scan($0) }) {
+         notes: NotesStore? = nil, scan: @escaping Scan = { await Scanner().scan($0) }) {
         self.defaults = defaults
         self.scan = scan
         self.todos = todos ?? TodoStore(cacheURL: FileManager.default.temporaryDirectory
             .appendingPathComponent("burro-todos-\(UUID().uuidString).json"), config: nil)
+        // The app passes its real notes store; tests and previews get a throwaway folder.
+        self.notes = notes ?? NotesStore(folder: FileManager.default.temporaryDirectory.appendingPathComponent("burro-notes-\(UUID().uuidString)"))
         self.cleanupBatch = cleanupBatch ?? CleanupBatchStore()
         usage = UsageStore(defaults: defaults)
         health = MacHealthStore(defaults: defaults)
@@ -292,6 +296,7 @@ import BurroCore
         case .usage: await refreshUsage(force: true)
         case .health: await health.refresh(force: true)
         case .remote: await refreshRemotes()
+        case .machines: machines.refresh(hosts: remoteHosts, force: true); await refreshRemotes()
         case .worktrees: await refreshRemotes(); await refresh()
         case .home:
             refreshProjectActivity(force: true)
@@ -306,6 +311,7 @@ import BurroCore
         case .usage: checkingUsage
         case .health: health.refreshing
         case .remote: checkingRemotes
+        case .machines: !machines.probing.isEmpty
         case .today: today.scanning
         case .home, .worktrees: scanning
         }
