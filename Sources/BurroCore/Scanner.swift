@@ -3,6 +3,7 @@ import Foundation
 
 public struct Scanner: Sendable {
     public init() {}
+    public static func incrementalStatistics() -> (hits: Int, misses: Int) { GitFactsCache.shared.statistics() }
     public func scan(_ configuration: ScanConfiguration) async -> ScanSnapshot {
         let start = Date(), runner = CommandRunner(), git = GitReader()
         let processes = ProcessReader.snapshot()
@@ -15,6 +16,7 @@ public struct Scanner: Sendable {
         }
         var groups: [(path: String, records: [WorktreeRecord], base: String?)] = []
         var seen: Set<String> = [], warnings = processes.warnings + agents.warnings
+        var watches: [String: [String]] = [:]
         for path in Set(candidates.map(Paths.canonical)).sorted() {
             guard FileManager.default.fileExists(atPath: path) else {
                 if configuration.repositories.contains(path) { warnings.append("Repository is unavailable: \(path)") }
@@ -30,12 +32,26 @@ public struct Scanner: Sendable {
             let listing = runner.git(path, ["worktree", "list", "--porcelain", "-z"])
             guard listing.succeeded else { warnings.append("Cannot list worktrees: \(path)"); continue }
             let records = GitParser.worktrees(listing.output)
+            for record in records where !record.bare { watches[record.path] = [record.path, identity] }
             guard let first = records.first else { continue }
             let repository = first.path
             let base = git.comparisonBase(path, override: configuration.baseOverrides[repository])
             groups.append((repository, records, base))
         }
         let roots = groups.flatMap { $0.records.map(\.path) }
+        if configuration.incremental {
+            GitFactsCache.shared.prepare(watches: watches, globals: [configuration.home + "/.gitconfig",
+                configuration.home + "/.config/git", "/etc/gitconfig"])
+        } else { GitFactsCache.shared.invalidate() }
+        // Resolve each session/process owner once for the entire scan.
+        var sessionsByPath: [String: [AgentSession]] = [:]
+        for session in agents.sessions {
+            for path in Set(([session.cwd] + session.attachedPaths).compactMap { Paths.owner(of: $0, in: roots) }) {
+                sessionsByPath[path, default: []].append(session)
+            }
+        }
+        let processesByPath = Dictionary(grouping: processes.processes.filter { !$0.cwd.isEmpty }, by: { Paths.owner(of: $0.cwd, in: roots) ?? "" })
+        let indexedSessions = sessionsByPath
         let coverageWarnings = Array(Set(agents.warnings + processes.warnings)).sorted()
         let jobs = groups.flatMap { group in group.records.enumerated().filter { !$0.element.bare }.map { (group.path, group.base, $0.offset == 0, $0.element) } }
         var worktrees: [Worktree] = []
@@ -45,14 +61,12 @@ public struct Scanner: Sendable {
             func enqueue(_ job: (String, String?, Bool, WorktreeRecord)) {
                 tasks.addTask {
                     let (repository, base, primary, record) = job
-                    let matched = agents.sessions.filter { session in
-                        Paths.owner(of: session.cwd, in: roots) == record.path || session.attachedPaths.contains { Paths.owner(of: $0, in: roots) == record.path }
-                    }.sorted { lhs, rhs in
+                    let matched = (indexedSessions[record.path] ?? []).sorted { lhs, rhs in
                         if lhs.state.keepsWorktree != rhs.state.keepsWorktree { return lhs.state.keepsWorktree }
                         return lhs.updatedAt > rhs.updatedAt
                     }
-                    let local = processes.processes.filter { !$0.cwd.isEmpty && Paths.owner(of: $0.cwd, in: roots) == record.path }
-                    let facts = git.facts(record, base: base)
+                    let local = processesByPath[record.path] ?? []
+                    let facts = configuration.incremental ? GitFactsCache.shared.facts(record, base: base) { git.facts(record, base: base) } : git.facts(record, base: base)
                     let protected = configuration.protectedPaths.contains(record.path)
                     let missing = !FileManager.default.fileExists(atPath: record.path)
                     let assessment = SafetyPolicy.assess(primary: primary, locked: record.locked, missing: missing,

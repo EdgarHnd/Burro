@@ -82,6 +82,95 @@ final class AgentLogWorkerTests: XCTestCase {
         XCTAssertEqual(missing.state(held: 0, now: Date()), .unknown)
     }
 
+    func testClaudeCompletionRequestPreservesCodexCache() throws {
+        let folder = try fixture(), file = folder.appendingPathComponent("session.jsonl")
+        try event("task_started").write(to: file, atomically: true, encoding: .utf8)
+        let worker = AgentLogWorker(executable: try executable()); defer { worker.stop() }
+        XCTAssertEqual(try XCTUnwrap(worker.exchange([file.path])).reads, 1)
+        XCTAssertNotNil(worker.exchange([], completed: folder.path)?.completed)
+        let warm = try XCTUnwrap(worker.exchange([file.path]))
+        XCTAssertEqual(warm.reads, 0); XCTAssertEqual(warm.cacheHits, 1)
+    }
+
+    func testRustCatalogMatchesSwiftAndInvalidatesWALWritesAndRestart() throws {
+        let folder = try fixture(), database = folder.appendingPathComponent("state.sqlite")
+        let runner = CommandRunner()
+        func sql(_ query: String) throws {
+            let result = runner.run("/usr/bin/sqlite3", [database.path, query])
+            XCTAssertTrue(result.succeeded, result.error)
+        }
+        try sql("PRAGMA journal_mode=WAL; CREATE TABLE threads(id TEXT,cwd TEXT,title TEXT,updated_at INTEGER,rollout_path TEXT,archived INTEGER,name TEXT,source TEXT,is_pinned INTEGER); INSERT INTO threads VALUES ('id','/tmp','Chat',100,'/tmp/log',0,'Renamed','subagent',1); CREATE TABLE project_roots(path TEXT); INSERT INTO project_roots VALUES('/project'); CREATE TABLE thread_attachments(thread_id TEXT, identity_key TEXT, payload TEXT, attachment_type TEXT); INSERT INTO thread_attachments VALUES('id','/tree','{\"root\":\"/tree\"}','worktree');")
+        let worker = AgentLogWorker(executable: try executable()); defer { worker.stop() }
+        XCTAssertEqual(try XCTUnwrap(worker.readCatalog(database.path)), try CodexCatalog.swiftRead(database.path))
+        XCTAssertEqual(try XCTUnwrap(worker.readCatalog(database.path)), try CodexCatalog.swiftRead(database.path))
+        let first = try XCTUnwrap(worker.exchange([], catalog: .init(path: database.path, revision: nil))?.catalog)
+        let unchanged = try XCTUnwrap(worker.exchange([], catalog: .init(path: database.path, revision: first.revision))?.catalog)
+        XCTAssertFalse(unchanged.queried); XCTAssertNil(unchanged.snapshot)
+        try sql("UPDATE threads SET title='Changed', name=NULL, is_pinned=0; DELETE FROM thread_attachments; INSERT INTO threads VALUES ('new','/tmp','New',101,'/tmp/new',0,NULL,NULL,0);")
+        XCTAssertEqual(try XCTUnwrap(worker.readCatalog(database.path)), try CodexCatalog.swiftRead(database.path))
+        try sql("UPDATE threads SET archived=1 WHERE id='id'; UPDATE threads SET updated_at=102,title='Latest' WHERE id='new'")
+        XCTAssertEqual(try XCTUnwrap(worker.readCatalog(database.path)), try CodexCatalog.swiftRead(database.path))
+        worker.stop()
+        XCTAssertEqual(try XCTUnwrap(worker.readCatalog(database.path)), try CodexCatalog.swiftRead(database.path))
+        try sql("UPDATE threads SET archived=1")
+        XCTAssertEqual(try XCTUnwrap(worker.readCatalog(database.path)).threads.count, 0)
+        try FileManager.default.removeItem(at: database)
+        XCTAssertNil(worker.readCatalog(database.path))
+    }
+
+    func testCatalogDeltaPreservesOrderAndRejectsIncompleteOrDuplicateRows() {
+        let previous = CodexCatalog(threads: [["id": "one", "title": "Old"], ["id": "two", "title": "Kept"]], roots: [], attachments: [])
+        func delta(_ threads: [[String: String]], _ order: [String]) -> CodexCatalogDelta {
+            .init(baseRevision: 1, threads: threads, order: order, roots: ["/new"], attachments: [])
+        }
+        let changed = ["id": "three", "title": "New"]
+        let result = delta([changed], ["three", "two"]).applying(to: previous)
+        XCTAssertEqual(result?.threads, [changed, previous.threads[1]])
+        XCTAssertEqual(result?.roots, ["/new"])
+        XCTAssertEqual(delta([], []).applying(to: previous)?.threads, [])
+        XCTAssertNil(delta([], ["missing"]).applying(to: previous))
+        XCTAssertNil(delta([], ["one", "one"]).applying(to: previous))
+        XCTAssertNil(delta([changed, changed], ["three", "two"]).applying(to: previous))
+        XCTAssertNil(delta([changed], ["one", "two"]).applying(to: previous))
+    }
+
+    func testCatalogBeyondTransportLimitFallsBackWithoutDroppingChats() throws {
+        let folder = try fixture(), database = folder.appendingPathComponent("state.sqlite")
+        let result = CommandRunner().run("/usr/bin/sqlite3", [database.path,
+            "CREATE TABLE threads(id TEXT,cwd TEXT,title TEXT,updated_at INTEGER,rollout_path TEXT,archived INTEGER); INSERT INTO threads VALUES('id','/tmp',printf('%.*c',6500000,'x'),1,'/tmp/log',0);"])
+        XCTAssertTrue(result.succeeded)
+        let worker = AgentLogWorker(executable: try executable()); defer { worker.stop() }
+        XCTAssertNil(worker.readCatalog(database.path))
+        XCTAssertEqual(try CodexCatalog.swiftRead(database.path).threads.count, 1)
+    }
+
+    func testLiveCatalogScopeAndFullCleanupCatalogStaySeparate() throws {
+        let folder = try fixture(), codex = folder.appendingPathComponent(".codex"), database = codex.appendingPathComponent("state_1.sqlite")
+        try FileManager.default.createDirectory(at: codex.appendingPathComponent("thread-writer-locks"), withIntermediateDirectories: true)
+        let parent = "11111111-1111-4111-8111-111111111111", child = "22222222-2222-4222-8222-222222222222"
+        let now = Date(), today = Int(now.timeIntervalSince1970)
+        let source = "{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"\(parent)\"}}}"
+        let result = CommandRunner().run("/usr/bin/sqlite3", [database.path,
+            "CREATE TABLE threads(id TEXT,cwd TEXT,title TEXT,updated_at INTEGER,rollout_path TEXT,archived INTEGER,is_pinned INTEGER,source TEXT); INSERT INTO threads VALUES ('old','/tmp','History',0,'/tmp/log',0,0,'cli'), ('\(parent)','/tmp','Parent',0,'/tmp/log',0,0,'cli'), ('\(child)','/tmp','Today',\(today),'/tmp/log',0,0,'\(source)'), ('pin','/tmp','Pinned',0,'/tmp/log',0,1,'invalid-json'), ('unread','/tmp','Unread',0,'/tmp/log',0,0,'cli');"])
+        XCTAssertTrue(result.succeeded, result.error)
+        let scope = CodexCatalogScope(since: Int64(today - 600), ids: ["unread"])
+        let worker = AgentLogWorker(executable: try executable()); defer { worker.stop() }
+        let live = try XCTUnwrap(worker.readCatalog(database.path, scope: scope))
+        XCTAssertEqual(live, try CodexCatalog.swiftRead(database.path).filtered(scope))
+        XCTAssertEqual(Set(live.threads.compactMap { $0["id"] }), Set([parent,child,"pin","unread"]))
+        XCTAssertEqual(try XCTUnwrap(worker.readCatalog(database.path)).threads.count, 5)
+        XCTAssertEqual(try XCTUnwrap(worker.readCatalog(database.path, scope: scope)), live)
+        // The native fallback and the public reader preserve the same scope;
+        // cleanup's default reader still inspects the complete inventory.
+        let reader = AgentReader(logWorker: AgentLogWorker(executable: nil))
+        let processes = ProcessSnapshot(processes: [], warnings: [])
+        var readState = ProviderReadState.empty; readState.codexUnread = ["unread"]
+        let full = reader.read(home: folder.path, processes: processes, now: now, readState: readState)
+        let visible = reader.read(home: folder.path, processes: processes, now: now, readState: readState, live: true)
+        XCTAssertEqual(full.sessions.count, 5)
+        XCTAssertEqual(Set(visible.sessions.map(\.id)), Set([parent,child,"pin","unread"].map { "codex:" + $0 }))
+    }
+
     func testWorkerRestartAndMissingExecutableFallback() throws {
         let folder = try fixture(), file = folder.appendingPathComponent("session.jsonl")
         try event("task_complete").write(to: file, atomically: true, encoding: .utf8)

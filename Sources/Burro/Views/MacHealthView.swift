@@ -33,7 +33,7 @@ enum HealthFormat {
     static func facts(_ item: Leftover, now: Date) -> String {
         [item.pid.map { "PID \($0)" }, "up \(LeftoverPolicy.duration(now.timeIntervalSince(item.started)))",
          item.cpuTime.map { "\(LeftoverPolicy.duration($0)) of CPU" }, item.cpuPercent.map { "\(Int($0.rounded()))% CPU now" },
-         item.resident.map { bytes($0) }, item.children > 0 ? "\(item.children) child process\(item.children == 1 ? "" : "es")" : nil]
+         item.memory.map { bytes($0) }, item.children > 0 ? "\(item.children) child process\(item.children == 1 ? "" : "es")" : nil]
             .compactMap { $0 }.joined(separator: " · ")
     }
 }
@@ -253,7 +253,7 @@ struct MacHealthView: View {
                     Text(line.name).lineLimit(1).truncationMode(.middle)
                     Spacer()
                     Text(line.cpuPercent.map { "\(Int($0.rounded()))%" } ?? "—").monospacedDigit().frame(width: 60, alignment: .trailing)
-                    Text(HealthFormat.bytes(line.resident)).monospacedDigit().foregroundStyle(.secondary).frame(width: 80, alignment: .trailing)
+                    Text(HealthFormat.bytes(line.memory)).monospacedDigit().foregroundStyle(.secondary).frame(width: 80, alignment: .trailing)
                 }.font(.callout)
             }
             if report.agentProcesses > 0 {

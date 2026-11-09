@@ -89,6 +89,7 @@ struct CodexLogBatch: Decodable, Sendable {
     let claude: ClaudeLogBatch?
     let usage: UsageLogBatch?
     let completed: ClaudeCompletedBatch?
+    let catalog: CodexCatalogBatch?
 }
 
 // All child state and pipe I/O are serialized by lock. Callers already run on
@@ -105,6 +106,7 @@ final class AgentLogWorker: @unchecked Sendable {
     private var process: Process?
     private var input: FileHandle?
     private var output: FileHandle?
+    private var catalogCache: (path: String, scope: CodexCatalogScope?, revision: UInt64, snapshot: CodexCatalog)?
 
     init(executable: URL?, timeout: TimeInterval = 2, retryDelay: TimeInterval = 30) {
         self.executable = executable; self.timeout = timeout; self.retryDelay = retryDelay
@@ -141,23 +143,52 @@ final class AgentLogWorker: @unchecked Sendable {
         return exchange([], claude: request)?.claude?.results.map { $0?.agentState }
     }
 
-    func exchange(_ paths: [String], claude: ClaudeLogRequest? = nil, usage: UsageLogRequest? = nil, completed: String? = nil) -> CodexLogBatch? {
+    func readCatalog(_ path: String, scope: CodexCatalogScope? = nil) -> CodexCatalog? {
         lock.lock(); defer { lock.unlock() }
-        guard (!paths.isEmpty || claude != nil || usage != nil || completed != nil), paths.count <= 2048,
+        let previous = catalogCache?.path == path && catalogCache?.scope == scope ? catalogCache : nil
+        guard let result = exchangeLocked([], catalog: CodexCatalogRequest(path: path, revision: previous?.revision, scope: scope))?.catalog else { return nil }
+        if let snapshot = result.snapshot {
+            catalogCache = (path, scope, result.revision, snapshot)
+            return snapshot
+        }
+        if let delta = result.delta {
+            guard let previous, previous.revision == delta.baseRevision,
+                  let snapshot = delta.applying(to: previous.snapshot) else {
+                stopLocked(); return nil
+            }
+            catalogCache = (path, scope, result.revision, snapshot)
+            return snapshot
+        }
+        guard let previous, previous.revision == result.revision else {
+            stopLocked(); return nil
+        }
+        return previous.snapshot
+    }
+
+    func exchange(_ paths: [String], claude: ClaudeLogRequest? = nil, usage: UsageLogRequest? = nil, completed: String? = nil,
+                  catalog: CodexCatalogRequest? = nil) -> CodexLogBatch? {
+        lock.lock(); defer { lock.unlock() }
+        return exchangeLocked(paths, claude: claude, usage: usage, completed: completed, catalog: catalog)
+    }
+
+    private func exchangeLocked(_ paths: [String], claude: ClaudeLogRequest? = nil, usage: UsageLogRequest? = nil,
+                                completed: String? = nil, catalog: CodexCatalogRequest? = nil) -> CodexLogBatch? {
+        guard (!paths.isEmpty || claude != nil || usage != nil || completed != nil || catalog != nil), paths.count <= 2048,
+              (catalog == nil || (paths.isEmpty && claude == nil && usage == nil && completed == nil)),
               (usage == nil || (paths.isEmpty && claude == nil && completed == nil)), (claude?.sessions.count ?? 0) <= 256, executable != nil,
               ProcessInfo.processInfo.systemUptime >= retryAfter else { return nil }
         do {
-            struct Request: Encodable { let version = 3; let id: String; let paths: [String]; let claude: ClaudeLogRequest?; let usage: UsageLogRequest?; let completed: String? }
+            struct Request: Encodable { let version = 4; let id: String; let paths: [String]; let claude: ClaudeLogRequest?; let usage: UsageLogRequest?; let completed: String?; let catalog: CodexCatalogRequest? }
             let id = UUID().uuidString
-            var request = try JSONEncoder().encode(Request(id: id, paths: paths, claude: claude, usage: usage, completed: completed)); request.append(10)
+            var request = try JSONEncoder().encode(Request(id: id, paths: paths, claude: claude, usage: usage, completed: completed, catalog: catalog)); request.append(10)
             guard request.count <= 2 * 1024 * 1024 else { return nil }
             let deadline = ProcessInfo.processInfo.systemUptime + timeout
             try startLocked()
             guard let input, let output else { throw WorkerError.channel }
             try write(request, to: input.fileDescriptor, deadline: deadline)
-            let response = try readLine(from: output.fileDescriptor, deadline: deadline)
+            let response = try readLine(from: output.fileDescriptor, deadline: deadline, limit: catalog == nil ? 512 * 1024 : 8 * 1024 * 1024)
             let batch = try JSONDecoder().decode(CodexLogBatch.self, from: response)
-            guard batch.version == 3, batch.id == id, batch.results.count == paths.count,
+            guard batch.version == 4, batch.id == id, batch.results.count == paths.count,
                   (0...paths.count).contains(batch.reads), (0...paths.count).contains(batch.cacheHits),
                   batch.reads + batch.cacheHits <= paths.count,
                   batch.results.allSatisfy({ evidence in
@@ -180,6 +211,16 @@ final class AgentLogWorker: @unchecked Sendable {
                       (0...8192).contains(result.reads), (0...8192).contains(result.cacheHits),
                       result.reads + result.cacheHits <= 8192 else { throw WorkerError.protocolMismatch }
             } else if batch.completed != nil { throw WorkerError.protocolMismatch }
+            if let catalog {
+                guard let result = batch.catalog, result.revision > 0 else { throw WorkerError.protocolMismatch }
+                if let snapshot = result.snapshot {
+                    guard result.delta == nil, snapshot.threads.count <= 20_000, snapshot.roots.count <= 20_000,
+                          snapshot.attachments.count <= 20_000 else { throw WorkerError.protocolMismatch }
+                } else if let delta = result.delta {
+                    guard delta.baseRevision == catalog.revision, result.revision > delta.baseRevision,
+                          delta.withinLimits else { throw WorkerError.protocolMismatch }
+                } else if result.revision != catalog.revision { throw WorkerError.protocolMismatch }
+            } else if batch.catalog != nil { throw WorkerError.protocolMismatch }
             return batch
         } catch {
             stopLocked()
@@ -197,7 +238,7 @@ final class AgentLogWorker: @unchecked Sendable {
         stopLocked()
         guard let executable else { throw WorkerError.channel }
         let child = Process(), stdin = Pipe(), stdout = Pipe()
-        child.executableURL = executable; child.arguments = ["--stdio-v3"]
+        child.executableURL = executable; child.arguments = ["--stdio-v4"]
         child.currentDirectoryURL = URL(fileURLWithPath: "/")
         child.environment = ["PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"]
         child.standardInput = stdin; child.standardOutput = stdout; child.standardError = FileHandle.nullDevice
@@ -212,6 +253,7 @@ final class AgentLogWorker: @unchecked Sendable {
     }
 
     private func stopLocked() {
+        catalogCache = nil
         try? input?.close(); try? output?.close(); input = nil; output = nil
         if let process, process.isRunning {
             process.terminate()
@@ -248,19 +290,21 @@ final class AgentLogWorker: @unchecked Sendable {
         }
     }
 
-    private func readLine(from fd: Int32, deadline: TimeInterval) throws -> Data {
+    private func readLine(from fd: Int32, deadline: TimeInterval, limit: Int) throws -> Data {
         var response = Data(), buffer = [UInt8](repeating: 0, count: 8192)
-        while response.count <= 512 * 1024 {
+        var searched = 0
+        while response.count <= limit {
             try ready(fd, event: Int16(POLLIN), deadline: deadline)
             let count = Darwin.read(fd, &buffer, buffer.count)
             if count < 0 && (errno == EINTR || errno == EAGAIN) { continue }
             guard count > 0 else { throw WorkerError.channel }
             response.append(contentsOf: buffer.prefix(count))
-            guard response.count <= 512 * 1024 else { throw WorkerError.protocolMismatch }
-            if let newline = response.firstIndex(of: 10) {
+            guard response.count <= limit else { throw WorkerError.protocolMismatch }
+            if let newline = response[searched...].firstIndex(of: 10) {
                 guard newline == response.count - 1 else { throw WorkerError.protocolMismatch }
                 return response
             }
+            searched = response.count
         }
         throw WorkerError.protocolMismatch
     }

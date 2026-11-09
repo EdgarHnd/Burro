@@ -65,14 +65,14 @@ public struct AgentReader: Sendable {
     private let logWorker: AgentLogWorker
     public init() { logWorker = .shared }
     init(logWorker: AgentLogWorker) { self.logWorker = logWorker }
-    public func read(home: String, processes: ProcessSnapshot, now: Date, readState: ProviderReadState = .empty) -> AgentInventory {
-        var result = codex(home: home, now: now, unread: readState.codexUnread)
+    public func read(home: String, processes: ProcessSnapshot, now: Date, readState: ProviderReadState = .empty, live: Bool = false) -> AgentInventory {
+        var result = codex(home: home, now: now, unread: readState.codexUnread, live: live)
         let claude = claude(home: home, processes: processes, now: now)
         result.sessions += claude.sessions; result.roots += claude.roots; result.warnings += claude.warnings
         result.sessions = result.sessions.map { readState.applying(to: $0) }
         return result
     }
-    private func codex(home: String, now: Date, unread: Set<String>) -> AgentInventory {
+    private func codex(home: String, now: Date, unread: Set<String>, live: Bool, indexedLocks: Bool = true) -> AgentInventory {
         var result = AgentInventory()
         let directory = URL(fileURLWithPath: home).appendingPathComponent(".codex")
         guard FileManager.default.fileExists(atPath: directory.path) else { return result }
@@ -82,44 +82,47 @@ public struct AgentReader: Sendable {
                 $0.lastPathComponent.compare($1.lastPathComponent, options: .numeric) == .orderedDescending
             }
             guard let path = databases.first else { result.warnings.append("Codex is present but its session database is unavailable"); return result }
-            let db = try SQLiteReader(path: path.path)
-            let columns = Set(try db.rows("PRAGMA table_info(threads)").compactMap { $0["name"] })
-            let pinned = columns.contains("is_pinned") ? "is_pinned" : "0 AS is_pinned"
-            let name = columns.contains("name") ? "name" : "NULL AS name"
-            let source = columns.contains("source") ? "source" : "NULL AS source"
-            let threads = try db.rows("SELECT id,cwd,title,updated_at,rollout_path,\(pinned),\(name),\(source) FROM threads WHERE archived=0 ORDER BY updated_at DESC")
-            let tables = Set(try db.rows("SELECT name FROM sqlite_master WHERE type='table'").compactMap { $0["name"] })
-            if tables.contains("project_roots") { result.roots += try db.rows("SELECT path FROM project_roots").compactMap { $0["path"] } }
+            let locks = CodexWriterLocks(directory: directory.appendingPathComponent("thread-writer-locks"), indexed: indexedLocks)
+            var scope: CodexCatalogScope?
+            if live, let heldIDs = locks.threadIDs {
+                let ids = Set(heldIDs).union(unread).sorted()
+                if ids.count <= 2048, ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 }) {
+                    let since = min(Calendar.current.startOfDay(for: now), now.addingTimeInterval(-600))
+                    scope = CodexCatalogScope(since: Int64(since.timeIntervalSince1970), ids: ids)
+                }
+            }
+            let catalog = try logWorker.readCatalog(path.path, scope: scope) ?? CodexCatalog.swiftRead(path.path).filtered(scope)
+            let threads = catalog.threads
+            result.roots += catalog.roots
+            var canonical = SnapshotPaths()
             var attachments: [String: [String]] = [:]
-            if tables.contains("thread_attachments") {
-                for row in try db.rows("SELECT thread_id,identity_key,payload FROM thread_attachments WHERE attachment_type='worktree'") {
-                    guard let thread = row["thread_id"], let raw = row["payload"], let data = raw.data(using: .utf8),
-                          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                        result.warnings.append("A Codex worktree attachment could not be read"); continue
-                    }
-                    if object["archivedAt"] != nil || object["archived"] as? Bool == true { continue }
-                    if let root = object["workspaceRoot"] as? String ?? object["root"] as? String ?? row["identity_key"] {
-                        attachments[thread, default: []].append(Paths.canonical(root)); result.roots.append(root)
-                    }
+            for row in catalog.attachments {
+                guard let thread = row["thread_id"], let raw = row["payload"], let data = raw.data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    result.warnings.append("A Codex worktree attachment could not be read"); continue
+                }
+                if object["archivedAt"] != nil || object["archived"] as? Bool == true { continue }
+                if let root = object["workspaceRoot"] as? String ?? object["root"] as? String ?? row["identity_key"] {
+                    attachments[thread, default: []].append(canonical.canonical(root)); result.roots.append(root)
                 }
             }
             // Batch only the logs this snapshot needs. The worker caches parsed
             // events; live lock checks and age-dependent state stay in Swift.
-            let paths = Array(Set(threads.compactMap { row -> String? in
+            let subagents = threads.map { AgentParsing.codexIsSubagent(source: $0["source"]) }
+            let paths = Array(Set(threads.enumerated().compactMap { index, row -> String? in
                 guard let id = row["id"], let path = row["rollout_path"] else { return nil }
-                let held = burro_lock_held(directory.appendingPathComponent("thread-writer-locks/\(id).lock").path)
+                let held = locks.held(id)
                 let recent = now.timeIntervalSince1970 - (Double(row["updated_at"] ?? "0") ?? 0) < 600
-                let unreadParent = unread.contains(id) && !AgentParsing.codexIsSubagent(source: row["source"])
+                let unreadParent = unread.contains(id) && !subagents[index]
                 return held != 0 || recent || unreadParent ? path : nil
             })).sorted()
             let logs = Dictionary(uniqueKeysWithValues: zip(paths, logWorker.read(paths)))
-            for row in threads {
+            for (index, row) in threads.enumerated() {
                 guard let id = row["id"], let cwd = row["cwd"] else { result.warnings.append("A Codex session is missing its workspace"); continue }
-                let lock = directory.appendingPathComponent("thread-writer-locks/\(id).lock").path
-                let held = burro_lock_held(lock)
+                let held = locks.held(id)
                 let updated = Date(timeIntervalSince1970: Double(row["updated_at"] ?? "0") ?? 0)
                 let recent = now.timeIntervalSince(updated) < 600
-                let isSubagent = AgentParsing.codexIsSubagent(source: row["source"])
+                let isSubagent = subagents[index]
                 var state: AgentState = .inactive
                 var completed = false
                 var evidence = "No held writer lock or recent unfinished turn"
@@ -141,12 +144,15 @@ public struct AgentReader: Sendable {
                     }
                 }
                 result.sessions.append(AgentSession(id: "codex:\(id)", provider: .codex,
-                    title: AgentParsing.codexDisplayName(name: row["name"], title: row["title"], isSubagent: isSubagent), cwd: Paths.canonical(cwd),
+                    title: AgentParsing.codexDisplayName(name: row["name"], title: row["title"], isSubagent: isSubagent), cwd: canonical.canonical(cwd),
                     attachedPaths: attachments[id] ?? [], state: state, updatedAt: updated,
                     pinned: row["is_pinned"] == "1", evidence: evidence, turnCompleted: completed, isSubagent: isSubagent,
                     parentSessionID: AgentParsing.codexParentID(source: row["source"])))
                 if held != 0 { result.roots.append(cwd) }
             }
+            // A new/replaced lock file must never be hidden by the filename
+            // snapshot. Retry once using the original per-file checks.
+            if !locks.isCurrent { return codex(home: home, now: now, unread: unread, live: live, indexedLocks: false) }
         } catch { result.warnings.append(error.localizedDescription) }
         return result
     }
@@ -159,6 +165,7 @@ public struct AgentReader: Sendable {
         }
         do {
             let completed = ProviderReadState.claudeCompletedSessions(home: home)
+            var canonical = SnapshotPaths()
             var records: [[String: Any]] = []
             for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) where file.pathExtension == "json" {
                 guard let data = try? Data(contentsOf: file), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -203,7 +210,7 @@ public struct AgentReader: Sendable {
                     state = delegated.state; evidence = delegated.evidence
                 }
                 result.sessions.append(AgentSession(id: "claude:\(id)", provider: .claude,
-                    title: object["name"] as? String ?? "Claude Code session", cwd: Paths.canonical(cwd),
+                    title: object["name"] as? String ?? "Claude Code session", cwd: canonical.canonical(cwd),
                     state: state, updatedAt: updated, pid: live ? pid : nil,
                     evidence: evidence,
                     claudeDesktopSessionID: object["hostSessionId"] as? String,

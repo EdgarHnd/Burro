@@ -14,6 +14,10 @@ final class WorktreeCleanupTests: XCTestCase, @unchecked Sendable {
             try git(root.path, ["init", "-b", "main", main])
             try git(main, ["config", "user.name", "Test"])
             try git(main, ["config", "user.email", "test@example.invalid"])
+            // A fast command exit can leave Git's detached auto-maintenance alive.
+            // Keep disposable fixtures quiet; real live Git processes must still block cleanup.
+            try git(main, ["config", "maintenance.auto", "false"])
+            try git(main, ["config", "gc.auto", "0"])
             try git(main, ["-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "initial"])
             try git(main, ["update-ref", "refs/remotes/origin/main", "HEAD"])
             try git(main, ["worktree", "add", "-b", "feature", path])
@@ -136,7 +140,8 @@ final class WorktreeCleanupTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(tree.facts.merged, false)
         XCTAssertEqual(tree.facts.unpushed, 1)
         XCTAssertEqual(tree.facts.retainedBranchName, "feature")
-        XCTAssertEqual(WorktreeCleanup.eligibility(tree, home: f.config.home, warnings: []).status, .ready)
+        XCTAssertEqual(WorktreeCleanup.eligibility(tree, home: f.config.home, warnings: []).status, .ready,
+                       "Unexpected processes: \(tree.processes); agents: \(tree.agents)")
         _ = try await WorktreeCleanup().remove(tree, configuration: f.config, trash: f.move)
         XCTAssertEqual(try f.git(f.main, ["rev-parse", "feature"]).trimmingCharacters(in: .whitespacesAndNewlines), tree.head)
         XCTAssertFalse(try f.git(f.main, ["worktree", "list", "--porcelain"]).contains(f.path))

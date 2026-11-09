@@ -11,7 +11,11 @@ enum ChromiumReadState {
             defer { position += count }; return Array(bytes[position..<position + count])
         }
         mutating func fixed(_ count: Int) throws -> UInt64 {
-            try take(count).enumerated().reduce(0) { $0 | UInt64($1.element) << ($1.offset * 8) }
+            guard (0...8).contains(count), position <= bytes.count, count <= bytes.count - position else { throw Failure.corrupt }
+            var value: UInt64 = 0
+            for offset in 0..<count { value |= UInt64(bytes[position + offset]) << (offset * 8) }
+            position += count
+            return value
         }
         mutating func varint() throws -> Int {
             var value: UInt64 = 0
@@ -111,7 +115,11 @@ enum ChromiumReadState {
         switch kind { case 0: return bytes; case 1: return try snappy(bytes); default: throw Failure.unsupported }
     }
     // Follow CURRENT + MANIFEST; obsolete tables must never resurrect deleted unread markers.
+    private static let cache = ChromiumReadStateCache()
     static func value(directory: URL, key: String) throws -> Data? {
+        try cache.value(directory: directory, key: key) { try readValue(directory: directory, key: key) }
+    }
+    static func readValue(directory: URL, key: String) throws -> Data? {
         let current = try read(directory.appendingPathComponent("CURRENT"))
         let manifestName = String(decoding: current, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         guard manifestName.hasPrefix("MANIFEST-"), Int(manifestName.dropFirst(9)) != nil else { throw Failure.corrupt }

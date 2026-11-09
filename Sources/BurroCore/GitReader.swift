@@ -1,7 +1,7 @@
 // Discover registered worktrees and collect read-only evidence for cleanup decisions.
 import Foundation
 
-public struct WorktreeRecord: Sendable {
+public struct WorktreeRecord: Sendable, Equatable {
     public var path: String
     public var head: String = ""
     public var branch: String = "Detached HEAD"

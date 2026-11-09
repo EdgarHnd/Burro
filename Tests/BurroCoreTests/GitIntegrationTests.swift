@@ -96,4 +96,15 @@ final class GitIntegrationTests: XCTestCase, @unchecked Sendable {
         let result = CommandRunner().run("/bin/sleep", ["3"], timeout: 0.05)
         XCTAssertTrue(result.timedOut); XCTAssertFalse(result.succeeded)
     }
+    func testCommandExitNotificationInputAndOutputLimits() {
+        let runner = CommandRunner()
+        let echo = runner.run("/bin/cat", [], input: Data("fixture\n".utf8))
+        XCTAssertTrue(echo.succeeded); XCTAssertEqual(echo.output, "fixture\n")
+        let failed = runner.run("/usr/bin/false", [])
+        XCTAssertFalse(failed.succeeded); XCTAssertFalse(failed.timedOut)
+        let large = runner.run("/usr/bin/head", ["-c", "8388609", "/dev/zero"])
+        XCTAssertEqual(large.code, -2); XCTAssertTrue(large.output.isEmpty)
+        let stderr = runner.run("/bin/sh", ["-c", "exec /usr/bin/head -c 8388609 /dev/zero >&2"])
+        XCTAssertEqual(stderr.code, -2); XCTAssertTrue(stderr.error.contains("inspection limit"))
+    }
 }

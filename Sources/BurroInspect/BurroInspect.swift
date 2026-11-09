@@ -5,6 +5,10 @@ import BurroCore
 @main struct BurroInspect {
     static func main() async throws {
         let paths = Array(CommandLine.arguments.dropFirst())
+        if paths == ["--profile-git"] {
+            try await PerformanceProfile.git()
+            return
+        }
         if paths.first == "--profile" || paths.first == "--profile-agents" {
             try PerformanceProfile.run(includeUsage: paths.first == "--profile")
             return

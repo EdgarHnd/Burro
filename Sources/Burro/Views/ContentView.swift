@@ -49,7 +49,10 @@ struct ContentView: View {
         }
         .frame(minWidth: 1000, minHeight: 590)
         .onChange(of: store.filter) { _, filter in
-            if filter.isWorkspace { store.reconcileSelection(selectFirst: true) }
+            if filter.isWorkspace {
+                store.reconcileSelection(selectFirst: true)
+                Task { await store.refreshWorktreesIfDue() }
+            }
         }
         .onChange(of: store.search) { _, _ in store.reconcileSelection() }
         .modifier(AppTheme())

@@ -113,6 +113,8 @@ public struct ScanSnapshot: Codable, Sendable {
     public static var empty: Self { .init(worktrees: [], agents: [], warnings: [], scannedAt: .distantPast, duration: 0) }
 }
 public struct ScanConfiguration: Sendable {
+    // Opt-in presentation cache. Cleanup/CLI/manual scans remain fresh by default.
+    public var incremental = false
     public var home: String
     public var repositories: [String]
     public var discover: Bool

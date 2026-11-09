@@ -80,7 +80,7 @@ Remote SQLite reads can use a stable, journal-free checkpoint when read-only WAL
 **Left running** lists things that usually outlived the work that started them:
 
 - **Still busy:** a process outside any app still using at least 25% of a core after an hour of CPU time.
-- **Long-running watcher:** a test runner, bundler, or `tail -f` running for over two hours. Jest/Vitest workers count toward their runner.
+- **Long-running watcher:** a test runner, bundler, or `tail -f` running for over two hours. Jest and Metro worker pools count toward whatever started them; they are listed alone only after that parent exits. Memory figures are physical footprint, the same measure as Activity Monitor.
 - **Idle server:** a process listening on a port with no open connections for over 12 hours.
 - **Agent script:** a script started from a coding agent's temporary folder over six hours ago.
 - **Orphaned:** a process outside any app whose parent exited at least an hour ago.

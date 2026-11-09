@@ -21,6 +21,7 @@ public enum ProcessReader {
         let found = pids.withUnsafeMutableBufferPointer { burro_list_pids($0.baseAddress, Int32($0.count)) }
         guard found > 0, found < pids.count else { return ProcessSnapshot(processes: [], warnings: ["Process listing was incomplete"]) }
         var values: [(LocalProcess, Int)] = []; var deniedAgent = false
+        var canonical = SnapshotPaths()
         for pid in pids.prefix(Int(found)) where pid > 0 {
             var info = BurroProcess()
             guard burro_process_info(pid, &info) == 1, info.uid == getuid() else { continue }
@@ -28,7 +29,7 @@ public enum ProcessReader {
             let name = path.contains("/claude/versions/") ? "claude" : URL(fileURLWithPath: path).lastPathComponent
             if info.cwd_readable == 0 && ["codex", "claude"].contains(name) { deniedAgent = true }
             let cwd = withUnsafePointer(to: &info.cwd) { String(cString: UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self)) }
-            values.append((LocalProcess(pid: Int(pid), name: name, cwd: cwd.isEmpty ? "" : Paths.canonical(cwd), started: Date(timeIntervalSince1970: Double(info.started)), parentPID: Int(info.ppid)), Int(info.ppid)))
+            values.append((LocalProcess(pid: Int(pid), name: name, cwd: cwd.isEmpty ? "" : canonical.canonical(cwd), started: Date(timeIntervalSince1970: Double(info.started)), parentPID: Int(info.ppid)), Int(info.ppid)))
         }
         var excluded: Set<Int> = [Int(getpid())]
         var previous = 0

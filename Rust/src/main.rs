@@ -1,5 +1,6 @@
 //! Private, parent-owned stdio worker. Reads only the files requested by Swift.
 //! No network, provider credentials, or persistent storage.
+mod catalog;
 mod claude;
 mod completed;
 mod status_policy;
@@ -11,7 +12,7 @@ use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const MAX_REQUEST: usize = 2 * 1024 * 1024;
 const MAX_PATHS: usize = 2048;
 const TAIL_BYTES: u64 = 512 * 1024;
@@ -25,6 +26,7 @@ struct Request {
     claude: Option<claude::Request>,
     usage: Option<usage::Request>,
     completed: Option<String>,
+    catalog: Option<catalog::Request>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -54,6 +56,7 @@ struct Response {
     claude: Option<claude::Batch>,
     usage: Option<usage::Batch>,
     completed: Option<completed::Batch>,
+    catalog: Option<catalog::Batch>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +87,7 @@ struct Worker {
     claude: claude::Worker,
     usage: usage::Worker,
     completed: completed::Worker,
+    catalog: catalog::Worker,
 }
 
 fn parse_tail(bytes: &[u8]) -> (Option<EventState>, bool) {
@@ -176,6 +180,11 @@ impl Worker {
         if request.version != VERSION
             || request.paths.len() > MAX_PATHS
             || request.id.len() > 128
+            || (request.catalog.is_some()
+                && (!request.paths.is_empty()
+                    || request.claude.is_some()
+                    || request.usage.is_some()
+                    || request.completed.is_some()))
             || (request.usage.is_some()
                 && (request.claude.is_some()
                     || request.completed.is_some()
@@ -188,7 +197,12 @@ impl Worker {
         }
         // Keep at most the current request's paths; bound long-running memory use.
         let active: HashSet<&str> = request.paths.iter().map(String::as_str).collect();
-        if request.claude.is_none() || !request.paths.is_empty() {
+        if !request.paths.is_empty()
+            || (request.claude.is_none()
+                && request.completed.is_none()
+                && request.usage.is_none()
+                && request.catalog.is_none())
+        {
             self.cache.retain(|path, _| active.contains(path.as_str()));
         }
         let mut reads = 0;
@@ -213,6 +227,10 @@ impl Worker {
                 .map(|request| self.usage.scan(request))
                 .transpose()?,
             completed: request.completed.map(|root| self.completed.scan(root)),
+            catalog: request
+                .catalog
+                .map(|request| self.catalog.scan(request))
+                .transpose()?,
         })
     }
 }
@@ -244,7 +262,7 @@ fn serve(input: impl BufRead, mut output: impl Write) -> io::Result<()> {
 }
 
 fn main() {
-    if std::env::args().skip(1).collect::<Vec<_>>() != ["--stdio-v3"] {
+    if std::env::args().skip(1).collect::<Vec<_>>() != ["--stdio-v4"] {
         std::process::exit(2);
     }
     // Protocol failures close the channel. Never print inputs or file contents.
@@ -288,6 +306,7 @@ mod tests {
             claude: None,
             usage: None,
             completed: None,
+            catalog: None,
         }
     }
 
@@ -373,7 +392,7 @@ mod tests {
     fn protocol_is_bounded_versioned_and_closes_on_eof() {
         let mut output = Vec::new();
         serve(
-            Cursor::new(b"{\"version\":3,\"id\":\"a\",\"paths\":[]}\n"),
+            Cursor::new(b"{\"version\":4,\"id\":\"a\",\"paths\":[]}\n"),
             &mut output,
         )
         .unwrap();

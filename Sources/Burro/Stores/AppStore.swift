@@ -2,6 +2,7 @@
 import AppKit
 import Foundation
 import Observation
+import OSLog
 import BurroCore
 
 @MainActor @Observable final class AppStore {
@@ -14,6 +15,8 @@ import BurroCore
     let cleanupBatch: CleanupBatchStore
     typealias Scan = @Sendable (ScanConfiguration) async -> ScanSnapshot
     @ObservationIgnored private let scan: Scan
+    @ObservationIgnored private let scanLog = Logger(subsystem: "local.burro.worktrees", category: "GitScan")
+    @ObservationIgnored private var scanNumber = 0
     private var scanGeneration = 0
     var scanConfiguration: ScanConfiguration {
         ScanConfiguration(repositories: repositories, discover: discover,
@@ -97,6 +100,7 @@ import BurroCore
     private var remoteMonitorTask: Task<Void, Never>?
     private var agentRefresh: AgentRefreshCoordinator?
     private var agentWatcher: AgentFileWatcher?
+    @ObservationIgnored private var visibleDashboards: Set<ObjectIdentifier> = []
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard, cleanupBatch: CleanupBatchStore? = nil,
@@ -175,9 +179,11 @@ import BurroCore
                 warnings: !self.localActivity.warnings.isEmpty, watching: self.agentWatcher?.isRunning == true)
         }
         agentRefresh = coordinator
-        agentWatcher = AgentFileWatcher(paths: AgentFileWatcher.paths(home: FileManager.default.homeDirectoryForCurrentUser.path)) { [weak coordinator] in
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        agentWatcher = AgentFileWatcher(paths: AgentFileWatcher.paths(home: home), events: { [weak coordinator] paths, uncertain in
+            guard AgentFileWatcher.affectsAgents(paths, uncertain: uncertain, home: home) else { return }
             Task { @MainActor in coordinator?.changed() }
-        }
+        })
         coordinator.start()
         remoteMonitorTask = Task {
             while !Task.isCancelled {
@@ -185,12 +191,28 @@ import BurroCore
                 try? await Task.sleep(for: .seconds(10))
             }
         }
+        startWorktreeRefresh()
+    }
+    func startWorktreeRefresh() {
+        guard monitorTask == nil else { return }
         monitorTask = Task {
-            while !Task.isCancelled {
-                await refresh()
-                try? await Task.sleep(for: .seconds(30))
-            }
+            // Repository inventories can be expensive even with cached facts.
+            // Refresh on opening the dashboard or explicit actions, never on a
+            // repeating timer. The independent agent monitor remains live.
+            await refreshWorktreesIfDue(trigger: "startup")
         }
+    }
+    func dashboardVisibilityChanged(_ window: ObjectIdentifier, _ visible: Bool) {
+        let wasVisible = !visibleDashboards.isEmpty
+        if visible { visibleDashboards.insert(window) } else { visibleDashboards.remove(window) }
+        if !wasVisible, !visibleDashboards.isEmpty, monitorTask != nil {
+            Task { await refreshWorktreesIfDue(trigger: "dashboard-visible") }
+        }
+    }
+    func refreshWorktreesIfDue(now: Date = Date(), trigger: String = "navigation") async {
+        guard WorktreeRefreshPolicy.isDue(lastScan: didScan ? snapshot.scannedAt : nil, now: now,
+                                         visible: !visibleDashboards.isEmpty && filter.isWorkspace) else { return }
+        await refresh(incremental: true, trigger: trigger)
     }
     func stop() {
         usage.stop()
@@ -312,14 +334,21 @@ import BurroCore
         }
         agentActivity = AgentActivitySnapshot(sessions: sessions, warnings: warnings, sampledAt: localActivity.sampledAt)
     }
-    func refresh(afterCleanup: Bool = false) async {
+    func refresh(afterCleanup: Bool = false, incremental: Bool = false, trigger: String = "explicit") async {
         guard !scanning && (!cleaningWorktree || afterCleanup) else { return }
         scanning = true
+        scanNumber += 1
+        let number = scanNumber, started = ProcessInfo.processInfo.systemUptime
+        scanLog.info("scan_started id=\(number, privacy: .public) trigger=\(afterCleanup ? "cleanup" : trigger, privacy: .public) incremental=\(incremental && !afterCleanup, privacy: .public)")
         let generation = scanGeneration
-        let config = ScanConfiguration(repositories: repositories, discover: discover, protectedPaths: protectedPaths, baseOverrides: baseOverrides)
+        var config = ScanConfiguration(repositories: repositories, discover: discover, protectedPaths: protectedPaths, baseOverrides: baseOverrides)
+        config.incremental = incremental && !afterCleanup
         let scan = self.scan
         var result = await Task.detached(priority: .utility) { await scan(config) }.value
-        guard generation == scanGeneration else { return }
+        guard generation == scanGeneration else {
+            scanLog.info("scan_discarded id=\(number, privacy: .public)")
+            return
+        }
         for i in result.worktrees.indices {
             let tree = result.worktrees[i]
             let protected = protectedPaths.contains(tree.path)
@@ -331,6 +360,8 @@ import BurroCore
             }
         }
         snapshot = result; scanning = false; didScan = true
+        let elapsedMS = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+        scanLog.info("scan_finished id=\(number, privacy: .public) duration_ms=\(elapsedMS, privacy: .public) worktrees=\(result.worktrees.count, privacy: .public)")
         if afterCleanup { cleanupBatch.settle() }
         reconcileSelection(selectFirst: !afterCleanup && worktreeSelection.isEmpty)
     }

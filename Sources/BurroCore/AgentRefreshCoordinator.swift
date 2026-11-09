@@ -4,15 +4,18 @@ import CoreServices
 
 public final class AgentFileWatcher: @unchecked Sendable {
     private final class Callback: @unchecked Sendable {
-        let changed: @Sendable () -> Void
-        init(_ changed: @escaping @Sendable () -> Void) { self.changed = changed }
+        let changed: @Sendable ([String], Bool) -> Void
+        init(_ changed: @escaping @Sendable ([String], Bool) -> Void) { self.changed = changed }
     }
     private var stream: FSEventStreamRef?
     private let queue = DispatchQueue(label: "app.burro.agent-file-events", qos: .utility)
     public var isRunning: Bool { stream != nil }
 
-    public init(paths: [String], changed: @escaping @Sendable () -> Void) {
-        let callback = Callback(changed)
+    public convenience init(paths: [String], changed: @escaping @Sendable () -> Void) {
+        self.init(paths: paths, events: { _, _ in changed() })
+    }
+    public init(paths: [String], events: @escaping @Sendable ([String], Bool) -> Void) {
+        let callback = Callback(events)
         var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(callback).toOpaque(),
             retain: { pointer in
                 guard let pointer else { return nil }
@@ -21,9 +24,13 @@ public final class AgentFileWatcher: @unchecked Sendable {
             }, release: { pointer in
                 if let pointer { Unmanaged<Callback>.fromOpaque(pointer).release() }
             }, copyDescription: nil)
-        stream = FSEventStreamCreate(kCFAllocatorDefault, { _, info, _, _, _, _ in
+        stream = FSEventStreamCreate(kCFAllocatorDefault, { _, info, count, paths, flags, _ in
             guard let info else { return }
-            Unmanaged<Callback>.fromOpaque(info).takeUnretainedValue().changed()
+            let strings = paths.assumingMemoryBound(to: UnsafePointer<CChar>.self)
+            let uncertain = FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped
+                | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagEventIdsWrapped)
+            let all = (0..<count).contains { flags[$0] & uncertain != 0 }
+            Unmanaged<Callback>.fromOpaque(info).takeUnretainedValue().changed((0..<count).map { String(cString: strings[$0]) }, all)
         }, &context, paths as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5,
         FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot))
         if let stream {
@@ -47,6 +54,17 @@ public final class AgentFileWatcher: @unchecked Sendable {
             "Library/Application Support/Claude/Local Storage/leveldb"
         ].map { root.appendingPathComponent($0).path }
     }
+    public static func affectsAgents(_ paths: [String], uncertain: Bool, home: String) -> Bool {
+        if uncertain { return true }
+        let codex = home + "/.codex"
+        return paths.contains { path in
+            guard Paths.contains(codex, path), path != codex else { return true }
+            let relative = String(path.dropFirst(codex.count + 1))
+            let first = relative.split(separator: "/").first.map(String.init) ?? ""
+            return first.hasPrefix("state_") || first.hasPrefix(".codex-global-state.json")
+                || ["sessions", "archived_sessions", "thread-writer-locks"].contains(first)
+        }
+    }
 }
 
 @MainActor public final class AgentRefreshCoordinator {
@@ -57,6 +75,7 @@ public final class AgentFileWatcher: @unchecked Sendable {
     private var inFlight = false
     private var dirty = false
     private var lastStarted: TimeInterval = -.infinity
+    private var scheduledAt: TimeInterval?
 
     public init(minimumInterval: TimeInterval = 3,
                 refresh: @escaping @MainActor @Sendable () async -> TimeInterval) {
@@ -74,6 +93,7 @@ public final class AgentFileWatcher: @unchecked Sendable {
     }
     public func stop() {
         generation = nil; scheduled?.cancel(); scheduled = nil
+        scheduledAt = nil
         dirty = false
     }
     private var earliestDelay: TimeInterval {
@@ -81,11 +101,16 @@ public final class AgentFileWatcher: @unchecked Sendable {
     }
     private func schedule(after delay: TimeInterval) {
         guard let generation else { return }
+        let deadline = ProcessInfo.processInfo.systemUptime + delay
+        // A burst must not repeatedly cancel an already earlier wakeup.
+        if let scheduledAt, scheduledAt <= deadline { return }
         scheduled?.cancel()
+        scheduledAt = deadline
         scheduled = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             guard let self, self.generation == generation else { return }
             self.scheduled = nil
+            self.scheduledAt = nil
             self.inFlight = true; self.dirty = false
             self.lastStarted = ProcessInfo.processInfo.systemUptime
             let interval = await self.refresh()

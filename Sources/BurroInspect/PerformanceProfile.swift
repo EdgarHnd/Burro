@@ -4,6 +4,22 @@ import Darwin
 import BurroCore
 
 enum PerformanceProfile {
+    static func git() async throws {
+        struct Result: Encodable { let operation: String; let wallMS: Double; let worktrees: Int; let partial: Bool; let cacheHits: Int; let cacheMisses: Int }
+        var results: [Result] = []
+        var configuration = ScanConfiguration(); configuration.incremental = true
+        for index in 0..<3 {
+            let start = ProcessInfo.processInfo.systemUptime
+            let before = Scanner.incrementalStatistics()
+            let result = await Scanner().scan(configuration)
+            let after = Scanner.incrementalStatistics()
+            results.append(Result(operation: index == 0 ? "git-cold" : "git-incremental", wallMS: (ProcessInfo.processInfo.systemUptime - start) * 1000,
+                worktrees: result.worktrees.count, partial: !result.warnings.isEmpty || result.worktrees.contains { !$0.facts.errors.isEmpty },
+                cacheHits: after.hits - before.hits, cacheMisses: after.misses - before.misses))
+        }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        FileHandle.standardOutput.write(try encoder.encode(results)); FileHandle.standardOutput.write(Data("\n".utf8))
+    }
     struct Sample: Encodable {
         var operation: String
         var wallMS: Double

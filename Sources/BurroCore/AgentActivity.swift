@@ -4,12 +4,27 @@ import Foundation
 public enum AgentAttention: Sendable { case none, done, waiting }
 
 public struct AgentActivitySnapshot: Sendable {
-    public var sessions: [AgentSession]
+    public var sessions: [AgentSession] { didSet { counts = Counts(sessions) } }
     public var warnings: [String]
     public var sampledAt: Date
     public var readState: ProviderReadState = .empty
+    private struct Counts: Sendable {
+        var working = 0, scheduled = 0, waiting = 0, idle = 0, done = 0
+        init(_ sessions: [AgentSession]) {
+            var seen: Set<String> = []
+            for session in sessions where seen.insert(session.id).inserted {
+                if session.state == .working { working += 1 }
+                if session.state == .scheduled { scheduled += 1 }
+                if session.state == .waiting && session.remote?.stale != true { waiting += 1 }
+                if session.state == .idle && !session.isDone { idle += 1 }
+                if session.isDone { done += 1 }
+            }
+        }
+    }
+    private var counts: Counts
     public init(sessions: [AgentSession], warnings: [String], sampledAt: Date) {
         self.sessions = sessions; self.warnings = warnings; self.sampledAt = sampledAt
+        counts = Counts(sessions)
     }
     public static var empty: Self { .init(sessions: [], warnings: [], sampledAt: .distantPast) }
     private var uniqueSessions: [AgentSession] {
@@ -19,11 +34,11 @@ public struct AgentActivitySnapshot: Sendable {
     public var unverifiedSessions: [AgentSession] { uniqueSessions.filter { $0.state == .unknown }.sorted { $0.id < $1.id } }
     public var attention: AgentAttention { waitingCount > 0 ? .waiting : (doneCount > 0 ? .done : .none) }
     public var attentionCount: Int { waitingCount + doneCount }
-    public var workingCount: Int { uniqueSessions.filter { $0.state == .working }.count }
-    public var scheduledCount: Int { uniqueSessions.filter { $0.state == .scheduled }.count }
-    public var waitingCount: Int { uniqueSessions.filter { $0.state == .waiting && $0.remote?.stale != true }.count }
-    public var idleCount: Int { uniqueSessions.filter { $0.state == .idle && !$0.isDone }.count }
-    public var doneCount: Int { uniqueSessions.filter(\.isDone).count }
+    public var workingCount: Int { counts.working }
+    public var scheduledCount: Int { counts.scheduled }
+    public var waitingCount: Int { counts.waiting }
+    public var idleCount: Int { counts.idle }
+    public var doneCount: Int { counts.done }
     public func visibleSessions(includeIdle: Bool) -> [AgentSession] {
         var seen: Set<String> = []
         return sessions.filter {
@@ -55,7 +70,7 @@ public struct AgentMonitor: Sendable {
     private func sampleScoped(home: String) -> AgentActivitySnapshot {
         let now = Date(), processes = ProcessReader.snapshot()
         let readState = ProviderReadState.read(home: home)
-        let inventory = AgentReader().read(home: home, processes: processes, now: now, readState: readState)
+        let inventory = AgentReader().read(home: home, processes: processes, now: now, readState: readState, live: true)
         var result = AgentActivitySnapshot(sessions: inventory.sessions,
             warnings: Array(Set(processes.warnings + inventory.warnings + readState.warnings)).sorted(), sampledAt: Date())
         result.readState = readState

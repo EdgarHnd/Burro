@@ -3,6 +3,49 @@ import XCTest
 @testable import BurroCore
 
 final class ChromiumReadStateTests: XCTestCase {
+    func testCacheInvalidatesOnOverwriteReplacementDeletionAndFailedRead() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("MANIFEST-000001\n".utf8).write(to: root.appendingPathComponent("CURRENT"))
+        try Data(record([2, 3])).write(to: root.appendingPathComponent("MANIFEST-000001"))
+        let log = root.appendingPathComponent("000003.log"), cache = ChromiumReadStateCache()
+        var loads = 0
+        func read() throws -> Data? {
+            try cache.value(directory: root, key: "epitaxy-unread-v1") {
+                loads += 1; return try ChromiumReadState.readValue(directory: root, key: "epitaxy-unread-v1")
+            }
+        }
+        try Data(record(batch(1, value: "first"))).write(to: log)
+        XCTAssertEqual(try read(), Data("first".utf8))
+        XCTAssertEqual(try read(), Data("first".utf8)); XCTAssertEqual(loads, 1)
+        // Same size and restored mtime still invalidate through ctime.
+        let date = try FileManager.default.attributesOfItem(atPath: log.path)[.modificationDate]!
+        try Data(record(batch(2, value: "other"))).write(to: log)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: log.path)
+        XCTAssertEqual(try read(), Data("other".utf8)); XCTAssertEqual(loads, 2)
+        try Data(record(batch(3, value: nil))).write(to: log, options: .atomic)
+        XCTAssertNil(try read()); XCTAssertNil(try read()); XCTAssertEqual(loads, 3)
+        try Data([255]).write(to: log)
+        XCTAssertThrowsError(try read()); XCTAssertEqual(loads, 4)
+        try FileManager.default.removeItem(at: log)
+        XCTAssertNil(try read()); XCTAssertEqual(loads, 5)
+        try Data(record(batch(5, value: "again"))).write(to: log)
+        XCTAssertEqual(try read(), Data("again".utf8)); XCTAssertEqual(loads, 6)
+    }
+    func testCacheRejectsChangesDuringDecodeAndMissingCurrent() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let current = root.appendingPathComponent("CURRENT"), cache = ChromiumReadStateCache()
+        try Data("first".utf8).write(to: current)
+        XCTAssertThrowsError(try cache.value(directory: root, key: "test") {
+            try Data("changed".utf8).write(to: current); return Data("stale".utf8)
+        })
+        XCTAssertEqual(try cache.value(directory: root, key: "test") { Data("fresh".utf8) }, Data("fresh".utf8))
+        try FileManager.default.removeItem(at: current)
+        XCTAssertThrowsError(try cache.value(directory: root, key: "test") { Data("stale".utf8) })
+    }
     func fixed(_ n: UInt64, _ count: Int) -> [UInt8] { (0..<count).map { UInt8(truncatingIfNeeded: n >> ($0 * 8)) } }
     func vi(_ n: Int) -> [UInt8] {
         var n = n, bytes: [UInt8] = []

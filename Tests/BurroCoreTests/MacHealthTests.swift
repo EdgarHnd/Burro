@@ -45,7 +45,7 @@ final class MacHealthTests: XCTestCase {
         // Homebrew Python lives inside Python.app but is a command-line tool, not an app someone has open.
         let python = process(89317, parent: 1, age: 6 * 86400,
             executable: "/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python",
-            arguments: ["/opt/homebrew/.../Python", "-"], cwd: "\(home)/Dev/app-worktrees/virality-day", cpuTime: 99 * 3600, resident: 1_400_000_000)
+            arguments: ["/opt/homebrew/.../Python", "-"], cwd: "\(home)/Dev/app-worktrees/virality-day", cpuTime: 99 * 3600, memory: 1_400_000_000)
         let report = LeftoverPolicy.report(ProcessInventory(processes: [python], sampledAt: now), cpu: [python.id: 80], now: now, home: home)
         XCTAssertEqual(report.leftovers.map(\.kind), [.runaway])
         XCTAssertEqual(report.leftovers.first?.name, "Python · stdin script")
@@ -63,7 +63,7 @@ final class MacHealthTests: XCTestCase {
             process(12, parent: 1, age: 9 * 86400, executable: "/usr/libexec/rapportd"),
             process(13, parent: 1, age: 9 * 86400, executable: "/opt/homebrew/bin/watchman", arguments: ["watchman", "--foreground"]),
             process(14, parent: 1, age: 9 * 86400, executable: "\(home)/Library/Application Support/Claude/claude-code/2.1/x/claude.app/Contents/MacOS/claude",
-                    cpuTime: 5 * 3600, resident: 400_000_000),
+                    cpuTime: 5 * 3600, memory: 400_000_000),
             process(15, parent: 1, age: 20 * 60, executable: "/usr/bin/tail", arguments: ["tail", "-n", "+1", "app.log"]),
             // Chromium relaunches from a code-sign clone outside /Applications.
             process(16, parent: 1, age: 2 * 86400, executable: "/private/var/folders/x/X/com.brave.Browser.code_sign_clone/c/Brave Browser.app.bundle/Contents/MacOS/Brave Browser"),
@@ -100,20 +100,36 @@ final class MacHealthTests: XCTestCase {
 
     func testLongTestRunnerGroupsItsWorkers() {
         let jest = process(500, parent: 400, age: 3 * 3600, executable: "/usr/local/bin/node",
-            arguments: ["node", "\(home)/Dev/app/node_modules/.bin/jest", "--silent"], cwd: "\(home)/Dev/app", resident: 50_000_000)
+            arguments: ["node", "\(home)/Dev/app/node_modules/.bin/jest", "--silent"], cwd: "\(home)/Dev/app", memory: 50_000_000)
         let workers = (0..<17).map { offset in
             process(600 + offset, parent: 500, age: 3 * 3600, executable: "/usr/local/bin/node",
-                arguments: ["node", "\(home)/Dev/app/node_modules/jest-worker/build/workers/processChild.js"], resident: 300_000_000)
+                arguments: ["node", "\(home)/Dev/app/node_modules/jest-worker/build/workers/processChild.js"], memory: 300_000_000)
         }
         let report = LeftoverPolicy.report(ProcessInventory(processes: [jest] + workers, sampledAt: now), cpu: [:], now: now, home: home)
         XCTAssertEqual(report.leftovers.count, 1)
         XCTAssertEqual(report.leftovers.first?.name, "node · jest")
         XCTAssertEqual(report.leftovers.first?.children, 17)
-        XCTAssertEqual(report.leftovers.first?.resident, 50_000_000 + 17 * 300_000_000)
+        XCTAssertEqual(report.leftovers.first?.memory, 50_000_000 + 17 * 300_000_000)
 
         let fresh = LeftoverPolicy.report(ProcessInventory(processes: [process(501, parent: 400, age: 20 * 60, executable: "/usr/local/bin/node",
             arguments: ["node", "jest"])], sampledAt: now), cpu: [:], now: now, home: home)
         XCTAssertTrue(fresh.leftovers.isEmpty, "A test run that just started is in use")
+    }
+
+    func testMetroWorkersBelongToTheirDevServer() {
+        var expo = process(57894, parent: 57767, age: 3 * 3600, executable: "/opt/homebrew/bin/node",
+            arguments: ["node", "\(home)/Dev/app/node_modules/.bin/expo", "start", "--port", "8085"], cwd: "\(home)/Dev/app", listening: [8085])
+        expo.connections = 0
+        let workers = (0..<11).map { offset in
+            process(58190 + offset, parent: 57894, age: 3 * 3600, executable: "/opt/homebrew/bin/node",
+                arguments: ["node", "\(home)/Dev/app/node_modules/jest-worker/build/workers/processChild.js"], cwd: "\(home)/Dev/app")
+        }
+        var report = LeftoverPolicy.report(ProcessInventory(processes: [expo] + workers, sampledAt: now), cpu: [:], now: now, home: home)
+        XCTAssertTrue(report.leftovers.isEmpty, "Bundler workers under a 3-hour-old server are not leftovers: \(report.leftovers.map(\.name))")
+
+        let orphaned = workers.map { worker -> ProcessSample in var copy = worker; copy.parentPID = 1; return copy }
+        report = LeftoverPolicy.report(ProcessInventory(processes: orphaned, sampledAt: now), cpu: [:], now: now, home: home)
+        XCTAssertEqual(report.leftovers.count, 11, "Workers whose parent exited are reported")
     }
 
     func testAgentScratchScriptsAreFlaggedButShellWrappersAreNot() {
@@ -134,18 +150,18 @@ final class MacHealthTests: XCTestCase {
         let udid = "06C07A39-925A-4999-89EE-6A99C6A3E8C4"
         let device = "\(home)/Library/Developer/CoreSimulator/Devices/\(udid)"
         let launchd = process(86106, parent: 1, age: 20 * 3600, executable: "/Library/Developer/CoreSimulator/Volumes/iOS/RuntimeRoot/sbin/launchd_sim",
-            arguments: ["launchd_sim", "\(device)/data/var/run/launchd_bootstrap.plist"], resident: 10_000_000)
+            arguments: ["launchd_sim", "\(device)/data/var/run/launchd_bootstrap.plist"], memory: 10_000_000)
         let app = process(86200, parent: 86106, age: 19 * 3600,
-            executable: "\(device)/data/Containers/Bundle/Application/ABC/Maurice.app/Maurice", resident: 400_000_000)
+            executable: "\(device)/data/Containers/Bundle/Application/ABC/Maurice.app/Maurice", memory: 400_000_000)
         let daemon = process(86201, parent: 86106, age: 20 * 3600, executable: "/Library/Developer/CoreSimulator/Volumes/iOS/RuntimeRoot/usr/libexec/backboardd",
-            resident: 90_000_000)
+            memory: 90_000_000)
         let inventory = ProcessInventory(processes: [launchd, app, daemon], sampledAt: now)
         let report = LeftoverPolicy.report(inventory, cpu: [:], now: now, home: home, deviceName: { $0 == udid ? "iPhone 17 Pro" : nil })
         XCTAssertEqual(report.leftovers.count, 1)
         XCTAssertEqual(report.leftovers.first?.kind, .simulator)
         XCTAssertEqual(report.leftovers.first?.name, "iPhone 17 Pro")
         XCTAssertEqual(report.leftovers.first?.folder, "Running Maurice")
-        XCTAssertEqual(report.leftovers.first?.resident, 500_000_000)
+        XCTAssertEqual(report.leftovers.first?.memory, 500_000_000)
         XCTAssertEqual(report.leftovers.first?.target, .simulator(udid: udid))
 
         let window = process(700, parent: 1, age: 3600, executable: "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator")
@@ -189,6 +205,7 @@ final class MacHealthTests: XCTestCase {
         let apps = ProcessInventory.read().processes.filter { LeftoverPolicy.isApp($0.executable) }
         XCTAssertFalse(apps.isEmpty)
         XCTAssertTrue(apps.allSatisfy { $0.arguments.isEmpty }, "App arguments are never needed, so they are never read")
+        XCTAssertTrue(ProcessInventory.read().processes.contains { ($0.memory ?? 0) > 0 }, "Physical footprint is readable for same-user processes")
         XCTAssertEqual(LeftoverPolicy.baseName("/opt/homebrew/bin/node"), "node")
         XCTAssertEqual(LeftoverPolicy.baseName("node"), "node")
     }
@@ -221,8 +238,8 @@ final class MacHealthTests: XCTestCase {
             storage: .init(total: 2000 * gigabyte, available: available), thermal: .nominal, bootedAt: now.addingTimeInterval(-86400))
     }
     private func process(_ pid: Int, parent: Int, age: TimeInterval, executable: String, arguments: [String] = [], cwd: String = "",
-                         cpuTime: TimeInterval? = 1, resident: UInt64? = 10_000_000, listening: [Int] = []) -> ProcessSample {
+                         cpuTime: TimeInterval? = 1, memory: UInt64? = 10_000_000, listening: [Int] = []) -> ProcessSample {
         ProcessSample(pid: pid, parentPID: parent, started: now.addingTimeInterval(-age), executable: executable,
-                      arguments: arguments.isEmpty ? [executable] : arguments, cwd: cwd, cpuTime: cpuTime, resident: resident, listeningPorts: listening)
+                      arguments: arguments.isEmpty ? [executable] : arguments, cwd: cwd, cpuTime: cpuTime, memory: memory, listeningPorts: listening)
     }
 }

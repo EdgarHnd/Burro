@@ -2,6 +2,15 @@ import XCTest
 @testable import BurroCore
 
 final class AgentRefreshCoordinatorTests: XCTestCase {
+    func testProviderEventsIgnoreUnrelatedCodexOutputButKeepChangesAndOverflow() {
+        for path in ["state_5.sqlite-wal", ".codex-global-state.json", ".codex-global-state.json.tmp", "thread-writer-locks/a.lock", "sessions/2026/chat.jsonl", "archived_sessions/chat.jsonl"] {
+            XCTAssertTrue(AgentFileWatcher.affectsAgents(["/home/.codex/" + path], uncertain: false, home: "/home"))
+        }
+        XCTAssertFalse(AgentFileWatcher.affectsAgents(["/home/.codex/log/ui.log", "/home/.codex/tmp/build.out"], uncertain: false, home: "/home"))
+        XCTAssertTrue(AgentFileWatcher.affectsAgents(["/home/.codex/log/ui.log"], uncertain: true, home: "/home"))
+        XCTAssertTrue(AgentFileWatcher.affectsAgents(["/home/.codex"], uncertain: false, home: "/home"))
+        XCTAssertTrue(AgentFileWatcher.affectsAgents(["/home/.claude/sessions/a.json"], uncertain: false, home: "/home"))
+    }
     @MainActor func testEventBurstDuringRefreshCoalescesAndStopPreventsRestart() async throws {
         var count = 0, concurrent = 0, maximum = 0
         let firstStarted = expectation(description: "first refresh started")

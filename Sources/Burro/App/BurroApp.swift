@@ -52,7 +52,7 @@ private struct DesktopRootView: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         ContentView(store: store, notch: notch)
-            .background(WindowProbe(onAttach: notch.registerDashboard))
+            .background(WindowProbe(onAttach: notch.registerDashboard, onVisibilityChange: store.dashboardVisibilityChanged))
             .task {
                 store.start()
                 notch.start(store: store) { openWindow(id: "main") }

@@ -1,8 +1,9 @@
-// One native material behind the expanded notch; the parent owns clipping, fades and input.
+// A dark translucent material behind the expanded notch; the parent owns clipping, fades and input.
 import AppKit
 
 @MainActor final class NotchGlassView: NSView {
     private let effect: NSView
+    private let shade = NSView()
 
     override init(frame frameRect: NSRect) {
         effect = Self.makeEffect()
@@ -10,6 +11,10 @@ import AppKit
         appearance = NSAppearance(named: .darkAqua)
         wantsLayer = true
         addSubview(effect)
+        // Darken bright backdrops while retaining the material's blur and transparency.
+        shade.wantsLayer = true
+        shade.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.5).cgColor
+        addSubview(shade)
         setAccessibilityElement(false)
     }
 
@@ -20,7 +25,6 @@ import AppKit
             let glass = NSGlassEffectView()
             glass.style = .regular
             glass.cornerRadius = 26
-            // Keep white status text readable over bright windows without covering the material.
             glass.tintColor = NSColor.black.withAlphaComponent(0.75)
             glass.contentView = NSView()
             return glass
@@ -36,8 +40,9 @@ import AppKit
     override var isFlipped: Bool { true }
     override func layout() {
         super.layout()
-        // Align the material's edges with the existing eight-point notch shoulders.
+        // Align the material and tint with the existing eight-point notch shoulders.
         effect.frame = bounds.insetBy(dx: 8, dy: 0)
+        shade.frame = effect.frame
     }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
