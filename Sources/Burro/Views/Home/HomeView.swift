@@ -20,6 +20,8 @@ struct HomeView: View {
                     HStack(alignment: .top, spacing: 28) {
                         VStack(alignment: .leading, spacing: 30) {
                             quickActions
+                            HomeOrchestrator(store: store)
+                            HomeMainProject(store: store, summary: summary)
                             benches(summary)
                             projects(summary)
                             machines(summary)
@@ -104,7 +106,8 @@ struct HomeView: View {
     @ViewBuilder private func projects(_ summary: HomeSummary) -> some View {
         // With benches, show only the projects that aren't on one.
         let benched = Set(store.benches.benches.flatMap(\.projects))
-        let loose = summary.projects.filter { !benched.contains($0.id) }
+        let main = store.mainProject?.path
+        let loose = summary.projects.filter { !benched.contains($0.id) && $0.id != main }
         if !(loose.isEmpty && !benched.isEmpty) {
         VStack(alignment: .leading, spacing: 14) {
             HomeSectionHeader(title: benched.isEmpty ? "Projects" : "Other projects") {

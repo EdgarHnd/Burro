@@ -91,6 +91,7 @@ struct CodexLogBatch: Decodable, Sendable {
     let completed: ClaudeCompletedBatch?
     let catalog: CodexCatalogBatch?
     var activity: DailyActivityBatch? = nil
+    var transcript: TranscriptBatch? = nil
 }
 
 // All child state and pipe I/O are serialized by lock. Callers already run on
@@ -167,29 +168,31 @@ final class AgentLogWorker: @unchecked Sendable {
     }
 
     func exchange(_ paths: [String], claude: ClaudeLogRequest? = nil, usage: UsageLogRequest? = nil, completed: String? = nil,
-                  catalog: CodexCatalogRequest? = nil, activity: DailyActivityRequest? = nil) -> CodexLogBatch? {
+                  catalog: CodexCatalogRequest? = nil, activity: DailyActivityRequest? = nil,
+                  transcript: TranscriptRequest? = nil) -> CodexLogBatch? {
         lock.lock(); defer { lock.unlock() }
-        return exchangeLocked(paths, claude: claude, usage: usage, completed: completed, catalog: catalog, activity: activity)
+        return exchangeLocked(paths, claude: claude, usage: usage, completed: completed, catalog: catalog, activity: activity, transcript: transcript)
     }
 
     private func exchangeLocked(_ paths: [String], claude: ClaudeLogRequest? = nil, usage: UsageLogRequest? = nil,
                                 completed: String? = nil, catalog: CodexCatalogRequest? = nil,
-                                activity: DailyActivityRequest? = nil) -> CodexLogBatch? {
-        guard (!paths.isEmpty || claude != nil || usage != nil || completed != nil || catalog != nil || activity != nil), paths.count <= 2048,
+                                activity: DailyActivityRequest? = nil, transcript: TranscriptRequest? = nil) -> CodexLogBatch? {
+        guard (!paths.isEmpty || claude != nil || usage != nil || completed != nil || catalog != nil || activity != nil || transcript != nil), paths.count <= 2048,
+              (transcript == nil || (paths.isEmpty && claude == nil && usage == nil && completed == nil && catalog == nil && activity == nil)),
               (catalog == nil || (paths.isEmpty && claude == nil && usage == nil && completed == nil)),
               (usage == nil || (paths.isEmpty && claude == nil && completed == nil)), (claude?.sessions.count ?? 0) <= 256,
               (activity == nil || (paths.isEmpty && claude == nil && usage == nil && completed == nil && catalog == nil)), executable != nil,
               ProcessInfo.processInfo.systemUptime >= retryAfter else { return nil }
         do {
-            struct Request: Encodable { let version = 4; let id: String; let paths: [String]; let claude: ClaudeLogRequest?; let usage: UsageLogRequest?; let completed: String?; let catalog: CodexCatalogRequest?; let activity: DailyActivityRequest? }
+            struct Request: Encodable { let version = 4; let id: String; let paths: [String]; let claude: ClaudeLogRequest?; let usage: UsageLogRequest?; let completed: String?; let catalog: CodexCatalogRequest?; let activity: DailyActivityRequest?; let transcript: TranscriptRequest? }
             let id = UUID().uuidString
-            var request = try JSONEncoder().encode(Request(id: id, paths: paths, claude: claude, usage: usage, completed: completed, catalog: catalog, activity: activity)); request.append(10)
+            var request = try JSONEncoder().encode(Request(id: id, paths: paths, claude: claude, usage: usage, completed: completed, catalog: catalog, activity: activity, transcript: transcript)); request.append(10)
             guard request.count <= 2 * 1024 * 1024 else { return nil }
             let deadline = ProcessInfo.processInfo.systemUptime + timeout
             try startLocked()
             guard let input, let output else { throw WorkerError.channel }
             try write(request, to: input.fileDescriptor, deadline: deadline)
-            let response = try readLine(from: output.fileDescriptor, deadline: deadline, limit: catalog == nil && activity == nil ? 512 * 1024 : 8 * 1024 * 1024)
+            let response = try readLine(from: output.fileDescriptor, deadline: deadline, limit: catalog == nil && activity == nil && transcript == nil ? 512 * 1024 : 8 * 1024 * 1024)
             let batch = try JSONDecoder().decode(CodexLogBatch.self, from: response)
             guard batch.version == 4, batch.id == id, batch.results.count == paths.count,
                   (0...paths.count).contains(batch.reads), (0...paths.count).contains(batch.cacheHits),
@@ -227,6 +230,9 @@ final class AgentLogWorker: @unchecked Sendable {
             if let activity {
                 guard let result = batch.activity, result.valid(for: activity) else { throw WorkerError.protocolMismatch }
             } else if batch.activity != nil { throw WorkerError.protocolMismatch }
+            if let transcript {
+                guard let result = batch.transcript, result.valid(for: transcript.limit) else { throw WorkerError.protocolMismatch }
+            } else if batch.transcript != nil { throw WorkerError.protocolMismatch }
             return batch
         } catch {
             stopLocked()

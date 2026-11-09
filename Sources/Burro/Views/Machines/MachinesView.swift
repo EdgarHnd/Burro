@@ -151,5 +151,6 @@ struct PillButton: View {
                 .background { Capsule().fill(hovering ? AppAppearance.raised : AppAppearance.surface).shadow(color: AppAppearance.shadow, radius: 6, y: 2) }
                 .overlay(Capsule().strokeBorder(AppAppearance.separator))
         }.buttonStyle(.plain).onHover { hovering = $0 }
+        .fixedSize() // a pill never wraps its title
     }
 }

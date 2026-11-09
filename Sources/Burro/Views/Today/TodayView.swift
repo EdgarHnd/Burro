@@ -50,12 +50,8 @@ struct TodayView: View {
                     .padding(.horizontal, 6).padding(.vertical, 1)
                     .background(AppAppearance.raised, in: Capsule()).foregroundStyle(AppAppearance.secondary)
                 Spacer()
-                Text("Group").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                Picker("Group", selection: $grouping) {
-                    ForEach(TodayGrouping.allCases) { Text($0.title).tag($0.rawValue) }
-                }.labelsHidden().fixedSize()
-                Toggle("Previews", isOn: Binding(get: { today.previews }, set: { today.previews = $0 }))
-                    .toggleStyle(.checkbox).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
+                CapsulePicker(options: TodayGrouping.allCases.map { ($0.rawValue, $0.title) }, selection: $grouping)
+                TogglePill(title: "Previews", symbol: "eye", isOn: Binding(get: { today.previews }, set: { today.previews = $0 }))
                     .help("Show the first line of each chat's latest reply. Read on demand, kept in memory only.")
             }.padding(.horizontal, 2)
             if rows.isEmpty {
@@ -64,7 +60,7 @@ struct TodayView: View {
             } else {
                 ForEach(TodayRows.groups(rows, by: TodayGrouping(rawValue: grouping) ?? .status), id: \.title) { group in
                     TodayChatGroup(title: group.title, color: group.color, rows: group.rows) { row in
-                        if let session = row.session { store.open(session) }
+                        if let session = row.session { store.showChat(session) }
                     }
                 }
             }

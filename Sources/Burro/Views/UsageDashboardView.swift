@@ -184,7 +184,7 @@ struct UsageDashboardView: View {
             HStack {
                 Text("Quota history").font(.headline)
                 Spacer()
-                Picker("Period", selection: $days) { Text("7 days").tag(7); Text("30 days").tag(30) }.pickerStyle(.segmented).labelsHidden().frame(width: 160)
+                CapsulePicker(options: [(7, "7 days"), (30, "30 days")], selection: $days)
             }
             if !usage.preferences.history || samples.count < 2 {
                 Text(usage.preferences.history ? "History starts with Burro’s readings for this account. The chart appears after the next refresh." : "History is off. Enable it in Usage settings.")

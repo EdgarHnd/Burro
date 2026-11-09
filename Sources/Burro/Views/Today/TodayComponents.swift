@@ -24,8 +24,7 @@ struct TodayHeader: View {
             Spacer()
             HStack(spacing: 8) {
                 stepButton("chevron.left", "Previous day", enabled: true) { today.step(-1) }
-                DatePicker("Day", selection: Binding(get: { today.day }, set: { today.show($0) }), in: ...Date(), displayedComponents: .date)
-                    .labelsHidden().datePickerStyle(.field).fixedSize()
+                DayPill(today: today)
                 stepButton("chevron.right", "Next day", enabled: today.canGoForward) { today.step(1) }
             }
         }
@@ -44,6 +43,30 @@ struct TodayHeader: View {
             Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).frame(width: 32, height: 32)
                 .background(AppAppearance.raised, in: Circle())
         }.buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.35).help(label).accessibilityLabel(label)
+    }
+}
+
+/// The selected day as a pill; click for a calendar.
+private struct DayPill: View {
+    var today: TodayStore
+    @State private var open = false
+    @State private var hovering = false
+    var body: some View {
+        Button { open.toggle() } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "calendar").font(.system(size: 12, weight: .medium)).foregroundStyle(AppAppearance.secondary)
+                Text(today.isToday ? "Today" : today.day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .padding(.horizontal, 14).frame(height: 32)
+            .background(hovering ? AppAppearance.raised : AppAppearance.surface, in: Capsule())
+            .overlay(Capsule().strokeBorder(AppAppearance.separator))
+        }
+        .buttonStyle(.plain).onHover { hovering = $0 }.help("Pick a day")
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            DatePicker("Day", selection: Binding(get: { today.day }, set: { today.show($0); open = false }), in: ...Date(), displayedComponents: .date)
+                .labelsHidden().datePickerStyle(.graphical).padding(14)
+        }
     }
 }
 

@@ -40,9 +40,7 @@ struct NewChatSheet: View {
             HStack {
                 Text("New chat").font(.system(size: 17, weight: .semibold))
                 Spacer()
-                Picker("Agent", selection: $providerRaw) {
-                    ForEach(LaunchProvider.allCases) { Text($0.title).tag($0.rawValue) }
-                }.pickerStyle(.segmented).labelsHidden().fixedSize()
+                CapsulePicker(options: LaunchProvider.allCases.map { ($0.rawValue, $0.title) }, selection: $providerRaw)
             }
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $prompt)
@@ -106,7 +104,7 @@ struct NewChatSheet: View {
             }
 
             Toggle(provider == .codex ? "Open in Codex when it starts" : "Attach in Terminal when it starts", isOn: $openWhenStarted)
-                .toggleStyle(.checkbox).font(.system(size: 12))
+                .toggleStyle(.switch).controlSize(.mini).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
 
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(AppAppearance.amber)
@@ -132,7 +130,12 @@ struct NewChatSheet: View {
         .modifier(AppTheme())
         .onAppear {
             store.loadCodexModels()
-            folder = folders.contains { $0.path == savedFolder } ? savedFolder : (folders.first?.path ?? "")
+            if let requested = store.newChatFolder {
+                if !folders.contains(where: { $0.path == requested }) { customFolders.append(requested) }
+                folder = requested; store.newChatFolder = nil
+            } else {
+                folder = folders.contains { $0.path == savedFolder } ? savedFolder : (folders.first?.path ?? "")
+            }
             promptFocused = true
         }
         .onChange(of: folder) { old, new in

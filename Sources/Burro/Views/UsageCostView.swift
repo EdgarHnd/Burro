@@ -35,7 +35,7 @@ struct UsageCostView: View {
                     if provider != .grok {
                         HStack {
                             Text("Daily history").font(.callout.weight(.medium)); Spacer()
-                            Picker("Metric", selection: $showCost) { Text("Tokens").tag(false); Text("API value").tag(true) }.pickerStyle(.segmented).labelsHidden().frame(width: 170)
+                            CapsulePicker(options: [(false, "Tokens"), (true, "API value")], selection: $showCost)
                         }
                         Chart(result.days) { day in
                             BarMark(x: .value("Day", day.date, unit: .day), y: .value(showCost ? "USD" : "Tokens", showCost ? day.apiValue : day.tokens))

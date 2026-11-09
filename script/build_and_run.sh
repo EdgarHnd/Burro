@@ -43,6 +43,7 @@ if [[ ! -f Resources/AppIcon.icns || script/generate_icon.swift -nt Resources/Ap
   iconutil -c icns Resources/AppIcon.iconset -o Resources/AppIcon.icns
 fi
 swift build -c "$CONFIGURATION" --product "$APP_NAME"
+swift build -c "$CONFIGURATION" --product burro-mcp
 BUILD_BINARY="$(swift build -c "$CONFIGURATION" --show-bin-path)/$APP_NAME"
 "$ROOT_DIR/script/build_rust_worker.sh" "$(dirname "$BUILD_BINARY")"
 # Package separately so a failed signature check cannot overwrite the previous app.
@@ -61,6 +62,7 @@ APP_BINARY="$APP_CONTENTS/MacOS/$APP_NAME"
 mkdir -p "$APP_CONTENTS/MacOS" "$APP_CONTENTS/Resources"
 cp "$BUILD_BINARY" "$APP_BINARY"
 cp "$(dirname "$BUILD_BINARY")/burro-log-worker" "$APP_CONTENTS/MacOS/burro-log-worker"
+cp "$(dirname "$BUILD_BINARY")/burro-mcp" "$APP_CONTENTS/MacOS/burro-mcp"
 chmod +x "$APP_BINARY"
 cat > "$APP_CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -100,6 +102,7 @@ for resource in butter.pdf butter-body.pdf butter-plate.pdf butter-eyes.json abs
 done
 cp -R "$BRAND_BUNDLE" "$APP_CONTENTS/Resources/"
 codesign --force --sign "$signing_identity" "$APP_CONTENTS/MacOS/burro-log-worker"
+codesign --force --sign "$signing_identity" "$APP_CONTENTS/MacOS/burro-mcp"
 codesign --force --deep --sign "$signing_identity" "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"
 current_requirement="$(codesign -dr - "$APP_BUNDLE" 2>/dev/null)"

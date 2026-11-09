@@ -7,7 +7,7 @@ enum AppPage: String, CaseIterable, Identifiable, Hashable {
     case home, today, worktrees, machines, usage, health, remote
     var id: String { rawValue }
     /// Pages in the top bar and ⌘1–⌘6. Remote sessions open from a machine card.
-    static let navigable: [AppPage] = [.home, .today, .worktrees, .machines, .usage, .health]
+    static let navigable: [AppPage] = [.home, .today, .remote, .worktrees, .machines, .usage, .health]
     var title: String {
         switch self {
         case .home: "Home"
@@ -16,7 +16,7 @@ enum AppPage: String, CaseIterable, Identifiable, Hashable {
         case .worktrees: "Worktrees"
         case .usage: "Usage"
         case .health: "Mac Health"
-        case .remote: "Remote"
+        case .remote: "Chats"
         }
     }
     var icon: String {
@@ -27,7 +27,7 @@ enum AppPage: String, CaseIterable, Identifiable, Hashable {
         case .worktrees: "arrow.triangle.branch"
         case .usage: "gauge.with.dots.needle.33percent"
         case .health: NotchPage.mac.symbol
-        case .remote: "network"
+        case .remote: "bubble.left.and.bubble.right"
         }
     }
     var shortcut: KeyEquivalent { KeyEquivalent(Character(String((Self.navigable.firstIndex(of: self) ?? 8) + 1))) }

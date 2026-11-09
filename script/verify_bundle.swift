@@ -6,6 +6,7 @@ guard let bundle = Bundle(url: app),
       let executable = bundle.executableURL,
       FileManager.default.isExecutableFile(atPath: executable.path),
       FileManager.default.isExecutableFile(atPath: executable.deletingLastPathComponent().appendingPathComponent("burro-log-worker").path),
+      FileManager.default.isExecutableFile(atPath: executable.deletingLastPathComponent().appendingPathComponent("burro-mcp").path),
       let name = bundle.object(forInfoDictionaryKey: "CFBundleIconFile") as? String,
       bundle.url(forResource: name, withExtension: "icns") != nil,
       let resources = bundle.resourceURL,
@@ -17,8 +18,10 @@ guard let bundle = Bundle(url: app),
       brand.url(forResource: "abstract", withExtension: "pdf", subdirectory: "Brand") != nil,
       let core = Bundle(url: resources.appendingPathComponent("Burro_BurroCore.bundle")),
       let probe = core.url(forResource: "remote_probe", withExtension: "py"),
-      FileManager.default.isReadableFile(atPath: probe.path) else {
-    fputs("App bundle is missing its executable, Rust log worker, icon, brand assets, or remote probe.\n", stderr)
+      FileManager.default.isReadableFile(atPath: probe.path),
+      let transcript = core.url(forResource: "remote_transcript", withExtension: "py"),
+      FileManager.default.isReadableFile(atPath: transcript.path) else {
+    fputs("App bundle is missing its executable, Rust log worker, orchestrator tools, icon, brand assets, or remote scripts.\n", stderr)
     exit(1)
 }
 print("Bundle resources verified")

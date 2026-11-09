@@ -112,6 +112,11 @@ import BurroCore
     let machines = MachinesStore()
     let notes: NotesStore
     let benches: BenchesStore
+    let orchestrator: OrchestratorStore
+    /// The project Home features. Nil means "the repository with the most worktrees".
+    var mainProjectPath: String? { didSet { defaults.set(mainProjectPath, forKey: "home.mainProject") } }
+    /// Preselects the project in the New chat sheet.
+    var newChatFolder: String?
     // New chat launcher
     var newChatPresented = false
     var codexModels: [LaunchModel] = []
@@ -136,6 +141,8 @@ import BurroCore
             .appendingPathComponent("burro-todos-\(UUID().uuidString).json"), config: nil)
         // The app passes its real notes store; tests and previews get a throwaway folder.
         benches = BenchesStore(defaults: defaults)
+        orchestrator = OrchestratorStore(defaults: defaults)
+        mainProjectPath = defaults.string(forKey: "home.mainProject")
         self.notes = notes ?? NotesStore(folder: FileManager.default.temporaryDirectory.appendingPathComponent("burro-notes-\(UUID().uuidString)"))
         self.cleanupBatch = cleanupBatch ?? CleanupBatchStore()
         usage = UsageStore(defaults: defaults)
@@ -149,6 +156,8 @@ import BurroCore
         protectedPaths = Set(defaults.stringArray(forKey: "protectedPaths") ?? [])
         discover = defaults.object(forKey: "discover") as? Bool ?? true
         baseOverrides = defaults.dictionary(forKey: "baseOverrides") as? [String: String] ?? [:]
+        orchestrator.snapshot = { [weak self] in self?.orchestratorState() }
+        orchestrator.profiles = { [weak self] in self?.usage.preferences.profiles ?? [:] }
     }
     func matches(_ filter: WorktreeFilter, tree: Worktree) -> Bool {
         if filter == .candidates { return cleanupEligibility(tree).allowed }
@@ -285,13 +294,31 @@ import BurroCore
         if let count = facts.unpushed, count > 0 { return "Unpushed" }
         return facts.integrationSummary
     }
+    /// "Show in Burro": opens the chat's conversation on the Chats page (any machine).
     func selectAgent(_ session: AgentSession) {
         search = ""
-        if session.remote != nil { page = .remote; remoteSelection = session.id; return }
-        page = .worktrees
-        filter = .all
-        selection = worktree(for: session)?.path
+        page = .remote
+        remoteSelection = session.id
     }
+    func showChat(_ session: AgentSession) { selectAgent(session) }
+    var mainProject: (path: String, name: String)? {
+        let repos = repositoriesFound
+        if let path = mainProjectPath, let match = repos.first(where: { $0.path == path }) { return match }
+        let counts = Dictionary(grouping: availableWorktrees, by: \.repositoryPath).mapValues(\.count)
+        return repos.max { (counts[$0.path] ?? 0, $1.name) < (counts[$1.path] ?? 0, $0.name) }
+    }
+    /// Chats working in a project on any machine: by worktree ownership locally, by folder name remotely.
+    func sessions(inProject path: String, name: String) -> [AgentSession] {
+        let roots = snapshot.worktrees.filter { $0.repositoryPath == path }.map(\.path)
+        return notchChatSessions.filter { session in
+            guard session.isSubagent != true else { return false }
+            if session.remote == nil {
+                return ([session.cwd] + session.attachedPaths).contains { cwd in roots.contains { Paths.contains($0, cwd) } }
+            }
+            return session.cwd.split(separator: "/").contains { $0 == name }
+        }
+    }
+    func startChat(in folder: String) { newChatFolder = folder; newChatPresented = true }
     /// Opens the chat in its provider when a link exists; otherwise shows its details in Burro.
     func open(_ session: AgentSession) {
         if let url = session.chatURL, NSWorkspace.shared.open(url) { return }
@@ -465,7 +492,8 @@ import BurroCore
         rebuildAgentActivity()
     }
     private func rebuildAgentActivity() {
-        var sessions = localActivity.sessions
+        // The orchestrator's own chat lives in its pinned row, not among your chats.
+        var sessions = localActivity.sessions.filter { !Orchestrator.owns($0) }
         var warnings = localActivity.warnings
         for host in remoteHosts where host.enabled {
             guard var result = remoteSnapshots[host.id] else { continue }

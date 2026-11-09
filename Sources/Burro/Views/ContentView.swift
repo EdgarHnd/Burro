@@ -54,12 +54,5 @@ struct ContentView: View {
             else { AppEmptyState("Select a worktree", symbol: "arrow.triangle.branch", detail: "Agent activity and cleanup checks appear here.") }
         }
     }
-    private var remote: some View {
-        NavigationSplitView {
-            RemoteSessionsView(store: store).background(AppAppearance.background)
-                .navigationSplitViewColumnWidth(min: 360, ideal: 520)
-        } detail: {
-            RemoteSessionDetailView(store: store)
-        }
-    }
+    private var remote: some View { ChatsView(store: store) }
 }

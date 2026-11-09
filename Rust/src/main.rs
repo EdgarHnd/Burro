@@ -5,6 +5,7 @@ mod catalog;
 mod claude;
 mod completed;
 mod status_policy;
+mod transcript;
 mod usage;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -30,6 +31,8 @@ struct Request {
     catalog: Option<catalog::Request>,
     #[serde(default)]
     activity: Option<activity::Request>,
+    #[serde(default)]
+    transcript: Option<transcript::Request>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -62,6 +65,8 @@ struct Response {
     catalog: Option<catalog::Batch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     activity: Option<activity::Batch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transcript: Option<transcript::Batch>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,6 +99,7 @@ struct Worker {
     completed: completed::Worker,
     catalog: catalog::Worker,
     activity: activity::Worker,
+    transcript: transcript::Worker,
 }
 
 fn parse_tail(bytes: &[u8]) -> (Option<EventState>, bool) {
@@ -195,6 +201,13 @@ impl Worker {
                 && (request.claude.is_some()
                     || request.completed.is_some()
                     || !request.paths.is_empty()))
+            || (request.transcript.is_some()
+                && (request.claude.is_some()
+                    || request.completed.is_some()
+                    || request.usage.is_some()
+                    || request.catalog.is_some()
+                    || request.activity.is_some()
+                    || !request.paths.is_empty()))
             || (request.activity.is_some()
                 && (request.claude.is_some()
                     || request.completed.is_some()
@@ -214,7 +227,8 @@ impl Worker {
                 && request.completed.is_none()
                 && request.usage.is_none()
                 && request.catalog.is_none()
-                && request.activity.is_none())
+                && request.activity.is_none()
+                && request.transcript.is_none())
         {
             self.cache.retain(|path, _| active.contains(path.as_str()));
         }
@@ -247,6 +261,10 @@ impl Worker {
             activity: request
                 .activity
                 .map(|request| self.activity.scan(request))
+                .transpose()?,
+            transcript: request
+                .transcript
+                .map(|request| self.transcript.read(request))
                 .transpose()?,
         })
     }
@@ -325,6 +343,7 @@ mod tests {
             completed: None,
             catalog: None,
             activity: None,
+            transcript: None,
         }
     }
 

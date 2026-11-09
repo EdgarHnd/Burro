@@ -255,7 +255,7 @@ struct HomeInbox: View {
                 Spacer()
                 Text("\(sessions.count)").font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(color)
             }.padding(.bottom, 4)
-            ForEach(sessions.prefix(4)) { session in HomeInboxRow(session: session, place: place(session)) { store.open(session) } }
+            ForEach(sessions.prefix(4)) { session in HomeInboxRow(session: session, place: place(session)) { store.showChat(session) } }
             if sessions.count > 4 {
                 Text("and \(sessions.count - 4) more in the notch").font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).padding(.top, 2)
             }
@@ -290,7 +290,7 @@ private struct HomeInboxRow: View {
         }
         .buttonStyle(.plain).padding(.horizontal, -8)
         .onHover { hovering = $0 }
-        .help(session.chatURL == nil ? "Show details in Burro" : "Open in \(session.provider == .codex ? "Codex" : "Claude")")
+        .help("Read this chat")
     }
 }
 
@@ -448,7 +448,7 @@ struct HomeDock: View {
                     .help("\(sessions.count) \(label.lowercased())")
                 HStack(spacing: -7) {
                     ForEach(sessions.prefix(6)) { session in
-                        Button { store.open(session) } label: {
+                        Button { store.showChat(session) } label: {
                             AgentAvatar(session: session, active: true, working: session.state == .working, size: 26)
                                 .padding(2).background(AppAppearance.surface, in: Circle())
                                 .overlay(Circle().strokeBorder(AppAppearance.separator))

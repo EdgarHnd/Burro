@@ -17,18 +17,17 @@ struct TopBar: View {
             if store.page != .home && store.page != .today {
                 Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(AppAppearance.tertiary)
                     .padding(.horizontal, 4)
-                Label(store.page == .remote ? "Remote sessions" : store.page.title, systemImage: store.page.icon)
+                Label(store.page.title, systemImage: store.page.icon)
                     .font(.system(size: 14, weight: .semibold)).labelStyle(.titleAndIcon)
             }
             Spacer(minLength: 16)
-            pageTools
-            Spacer(minLength: 16)
-            TopBarIcon(symbol: "tray", help: "Inbox: chats that need you or have results to read",
-                       badge: store.agentActivity.attentionCount, selected: false) { store.page = .today }
-            TopBarIcon(symbol: "arrow.triangle.branch", help: "Worktrees (⌘3)", selected: store.page == .worktrees) { store.page = .worktrees }
-            TopBarIcon(symbol: "server.rack", help: "Machines (⌘4)", selected: store.page == .machines || store.page == .remote) { store.page = .machines }
-            TopBarIcon(symbol: "gauge.with.dots.needle.33percent", help: "Usage (⌘5)", selected: store.page == .usage) { store.page = .usage }
-            TopBarIcon(symbol: "heart.text.square", help: "Mac Health (⌘6)", badge: store.health.report.leftovers.count,
+            pageTools.padding(.trailing, 10)
+            TopBarIcon(symbol: "bubble.left.and.bubble.right", help: "Chats (⌘3): every conversation, badge = needs you or ready to read",
+                       badge: store.agentActivity.attentionCount, selected: store.page == .remote) { store.page = .remote }
+            TopBarIcon(symbol: "arrow.triangle.branch", help: "Worktrees (⌘4)", selected: store.page == .worktrees) { store.page = .worktrees }
+            TopBarIcon(symbol: "server.rack", help: "Machines (⌘5)", selected: store.page == .machines) { store.page = .machines }
+            TopBarIcon(symbol: "gauge.with.dots.needle.33percent", help: "Usage (⌘6)", selected: store.page == .usage) { store.page = .usage }
+            TopBarIcon(symbol: "heart.text.square", help: "Mac Health (⌘7)", badge: store.health.report.leftovers.count,
                        badgeColor: AppAppearance.amber, selected: store.page == .health) { store.page = .health }
             TopBarIcon(symbol: "sparkles", help: "New chat (⌘N)", selected: false) { store.newChatPresented = true }
         }
@@ -57,7 +56,7 @@ struct TopBar: View {
                 TopBarIcon(symbol: "trash", help: "Review inactive worktrees and cleanup blockers", selected: store.filter == .cleanup) { store.filter = .cleanup }
                 TopBarIcon(symbol: "folder.badge.plus", help: "Add a repository", selected: false) { store.addRepository() }
             }
-            if [.worktrees, .remote, .today, .machines].contains(store.page) {
+            if [.worktrees, .today, .machines].contains(store.page) {
                 if store.refreshingCurrentPage { ProgressView().controlSize(.small).frame(width: 32) }
                 else {
                     TopBarIcon(symbol: "arrow.clockwise", help: "Refresh (⌘R)", selected: false) { Task { await store.refreshCurrentPage() } }

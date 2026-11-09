@@ -44,13 +44,29 @@ The Burro window opens on **Home**. The summary line, chips and cards come from 
 
 "Tokens today" counts local Codex and Claude logs on this Mac since midnight, read by the bundled Rust worker in the background while Home is on screen (at most every 90 seconds). It is an estimate, like the Usage page's local history, and is hidden if the worker is unavailable. Home samples Mac Health only while visible and starts no other polling; worktree inventories refresh on opening Home or Worktrees under the same rules as before.
 
-Use the toolbar's page switcher or **⌘1–⌘5** for Home, Worktrees, Usage, Mac Health and Remote. **⌘R** refreshes the current page. **Settings → Appearance** chooses Match System, Light or Dark; the notch always stays dark.
+Use the top bar or **⌘1–⌘7** for Home, Today, Chats, Worktrees, Machines, Usage and Mac Health. **⌘R** refreshes the current page. **Settings → Appearance** chooses Match System, Light or Dark; the notch always stays dark.
 
 ### Home and navigation
 
-The window has its own top bar (drag it to move the window; double-click to zoom), with **Today** and **Home** on the left (with the current page as a breadcrumb), and on the right the **inbox** (badge: chats that need you or have results to read; opens Today), **Worktrees**, **Machines**, **Usage**, **Mac Health** (badge: leftover processes) and **New chat**. ⌘1–⌘6 jump to Home, Today, Worktrees, Machines, Usage and Mac Health.
+The window has its own top bar (drag it to move the window; double-click to zoom), with **Today** and **Home** on the left (with the current page as a breadcrumb), and on the right **Chats** (badge: chats that need you or have results to read), **Worktrees**, **Machines**, **Usage**, **Mac Health** (badge: leftover processes) and **New chat**. ⌘1–⌘7 jump to Home, Today, Chats, Worktrees, Machines, Usage and Mac Health.
 
-Home's cover shows your current desktop picture; use the photo button to choose any image or go back to the desktop picture. The chips on it open the matching pages. Below: **Chat**, **Project** and **Machine** quick actions, project and machine cards (gradient tile, live counts or "Quiet"), the plain-language summary, and on the right **To-dos**, the inbox when something needs you, **Notes** (click + or a note to edit; stored on this Mac) and a **Scratchpad** that saves as you type. The dock shows running and attention avatars (click to open the chat), your machines with status dots, the **+** New chat button, and shortcuts.
+Home's cover shows your current desktop picture; use the photo button to choose any image or go back to the desktop picture. The chips on it open the matching pages. Below: **Chat**, **Project** and **Machine** quick actions, the **Orchestrator**, your **main project**, project and machine cards (gradient tile, live counts or "Quiet"), the plain-language summary, and on the right **To-dos**, the inbox when something needs you, **Notes** (click + or a note to edit; stored on this Mac) and a **Scratchpad** that saves as you type. The dock shows running and attention avatars (click to open the chat), your machines with status dots, the **+** New chat button, and shortcuts.
+
+### Main project
+
+Home features one project: the repository with the most worktrees, or the one you choose from the card's **⋯** menu. The card shows how many chats are running or need you in it on every machine, its worktrees, folders ready to clean and today's tokens, a **Live** column (working, waiting and unread chats) and **Earlier today**. **New chat** opens the launcher with that project selected; **Worktrees** filters the worktree list to it. It is left out of the project grid below.
+
+### Chats
+
+**⌘3** (or the chat icon in the top bar) lists every Codex and Claude chat Burro sees, on this Mac and your SSH machines: **Needs you**, **Working**, **Ready to read** and **Recent**, with the machine and folder under each title. Search matches titles, folders and machine names. Pick a chat to read it: your messages on the right, replies with inline Markdown and code blocks, and one row per tool call (click for its output). Long gaps get a time divider. **Open in Codex/Claude** appears when the provider has a link. Chats that are working or waiting refresh every few seconds while on screen.
+
+Burro shows the latest 300 messages, read from at most the last 16 MiB of the chat's file; older ones say so at the top. On this Mac the Rust history worker finds and parses the file; on another machine a fixed read-only script (`remote_transcript.py`) does the same over your SSH connection. Messages are kept in memory for display only. Clicking a chat anywhere else in Burro (Home, Today, the inbox, the dock) opens it here.
+
+### Orchestrator
+
+The **Orchestrator** is one Claude Code chat (Opus 5.5) that Burro runs for you. Ask it from Home or from its row pinned at the top of Chats: what needs you, where a project stands, what a chat on another machine did, or to get something started. Return sends; ⌥Return adds a line; the stop button ends a turn. **New conversation** starts over (the old one stays in Claude Code's history).
+
+Burro runs it with `claude -p` in `~/Library/Application Support/Burro/Orchestrator`, resuming the same session each turn. It gets Burro's tools through a bundled MCP server (`burro-mcp`): **overview** (machines and agent versions, the main project, projects, chats by status with their subagents, to-dos), **list_chats** (filter by status, machine, project or text), **read_chat** (any chat on any machine, read the same way as the Chats page), **list_worktrees** and **start_chat** (a Codex or Claude chat on this Mac in a project folder; it asks before acting unless the orchestrator picks another access level). It may also **Read**, **Grep** and **Glob** files. It can't edit files, run shell commands or browse the web, and it loads only Burro's MCP server, not your other MCP servers. A short turn takes about 5–15 seconds and is billed to your Claude account like any Claude Code chat.
 
 ### Benches
 
@@ -58,15 +74,15 @@ Benches group projects the way you think about them. Choose **Group into benches
 
 ### Machines
 
-**Machines** lists this Mac, every SSH machine you added, and every device on your Tailscale network (if Tailscale is installed). Cards show the OS, presence, running agents, project folders and a **Software** list. Tailscale devices you haven't added get **Add over SSH**, which opens the remote-machine form prefilled with the device's tailnet name; SSH machines link to their **Sessions**.
+**Machines** lists this Mac, every SSH machine you added, and every device on your Tailscale network (if Tailscale is installed). Cards show the OS, presence, running agents, project folders and a **Software** list. Tailscale devices you haven't added get **Add over SSH**, which opens the remote-machine form prefilled with the device's tailnet name; SSH machines link to their **Chats**.
 
 **Harnesses** compares agent tool versions across machines: each cell shows the installed version (green = latest, amber = older, grey = not installed) and the latest release from npm next to the tool's name. **Update** asks first, then runs the tool's own updater on that machine (`claude update`, `codex update`, `cursor-agent update`, `opencode upgrade`); chats that are already running keep the version they started with. Versions are re-read at most every ten minutes per machine and npm at most every six hours, only while the page is open.
 
 ### Today page
 
-**⌘2** (or **Today** in the toolbar) shows one day. The header has a live clock and a day stepper; past days are read once and kept until you quit.
+**⌘2** (or **Today** in the toolbar) shows one day. The header has a live clock, arrows to step through days and a day button that opens a calendar; past days are read once and kept until you quit. **Status | Project** picks the grouping and **Previews** toggles reply previews.
 
-- **Chats**: everything you talked to that day, grouped by **Status** (Needs you, Working, Ready to read, Earlier) or **Project**, newest first, with the project/worktree path and, with **Previews** on, the first line of the latest reply. Click a row to open the chat. Remote chats appear for today but have no preview (their logs live on the other machine).
+- **Chats**: everything you talked to that day, grouped by **Status** (Needs you, Working, Ready to read, Earlier) or **Project**, newest first, with the project/worktree path and, with **Previews** on, the first line of the latest reply. Click a row to read it in Chats. Remote chats appear for today but have no preview (their logs live on the other machine).
 - **Worked so far**: time from your first to your last message, with one cell per hour (shade = how many messages you sent) and, under it, Dayflow's dominant category for that hour.
 - **Messages**: what you sent vs agent replies, across Codex and Claude on this Mac.
 - **To-dos**: done today, still open, and added today (today only).

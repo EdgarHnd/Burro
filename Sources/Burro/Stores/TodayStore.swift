@@ -53,8 +53,13 @@ import BurroCore
                 ? Task.detached(priority: .utility) { DailyActivityScanner.scan(day: target, previews: previews, profiles: profiles) }.value : nil
             async let scannedDayflow: DayflowDay? = dayflowDue
                 ? Task.detached(priority: .utility) { Dayflow.day(target) }.value : nil
-            let (activity, dayflow) = await (scannedActivity, scannedDayflow)
+            let (scanned, dayflow) = await (scannedActivity, scannedDayflow)
             guard let self else { return }
+            let activity = scanned.map { day -> DailyActivity in
+                var day = day
+                day.chats.removeAll { Orchestrator.owns(folder: $0.folder) }
+                return day
+            }
             if let activity { self.activityCache[target] = (activity, Date()) }
             if let dayflow { self.dayflowCache[target] = (dayflow, Date()) }
             if self.day == target {

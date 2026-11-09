@@ -56,7 +56,7 @@ struct MachineCard: View {
                         .foregroundStyle(AppAppearance.blue).padding(.top, 2)
                         .help("Monitor this device's Codex and Claude sessions over SSH (needs an SSH login from this Mac)")
                 } else if model.kind == .ssh {
-                    Button("Sessions", action: showSessions).buttonStyle(.plain).font(.system(size: 12, weight: .medium))
+                    Button("Chats", action: showSessions).buttonStyle(.plain).font(.system(size: 12, weight: .medium))
                         .foregroundStyle(AppAppearance.blue).padding(.top, 2)
                 }
             }
