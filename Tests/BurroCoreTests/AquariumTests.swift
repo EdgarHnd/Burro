@@ -4,8 +4,8 @@ import XCTest
 
 final class AquariumTests: XCTestCase {
     private func session(_ id: String, _ provider: AgentProvider, model: String? = nil, effort: String? = nil,
-                         started: Date? = nil, subagent: Bool = false, parent: String? = nil) -> AgentSession {
-        AgentSession(id: id, provider: provider, title: "Chat \(id)", cwd: "/tmp", state: .working, updatedAt: Date(), evidence: "",
+                         started: Date? = nil, subagent: Bool = false, parent: String? = nil, state: AgentState = .working) -> AgentSession {
+        AgentSession(id: id, provider: provider, title: "Chat \(id)", cwd: "/tmp", state: state, updatedAt: Date(), evidence: "",
                      isSubagent: subagent, parentSessionID: parent, model: model, effort: effort, startedAt: started)
     }
 
@@ -22,6 +22,30 @@ final class AquariumTests: XCTestCase {
         let fry = AquariumFish.make(session("j", .codex, subagent: true, parent: "codex:p"), waiting: false)
         XCTAssertEqual(fry.species, .fry)
         XCTAssertEqual(fry.parent, "codex:p")
+    }
+
+    func testScheduledChatsAreJellyfish() throws {
+        let scheduled = session("s", .claude, model: "claude-opus-5-5", effort: "high", state: .scheduled)
+        let jelly = AquariumFish.make(scheduled, waiting: false)
+        XCTAssertEqual(jelly.species, .jellyfish)
+        XCTAssertTrue(jelly.detail.hasSuffix("scheduled"))
+        let school = AquariumFish.school(running: [session("r", .codex)], waiting: [], scheduled: (0..<8).map { session("s\($0)", .claude, state: .scheduled) })
+        XCTAssertEqual(school.first?.id, "r")
+        XCTAssertEqual(school.filter { $0.species == .jellyfish }.count, 5)
+
+        let fish = [jelly]
+        let size = CGSize(width: 1400, height: 900)
+        let spot = try XCTUnwrap(Aquarium.place(fish, width: size.width, height: size.height, t: 500).first)
+        XCTAssertEqual(Aquarium.fish(at: CGPoint(x: spot.x, y: spot.y - spot.length * 0.2), size: size, t: 500, fish: fish)?.id, "s")
+        XCTAssertNotNil(Aquarium.shape(.jellyfish, 0.5, -0.2), "bell")
+        XCTAssertNotNil(Aquarium.shape(.jellyfish, 0.1, 0.5), "tentacle")
+        XCTAssertNil(Aquarium.shape(.jellyfish, 0.5, -0.6), "above the bell")
+    }
+
+    func testHomeSummaryListsScheduledChats() {
+        let summary = HomeSummary.build(sessions: [session("a", .claude, state: .scheduled), session("b", .codex)], worktrees: [])
+        XCTAssertEqual(summary.scheduled.map(\.id), ["a"])
+        XCTAssertEqual(summary.running.map(\.id), ["b"])
     }
 
     func testEffortSetsVarietyAndAgeSetsSize() {
@@ -64,7 +88,7 @@ final class AquariumTests: XCTestCase {
     }
 
     func testShapesHaveBodiesAndEyes() {
-        for species in [AquariumFish.Species.shark, .sailfish, .barracuda, .minnow, .tuna, .angelfish, .puffer, .fry] {
+        for species in [AquariumFish.Species.shark, .sailfish, .barracuda, .minnow, .tuna, .angelfish, .puffer, .fry, .jellyfish] {
             XCTAssertNotNil(Aquarium.shape(species, 0.55, 0), "\(species) body")
             XCTAssertNil(Aquarium.shape(species, 0.5, 0.9), "\(species) outside")
         }

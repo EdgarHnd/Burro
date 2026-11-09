@@ -56,6 +56,8 @@ public struct HomeSummary: Sendable, Equatable {
     public var unread: [AgentSession]
     public var running: [AgentSession]
     public var sentence: String
+    /// Chats waiting on a timer or schedule.
+    public var scheduled: [AgentSession] = []
 
     public static let empty = HomeSummary(counts: HomeCounts(), projects: [], machines: [], needsYou: [], unread: [],
                                           running: [], sentence: "")
@@ -128,13 +130,14 @@ public struct HomeSummary: Sendable, Equatable {
         let needsYou = unique.filter { $0.state == .waiting && $0.remote?.stale != true }.sorted(by: newest)
         let unread = unique.filter(\.isDone).sorted(by: newest)
         let running = unique.filter { $0.state == .working }.sorted(by: newest)
+        let scheduled = unique.filter { $0.state == .scheduled }.sorted(by: newest)
         // Remote chats have no local project, so their machine names stand in as places.
         let places = sortedProjects.filter { $0.counts.running > 0 }.map(\.name)
             + machines.filter { $0.connection != .local && $0.counts.running > 0 }.map(\.name)
         let sentence = HomeSentence.make(counts: counts, places: places, needsYou: needsYou,
                                          usage: usage, leftovers: leftovers, now: now)
         return HomeSummary(counts: counts, projects: sortedProjects, machines: machines, needsYou: needsYou,
-                           unread: unread, running: running, sentence: sentence)
+                           unread: unread, running: running, sentence: sentence, scheduled: scheduled)
     }
     private static func latest(_ a: Date?, _ b: Date?) -> Date? {
         switch (a, b) { case let (a?, b?): max(a, b); case let (a?, nil): a; case let (nil, b): b }

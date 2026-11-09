@@ -10,14 +10,15 @@
 //   slower with longer fins, stripes at xhigh and spots at max (or ultra).
 // - Size is age. A new chat is a small fish that grows over its first day, and a little after.
 // - Waiting on you turns a fish amber and brings it up to the surface, as if waiting to be fed.
+// - Scheduled chats, waiting on a timer, are jellyfish drifting in place and pulsing.
 // Clicking a fish opens its chat.
 //
-// Open water otherwise: two jellyfish drift and bubbles rise. With no agents at work the tank is empty.
+// Open water otherwise, with bubbles rising. With no agents at work the tank is empty.
 import SwiftUI
 import BurroCore
 
 struct AquariumFish: Hashable, Sendable {
-    enum Species: Sendable { case shark, sailfish, barracuda, minnow, tuna, angelfish, puffer, fry }
+    enum Species: Sendable { case shark, sailfish, barracuda, minnow, tuna, angelfish, puffer, fry, jellyfish }
     var id: String
     var species: Species
     /// Reasoning effort, 0 (low) to 4 (max or ultra).
@@ -30,13 +31,19 @@ struct AquariumFish: Hashable, Sendable {
     var title = ""
     var detail = ""
 
-    /// One fish per agent at work or waiting on you, waiting first. Each agent keeps the same fish.
-    static func school(running: [AgentSession], waiting: [AgentSession], now: Date = Date()) -> [AquariumFish] {
-        var fish: [AquariumFish] = [], seen: Set<String> = [], big = 0, fry = 0
-        for (session, isWaiting) in waiting.prefix(4).map({ ($0, true) }) + running.map({ ($0, false) })
+    /// One fish per agent at work or waiting on you (waiting first), and a jellyfish per scheduled
+    /// chat. Each agent keeps the same fish.
+    static func school(running: [AgentSession], waiting: [AgentSession], scheduled: [AgentSession] = [],
+                       now: Date = Date()) -> [AquariumFish] {
+        var fish: [AquariumFish] = [], seen: Set<String> = [], big = 0, fry = 0, jellies = 0
+        for (session, isWaiting) in waiting.prefix(4).map({ ($0, true) }) + running.map({ ($0, false) }) + scheduled.map({ ($0, false) })
         where seen.insert(session.id).inserted {
             let one = make(session, waiting: isWaiting, now: now)
-            if one.species == .fry { guard fry < 14 else { continue }; fry += 1 } else { guard big < 10 else { continue }; big += 1 }
+            switch one.species {
+            case .fry: guard fry < 14 else { continue }; fry += 1
+            case .jellyfish: guard jellies < 5 else { continue }; jellies += 1
+            default: guard big < 10 else { continue }; big += 1
+            }
             fish.append(one)
         }
         return fish
@@ -45,7 +52,8 @@ struct AquariumFish: Hashable, Sendable {
     static func make(_ session: AgentSession, waiting: Bool, now: Date = Date()) -> AquariumFish {
         let model = session.model?.lowercased() ?? ""
         let species: Species
-        if session.isSubagent == true, !waiting { species = .fry }
+        if session.state == .scheduled, !waiting { species = .jellyfish }
+        else if session.isSubagent == true, !waiting { species = .fry }
         else if session.provider == .claude {
             species = model.contains("fable") ? .sailfish : model.contains("sonnet") ? .barracuda : model.contains("haiku") ? .minnow : .shark
         } else {
@@ -79,6 +87,7 @@ struct AquariumFish: Hashable, Sendable {
         if let effort = session.effort, !effort.isEmpty { parts.append(effort) }
         if let age { parts.append(ageText(age)) }
         if session.isSubagent == true { parts.append("subagent") }
+        if session.state == .scheduled { parts.append("scheduled") }
         return parts.joined(separator: " · ")
     }
 
@@ -103,7 +112,7 @@ struct AquariumFish: Hashable, Sendable {
 
 enum Aquarium {
     static let cell = 6.0
-    /// Faint drifters, jellyfish, far fish, near fish.
+    /// Faint, light, far fish, near fish.
     static let strengths = [0.08, 0.14, 0.17, 0.25]
 
     /// The frame's cells: for each strength (and amber), the dot size in every lit cell. Shapes
@@ -156,13 +165,12 @@ enum Aquarium {
         animate ? date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 86_400) : still
     }
 
-    /// A frame: fish, jellyfish and bubbles. The fish under the pointer is drawn stronger.
+    /// A frame: fish, jellyfish and bubbles. The one under the pointer is drawn stronger.
     static func draw(_ context: inout GraphicsContext, size: CGSize, t: Double, ink color: Color, amber: Color,
                          fish: [AquariumFish], highlight: String?) {
         let width = Double(size.width), height = Double(size.height)
         guard width > 0, height > 0 else { return }
         var ink = Ink()
-        jellyfish(&ink, width: width, height: height, t: t)
         bubbles(&ink, width: width, floor: height, t: t)
         var highlightWaits = false
         for placed in place(fish, width: width, height: height, t: t) {
@@ -189,30 +197,7 @@ enum Aquarium {
         return Double(h >> 11) / Double(1 << 53)
     }
 
-    // MARK: Drifters
-
-    private static func jellyfish(_ ink: inout Ink, width: Double, height: Double, t: Double) {
-        for j in 0..<2 {
-            let pulse = 0.5 + 0.5 * sin(t * 1.2 + Double(j) * 2.3)
-            let scale = j == 0 ? 1.0 : 0.7
-            let x = width * (0.18 + 0.64 * r(j, 40)) + sin(t * 0.025 + Double(j) * 2) * width * 0.12
-            let y = height * (0.28 + 0.3 * r(j, 41)) + sin(t * 0.06 + Double(j) * 3) * height * 0.1 - pulse * 5
-            let bw = 24 * scale * (0.86 + 0.14 * (1 - pulse)), bh = 18 * scale * (0.9 + 0.1 * pulse)
-            let layer = j == 0 ? 1 : 0
-            var a = 0.0
-            while a <= Double.pi + 0.01 {
-                ink.dot(x + cos(a) * bw, y - sin(a) * bh, 2.2, layer)
-                a += cell / max(bw, bh) * 0.8
-            }
-            for k in 0..<5 {
-                let tx = x - bw * 0.7 + Double(k) * bw * 0.35
-                for s in 1...7 {
-                    let f = Double(s)
-                    ink.dot(tx + sin(t * 1.4 + f * 0.6 + Double(k)) * 3 * f / 7, y + f * cell * scale, 1.7 - f * 0.12, 0)
-                }
-            }
-        }
-    }
+    // MARK: Bubbles
 
     /// Rising rings: two columns from below and a scatter.
     private static func bubbles(_ ink: inout Ink, width: Double, floor: Double, t: Double) {
@@ -247,7 +232,13 @@ enum Aquarium {
             let length = full * one.growth * (0.9 + 0.1 * depth)
             let layer = one.waiting ? -1 : (depth > 0.5 ? 3 : 2)
             var spot: Placed
-            if one.waiting {
+            if one.species == .jellyfish {
+                // Scheduled: drifting nearly in place, rising a little with each pulse.
+                let pulse = sin(t * 1.2 + seed)
+                spot = Placed(fish: one, x: width * (0.1 + 0.8 * unit(one.id, 3)) + sin(t * 0.02 + seed) * width * 0.08,
+                              y: height * (0.2 + 0.6 * unit(one.id, 8)) + sin(t * 0.05 + seed) * height * 0.07 - (pulse + 1) * 4,
+                              direction: 1, length: length, pitch: 0, beat: t * 1.2 + seed, layer: layer, depth: depth)
+            } else if one.waiting {
                 // Waiting on you: up at the surface, nose raised, as if waiting to be fed.
                 let wander = sin(t * 0.12 + seed)
                 spot = Placed(fish: one, x: width * (0.14 + 0.72 * unit(one.id, 3)) + wander * 34,
@@ -314,6 +305,7 @@ enum Aquarium {
         case .angelfish: (100, 9)
         case .puffer: (86, 7)
         case .fry: (26, 18)
+        case .jellyfish: (84, 0)
         }
     }
 
@@ -332,6 +324,13 @@ enum Aquarium {
 
     /// A point in a fish's own frame. Side view: the dorsal fin stays up whichever way it swims.
     private static func frame(_ spot: Placed, _ x: Double, _ y: Double) -> (Double, Double) {
+        if spot.fish.species == .jellyfish {
+            var p = (x - spot.x) / spot.length + 0.5
+            let n = (y - spot.y) / spot.length
+            if n < 0.04 { p = 0.5 + (p - 0.5) / (1 + 0.08 * sin(spot.beat)) }          // the bell breathes
+            else { p += 0.05 * sin(n * 8 - spot.beat * 1.5) * min(1, n * 2.5) }      // tentacles trail and wave
+            return (p, n)
+        }
         let lx = spot.direction * (x - spot.x), py = y - spot.y
         let (cp, sp) = (cos(spot.pitch), sin(spot.pitch))
         var p = (lx * cp + py * sp) / spot.length + 0.5
@@ -345,7 +344,7 @@ enum Aquarium {
     private static func render(_ ink: inout Ink, _ spot: Placed, layer: Int, width: Double, height: Double) {
         let species = spot.fish.species, f = fins(spot.fish.effort)
         let tall: Double = switch species {
-        case .angelfish: 0.72; case .puffer: 0.4; case .sailfish, .shark: 0.3; case .barracuda: 0.14; default: 0.22
+        case .jellyfish: 1.4; case .angelfish: 0.72; case .puffer: 0.4; case .sailfish, .shark: 0.3; case .barracuda: 0.14; default: 0.22
         }
         let reachX = spot.length * 0.78, reachY = spot.length * (tall * max(1, f) + 0.65 * abs(sin(spot.pitch)))
         let c0 = max(0, Int((spot.x - reachX) / cell)), c1 = min(Int(width / cell), Int((spot.x + reachX) / cell))
@@ -377,6 +376,7 @@ enum Aquarium {
         case .angelfish: angelfish(p, n, f)
         case .puffer: puffer(p, n, f)
         case .fry: fry(p, n)
+        case .jellyfish: jellyfish(p, n, f)
         }
     }
 
@@ -482,6 +482,23 @@ enum Aquarium {
         let a = atan2(dn, dp) * 5 / Double.pi                                                          // ten spines
         if abs(a - a.rounded()) < 0.2, d < 1 + 0.22 * f { return 0.55 }
         if p > 0.1, p < 0.27, abs(n) < 0.03 + (0.27 - p) * 0.8 * f { return 0.55 }                     // tail fan
+        return nil
+    }
+
+    /// Across the bell's width, `n` down from its rim: a translucent dome with a solid edge, frilly
+    /// arms in the middle and tentacles that grow longer with effort.
+    static func jellyfish(_ p: Double, _ n: Double, _ f: Double) -> Double? {
+        let dp = (p - 0.5) / 0.5
+        if n <= 0.04, n >= -0.45 {
+            let dn = min(n, 0) / 0.45
+            let d = dp * dp + dn * dn
+            if d <= 1 { return d > 0.6 || n > -0.05 ? 0.95 : 0.35 }
+        }
+        guard n > 0.04 else { return nil }
+        if abs(p - 0.5) < 0.09, n < 0.04 + 0.35 * f { return 0.75 }
+        let reach = 0.7 + 0.6 * f
+        guard n < 0.04 + reach else { return nil }
+        for strand in [0.1, 0.26, 0.74, 0.9] where abs(p - strand) < 0.04 { return 0.6 * (1 - 0.6 * (n - 0.04) / reach) }
         return nil
     }
 
