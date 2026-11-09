@@ -25,7 +25,7 @@ pub(crate) struct Request {
     pub limit: usize,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Clone, Debug, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Message {
     pub kind: &'static str,
@@ -36,6 +36,26 @@ pub(crate) struct Message {
     pub output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<f64>,
+    /// The tool call's own one-line description, when it gave one (Claude's Bash and Agent do).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// For a plan update: the whole plan as it stands after it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<Vec<PlanItem>>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub(crate) struct PlanItem {
+    pub text: String,
+    /// "pending", "in_progress" or "completed".
+    pub status: &'static str,
+}
+
+/// How much of the model's context the chat's latest turn used, when the log says.
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Context {
+    pub tokens: Option<u64>,
+    pub window: Option<u64>,
 }
 
 #[derive(Serialize, Default)]
@@ -48,6 +68,8 @@ pub(crate) struct Batch {
     pub title: Option<String>,
     pub cwd: Option<String>,
     pub modified: Option<f64>,
+    pub context_tokens: Option<u64>,
+    pub context_window: Option<u64>,
 }
 
 #[derive(Default)]
@@ -128,9 +150,84 @@ fn injected(text: &str) -> bool {
     t.starts_with("# AGENTS.md instructions") || t.starts_with('<')
 }
 
+const MAX_PLAN: usize = 30;
+
+fn plan_status(value: &Value) -> &'static str {
+    match value.as_str().unwrap_or_default() {
+        "completed" | "complete" | "done" => "completed",
+        "in_progress" | "in-progress" | "active" | "running" => "in_progress",
+        _ => "pending",
+    }
+}
+
+/// Applies a plan tool call to the running plan: Claude's TodoWrite, Codex's and the Claude app's
+/// `update_plan` (whole lists, or the app's advance/done/start steps). False for other tools.
+fn apply_plan(plan: &mut Vec<PlanItem>, name: &str, input: &Value) -> bool {
+    let parsed;
+    let input = match input {
+        Value::String(s) => {
+            parsed = serde_json::from_str::<Value>(s).unwrap_or(Value::Null);
+            &parsed
+        }
+        other => other,
+    };
+    let list = |items: &Value, key: &str| -> Option<Vec<PlanItem>> {
+        let items = items.as_array()?;
+        Some(items.iter().take(MAX_PLAN).filter_map(|item| {
+            let text = item[key].as_str().or_else(|| item["content"].as_str())?;
+            Some(PlanItem { text: clip(text.trim(), 200), status: plan_status(&item["status"]) })
+        }).collect())
+    };
+    match name {
+        "TodoWrite" => {
+            if let Some(items) = list(&input["todos"], "content") { *plan = items }
+            true
+        }
+        "update_plan" => {
+            if let Some(items) = list(&input["items"], "content").or_else(|| list(&input["plan"], "step")) {
+                *plan = items;
+            } else {
+                if input["advance"].as_bool() == Some(true) {
+                    if let Some(current) = plan.iter().position(|i| i.status == "in_progress") {
+                        plan[current].status = "completed";
+                    }
+                    if let Some(next) = plan.iter().position(|i| i.status == "pending") {
+                        plan[next].status = "in_progress";
+                    }
+                }
+                for done in input["done"].as_array().into_iter().flatten().filter_map(Value::as_u64) {
+                    if let Some(item) = (done as usize).checked_sub(1).and_then(|i| plan.get_mut(i)) { item.status = "completed" }
+                }
+                if let Some(start) = input["start"].as_u64() {
+                    if let Some(item) = (start as usize).checked_sub(1).and_then(|i| plan.get_mut(i)) { item.status = "in_progress" }
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn tool_message(name: &str, short: &str, input: &Value, plan: &mut Vec<PlanItem>, at: Option<f64>) -> Message {
+    let note = input.get("description").and_then(Value::as_str).map(|d| clip(d.lines().next().unwrap_or_default().trim(), 120))
+        .filter(|d| !d.is_empty());
+    let is_plan = apply_plan(plan, short, input);
+    Message {
+        kind: "tool",
+        text: summary(name, input),
+        tool: Some(clip(short, 80)),
+        at,
+        note,
+        plan: if is_plan && !plan.is_empty() { Some(plan.clone()) } else { None },
+        ..Default::default()
+    }
+}
+
 /// Parses a transcript (whole file or its tail) into display messages, oldest first.
-pub(crate) fn parse(bytes: &[u8], provider: &str) -> (Vec<Message>, Option<String>, Option<String>) {
+pub(crate) fn parse(bytes: &[u8], provider: &str) -> (Vec<Message>, Option<String>, Option<String>, Context) {
     let mut messages: Vec<Message> = Vec::new();
+    let mut plan: Vec<PlanItem> = Vec::new();
+    let mut context = Context::default();
     let mut calls: HashMap<String, usize> = HashMap::new();
     let (mut title, mut cwd): (Option<String>, Option<String>) = (None, None);
     let mut custom_title = false;
@@ -142,6 +239,17 @@ pub(crate) fn parse(bytes: &[u8], provider: &str) -> (Vec<Message>, Option<Strin
             if object["type"] == "turn_context" || object["type"] == "session_meta" {
                 if let Some(path) = payload["cwd"].as_str().filter(|p| p.starts_with('/')) {
                     cwd = Some(path.to_owned());
+                }
+                continue;
+            }
+            if object["type"] == "event_msg" && payload["type"] == "token_count" {
+                let info = &payload["info"];
+                let last = &info["last_token_usage"];
+                if let Some(tokens) = last["total_tokens"].as_u64().or_else(|| last["input_tokens"].as_u64()) {
+                    context.tokens = Some(tokens);
+                }
+                if let Some(window) = info["model_context_window"].as_u64() {
+                    context.window = Some(window);
                 }
                 continue;
             }
@@ -165,7 +273,7 @@ pub(crate) fn parse(bytes: &[u8], provider: &str) -> (Vec<Message>, Option<Strin
                     if role == "user" && injected(&text) {
                         continue;
                     }
-                    messages.push(Message { kind: if role == "user" { "user" } else { "assistant" }, text: clip(&text, MAX_TEXT), tool: None, output: None, at });
+                    messages.push(Message { kind: if role == "user" { "user" } else { "assistant" }, text: clip(&text, MAX_TEXT), at, ..Default::default() });
                 }
                 Some("custom_tool_call") | Some("function_call") => {
                     let name = payload["name"].as_str().unwrap_or("tool").to_owned();
@@ -173,7 +281,7 @@ pub(crate) fn parse(bytes: &[u8], provider: &str) -> (Vec<Message>, Option<Strin
                     if let Some(call) = payload["call_id"].as_str() {
                         calls.insert(call.to_owned(), messages.len());
                     }
-                    messages.push(Message { kind: "tool", text: summary(&name, input), tool: Some(clip(&name, 80)), output: None, at });
+                    messages.push(tool_message(&name, &name, input, &mut plan, at));
                 }
                 Some("custom_tool_call_output") | Some("function_call_output") => {
                     if let Some(index) = payload["call_id"].as_str().and_then(|c| calls.get(c)) {
@@ -214,7 +322,7 @@ pub(crate) fn parse(bytes: &[u8], provider: &str) -> (Vec<Message>, Option<Strin
             match object["type"].as_str() {
                 Some("user") => match content {
                     Value::String(text) if !text.trim().is_empty() && !text.trim_start().starts_with('<') => {
-                        messages.push(Message { kind: "user", text: clip(text, MAX_TEXT), tool: None, output: None, at });
+                        messages.push(Message { kind: "user", text: clip(text, MAX_TEXT), at, ..Default::default() });
                     }
                     Value::Array(items) => {
                         for item in items {
@@ -227,7 +335,7 @@ pub(crate) fn parse(bytes: &[u8], provider: &str) -> (Vec<Message>, Option<Strin
                             } else if item["type"] == "text" {
                                 let text = item["text"].as_str().unwrap_or_default();
                                 if !text.trim().is_empty() && !text.trim_start().starts_with('<') {
-                                    messages.push(Message { kind: "user", text: clip(text, MAX_TEXT), tool: None, output: None, at });
+                                    messages.push(Message { kind: "user", text: clip(text, MAX_TEXT), at, ..Default::default() });
                                 }
                             }
                         }
@@ -235,12 +343,17 @@ pub(crate) fn parse(bytes: &[u8], provider: &str) -> (Vec<Message>, Option<Strin
                     _ => {}
                 },
                 Some("assistant") => {
+                    let usage = &object["message"]["usage"];
+                    if let Some(input) = usage["input_tokens"].as_u64() {
+                        let part = |key: &str| usage[key].as_u64().unwrap_or(0);
+                        context.tokens = Some(input + part("cache_creation_input_tokens") + part("cache_read_input_tokens") + part("output_tokens"));
+                    }
                     for item in content.as_array().into_iter().flatten() {
                         match item["type"].as_str() {
                             Some("text") => {
                                 let text = item["text"].as_str().unwrap_or_default();
                                 if !text.trim().is_empty() {
-                                    messages.push(Message { kind: "assistant", text: clip(text, MAX_TEXT), tool: None, output: None, at });
+                                    messages.push(Message { kind: "assistant", text: clip(text, MAX_TEXT), at, ..Default::default() });
                                 }
                             }
                             Some("tool_use") => {
@@ -249,7 +362,7 @@ pub(crate) fn parse(bytes: &[u8], provider: &str) -> (Vec<Message>, Option<Strin
                                 if let Some(id) = item["id"].as_str() {
                                     calls.insert(id.to_owned(), messages.len());
                                 }
-                                messages.push(Message { kind: "tool", text: summary(name, &item["input"]), tool: Some(clip(short, 80)), output: None, at });
+                                messages.push(tool_message(name, short, &item["input"], &mut plan, at));
                             }
                             _ => {}
                         }
@@ -259,7 +372,7 @@ pub(crate) fn parse(bytes: &[u8], provider: &str) -> (Vec<Message>, Option<Strin
             }
         }
     }
-    (messages, title, cwd)
+    (messages, title, cwd, context)
 }
 
 impl Worker {
@@ -326,7 +439,7 @@ impl Worker {
             let start = bytes.iter().position(|b| *b == b'\n').map_or(bytes.len(), |i| i + 1);
             bytes.drain(..start);
         }
-        let (mut messages, title, cwd) = parse(&bytes, &request.provider);
+        let (mut messages, title, cwd, context) = parse(&bytes, &request.provider);
         let mut truncated = offset > 0;
         if messages.len() > request.limit {
             messages.drain(..messages.len() - request.limit);
@@ -352,6 +465,8 @@ impl Worker {
             title,
             cwd,
             modified: Some(meta.mtime() as f64 + meta.mtime_nsec() as f64 / 1e9),
+            context_tokens: context.tokens,
+            context_window: context.window,
         })
     }
 }
@@ -374,7 +489,7 @@ mod tests {
             serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"c1","output":[{"type":"input_text","text":"Build complete"}]}}),
             serde_json::json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Fixed."}]}}),
         ]);
-        let (messages, _, cwd) = parse(&bytes, "codex");
+        let (messages, _, cwd, _) = parse(&bytes, "codex");
         let shape: Vec<_> = messages.iter().map(|m| (m.kind, m.text.as_str(), m.output.as_deref())).collect();
         assert_eq!(shape, [("user", "Fix the build", None), ("tool", "swift build", Some("Build complete")), ("assistant", "Fixed.", None)]);
         assert_eq!(cwd.as_deref(), Some("/work/app"));
@@ -400,10 +515,38 @@ mod tests {
             serde_json::json!({"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"worker"}]}}),
             serde_json::json!({"type":"custom-title","customTitle":"Rename view"}),
         ]);
-        let (messages, title, _) = parse(&bytes, "claude");
+        let (messages, title, _, _) = parse(&bytes, "claude");
         let shape: Vec<_> = messages.iter().map(|m| (m.kind, m.text.as_str(), m.tool.as_deref(), m.output.as_deref())).collect();
         assert_eq!(shape, [("user", "Rename the view", None, None), ("tool", "/work/b/View.swift", Some("Edit"), Some("Edited")), ("assistant", "Renamed.", None, None)]);
         assert_eq!(title.as_deref(), Some("Rename view"));
+    }
+
+    #[test]
+    fn plans_descriptions_and_context() {
+        let bytes = lines(&[
+            serde_json::json!({"type":"assistant","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":1000,"output_tokens":5},"content":[
+                {"type":"tool_use","id":"p1","name":"mcp__ccd_turn__update_plan","input":{"items":[{"content":"Read","status":"in_progress"},{"content":"Fix","status":"pending"}]}},
+                {"type":"tool_use","id":"b1","name":"Bash","input":{"command":"swift test","description":"Run the tests"}},
+                {"type":"tool_use","id":"p2","name":"mcp__ccd_turn__update_plan","input":{"advance":true}}]}}),
+        ]);
+        let (messages, _, _, context) = parse(&bytes, "claude");
+        fn plan(m: &Message) -> Option<Vec<(String, &'static str)>> {
+            m.plan.as_ref().map(|p| p.iter().map(|i| (i.text.clone(), i.status)).collect())
+        }
+        let owned = |items: &[(&str, &'static str)]| Some(items.iter().map(|(t, s)| (t.to_string(), *s)).collect::<Vec<_>>());
+        assert_eq!(plan(&messages[0]), owned(&[("Read", "in_progress"), ("Fix", "pending")]));
+        assert_eq!(messages[1].note.as_deref(), Some("Run the tests"));
+        assert_eq!(messages[1].plan, None);
+        assert_eq!(plan(&messages[2]), owned(&[("Read", "completed"), ("Fix", "in_progress")]));
+        assert_eq!(context.tokens, Some(1015));
+
+        let codex = lines(&[
+            serde_json::json!({"type":"response_item","payload":{"type":"function_call","name":"update_plan","call_id":"u","arguments":"{\"plan\":[{\"step\":\"Ship\",\"status\":\"completed\"}]}"}}),
+            serde_json::json!({"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":4200},"model_context_window":272000}}}),
+        ]);
+        let (messages, _, _, context) = parse(&codex, "codex");
+        assert_eq!(plan(&messages[0]), owned(&[("Ship", "completed")]));
+        assert_eq!(context, Context { tokens: Some(4200), window: Some(272000) });
     }
 
     #[test]

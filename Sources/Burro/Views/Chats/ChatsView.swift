@@ -136,6 +136,7 @@ private struct ChatDetail: View {
     @State private var onScreen = false
     /// After you send a reply, keep refreshing for a while even before monitoring notices.
     @State private var followUntil: Date?
+    @AppStorage("chats.inspector") private var showInspector = true
 
     private var host: RemoteHost? { store.remoteHosts.first { $0.id == session.remote?.hostID } }
     private var media: ChatMediaSource? { session.remote == nil ? .local : host.map { .remote($0) } }
@@ -160,9 +161,18 @@ private struct ChatDetail: View {
                     PillButton(title: "Open in \(session.provider == .codex ? "Codex" : "Claude")", symbol: "arrow.up.right") { NSWorkspace.shared.open(url) }
                 }
                 PillButton(title: "Refresh", symbol: "arrow.clockwise") { Task { await reload() } }
+                Button { withAnimation(.easeOut(duration: 0.18)) { showInspector.toggle() } } label: {
+                    Image(systemName: "sidebar.right").font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(showInspector ? AppAppearance.text : AppAppearance.secondary)
+                        .frame(width: 32, height: 32).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).help(showInspector ? "Hide details" : "Show details")
             }
             .padding(.horizontal, 26).padding(.vertical, 16)
             Rectangle().fill(AppAppearance.separator).frame(height: 1)
+            GeometryReader { geometry in
+            HStack(spacing: 0) {
+            VStack(spacing: 0) {
             Group {
                 if let transcript = loader.transcript {
                     if transcript.messages.isEmpty {
@@ -184,6 +194,14 @@ private struct ChatDetail: View {
                     await reload()
                     if session.remote == nil { await store.refreshAgents() } else { await store.refreshRemotes() }
                 }
+            }
+            }
+            // The details panel, when there's room for it beside the conversation.
+            if showInspector && geometry.size.width > 980 {
+                ChatInspector(store: store, session: session, transcript: loader.transcript)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+            }
             }
         }
         .background(WindowOcclusionReader { onScreen = $0 })

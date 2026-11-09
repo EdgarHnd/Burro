@@ -11,9 +11,22 @@ public struct ChatMessage: Identifiable, Sendable, Equatable {
     public var tool: String?
     public var output: String?
     public var at: Date?
-    public init(id: Int, kind: Kind, text: String, tool: String? = nil, output: String? = nil, at: Date? = nil) {
+    /// A tool call's own one-line description (Claude's Bash and Agent write one).
+    public var note: String?
+    /// For a plan update: the whole plan as it stood after it.
+    public var plan: [ChatPlanItem]?
+    public init(id: Int, kind: Kind, text: String, tool: String? = nil, output: String? = nil, at: Date? = nil,
+                note: String? = nil, plan: [ChatPlanItem]? = nil) {
         self.id = id; self.kind = kind; self.text = text; self.tool = tool; self.output = output; self.at = at
+        self.note = note; self.plan = plan
     }
+}
+
+public struct ChatPlanItem: Sendable, Equatable, Decodable {
+    public enum Status: String, Sendable, Decodable { case pending, inProgress = "in_progress", completed }
+    public var text: String
+    public var status: Status
+    public init(text: String, status: Status) { self.text = text; self.status = status }
 }
 
 public struct ChatTranscript: Sendable, Equatable {
@@ -23,8 +36,13 @@ public struct ChatTranscript: Sendable, Equatable {
     public var title: String?
     public var folder: String?
     public var modified: Date?
-    public init(messages: [ChatMessage], truncated: Bool = false, title: String? = nil, folder: String? = nil, modified: Date? = nil) {
+    /// Tokens the latest turn had in context, and the model's window when the log records it (Codex does).
+    public var contextTokens: Int?
+    public var contextWindow: Int?
+    public init(messages: [ChatMessage], truncated: Bool = false, title: String? = nil, folder: String? = nil, modified: Date? = nil,
+                contextTokens: Int? = nil, contextWindow: Int? = nil) {
         self.messages = messages; self.truncated = truncated; self.title = title; self.folder = folder; self.modified = modified
+        self.contextTokens = contextTokens; self.contextWindow = contextWindow
     }
 }
 
@@ -42,6 +60,8 @@ struct TranscriptBatch: Decodable, Sendable {
         let tool: String?
         let output: String?
         let at: Double?
+        let note: String?
+        let plan: [ChatPlanItem]?
     }
     let found: Bool
     let messages: [Message]?
@@ -49,20 +69,25 @@ struct TranscriptBatch: Decodable, Sendable {
     let title: String?
     let cwd: String?
     let modified: Double?
+    let contextTokens: Int?
+    let contextWindow: Int?
 
     func valid(for limit: Int) -> Bool {
         let messages = messages ?? []
         return messages.count <= limit && messages.allSatisfy {
             $0.text.count <= 12_001 && ($0.tool?.count ?? 0) <= 81 && ($0.output?.count ?? 0) <= 601 && ($0.at.map { $0.isFinite } ?? true)
-        } && (title?.count ?? 0) <= 121
+                && ($0.note?.count ?? 0) <= 121 && ($0.plan?.count ?? 0) <= 30 && ($0.plan ?? []).allSatisfy { $0.text.count <= 201 }
+        } && (title?.count ?? 0) <= 121 && (contextTokens ?? 0) >= 0 && (contextWindow ?? 0) >= 0
     }
     var transcript: ChatTranscript? {
         guard found else { return nil }
         return ChatTranscript(
             messages: (messages ?? []).enumerated().map { index, m in
-                ChatMessage(id: index, kind: m.kind, text: m.text, tool: m.tool, output: m.output, at: m.at.map(Date.init(timeIntervalSince1970:)))
+                ChatMessage(id: index, kind: m.kind, text: m.text, tool: m.tool, output: m.output, at: m.at.map(Date.init(timeIntervalSince1970:)),
+                            note: m.note, plan: m.plan)
             },
-            truncated: truncated ?? false, title: title, folder: cwd, modified: modified.map(Date.init(timeIntervalSince1970:)))
+            truncated: truncated ?? false, title: title, folder: cwd, modified: modified.map(Date.init(timeIntervalSince1970:)),
+            contextTokens: contextTokens, contextWindow: contextWindow)
     }
 }
 
