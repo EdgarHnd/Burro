@@ -17,7 +17,7 @@ struct HomeView: View {
 
     var body: some View {
         let summary = store.homeSummary
-        let fish = coverStyle == CoverField.Style.aquarium.rawValue ? AquariumFish.school(running: summary.running, waiting: summary.needsYou, scheduled: summary.scheduled) : []
+        let fish = coverStyle == CoverField.Style.aquarium.rawValue ? AquariumFish.school(running: summary.running, waiting: summary.needsYou, scheduled: summary.scheduled, today: summary.today) : []
         GeometryReader { geometry in
         ZStack(alignment: .bottom) {
             // The backdrop stays put; the page scrolls over it.
@@ -49,7 +49,7 @@ struct HomeView: View {
                 // Behind the cards: the open water, where a fish can be hovered and clicked.
                 .background {
                     AquariumCatcher(hover: hover, fish: fish, size: geometry.size, animate: onScreen && !reduceMotion, space: Self.space) { id in
-                        if let session = (summary.needsYou + summary.running + summary.scheduled).first(where: { $0.id == id }) { store.showChat(session) }
+                        if let session = (summary.needsYou + summary.running + summary.scheduled + summary.today).first(where: { $0.id == id }) { store.showChat(session) }
                     }
                 }
             }

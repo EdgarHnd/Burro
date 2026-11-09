@@ -11,6 +11,7 @@
 // - Size is age. A new chat is a small fish that grows over its first day, and a little after.
 // - Waiting on you turns a fish amber and brings it up to the surface, as if waiting to be fed.
 // - Scheduled chats, waiting on a timer, are jellyfish drifting in place and pulsing.
+// - Every other chat from today swims too, darker, so the tank shows the whole day.
 // Clicking a fish opens its chat.
 //
 // Open water otherwise, with bubbles rising. With no agents at work the tank is empty.
@@ -26,23 +27,25 @@ struct AquariumFish: Hashable, Sendable {
     /// Size for age: 0.55 for a chat that just began, 1 at a day old, up to 1.15.
     var growth: Double = 0.8
     var waiting = false
+    /// Not working, waiting or scheduled: drawn darker.
+    var resting = false
     /// For a subagent's fry: the agent it swims with.
     var parent: String? = nil
     var title = ""
     var detail = ""
 
-    /// One fish per agent at work or waiting on you (waiting first), and a jellyfish per scheduled
-    /// chat. Each agent keeps the same fish.
+    /// One fish per chat: waiting on you first, then at work, scheduled (jellyfish), and the rest of
+    /// today's chats, which rest darker. Each agent keeps the same fish.
     static func school(running: [AgentSession], waiting: [AgentSession], scheduled: [AgentSession] = [],
-                       now: Date = Date()) -> [AquariumFish] {
+                       today: [AgentSession] = [], now: Date = Date()) -> [AquariumFish] {
         var fish: [AquariumFish] = [], seen: Set<String> = [], big = 0, fry = 0, jellies = 0
-        for (session, isWaiting) in waiting.prefix(4).map({ ($0, true) }) + running.map({ ($0, false) }) + scheduled.map({ ($0, false) })
-        where seen.insert(session.id).inserted {
+        let ordered = waiting.prefix(4).map { ($0, true) } + (running + scheduled + today).map { ($0, false) }
+        for (session, isWaiting) in ordered where seen.insert(session.id).inserted {
             let one = make(session, waiting: isWaiting, now: now)
             switch one.species {
-            case .fry: guard fry < 14 else { continue }; fry += 1
+            case .fry: guard fry < 16 else { continue }; fry += 1
             case .jellyfish: guard jellies < 5 else { continue }; jellies += 1
-            default: guard big < 10 else { continue }; big += 1
+            default: guard big < 24 else { continue }; big += 1
             }
             fish.append(one)
         }
@@ -61,8 +64,9 @@ struct AquariumFish: Hashable, Sendable {
                 : (model.contains("sol") || model.isEmpty) ? .tuna : .puffer
         }
         let age = session.startedAt.map { max(0, now.timeIntervalSince($0)) }
+        let resting = !waiting && session.state != .working && session.state != .scheduled
         return AquariumFish(id: session.id, species: species, effort: effortTier(session.effort), growth: growth(age), waiting: waiting,
-                            parent: session.isSubagent == true ? session.parentSessionID : nil,
+                            resting: resting, parent: session.isSubagent == true ? session.parentSessionID : nil,
                             title: session.title, detail: detail(session, age: age))
     }
 
@@ -88,6 +92,9 @@ struct AquariumFish: Hashable, Sendable {
         if let age { parts.append(ageText(age)) }
         if session.isSubagent == true { parts.append("subagent") }
         if session.state == .scheduled { parts.append("scheduled") }
+        else if session.state != .working && session.state != .waiting {
+            parts.append(session.isDone ? "done" : session.state == .idle ? "idle" : "inactive")
+        }
         return parts.joined(separator: " · ")
     }
 
@@ -112,8 +119,8 @@ struct AquariumFish: Hashable, Sendable {
 
 enum Aquarium {
     static let cell = 6.0
-    /// Faint, light, far fish, near fish.
-    static let strengths = [0.08, 0.14, 0.17, 0.25]
+    /// Resting fish far and near, then working fish far and near.
+    static let strengths = [0.065, 0.09, 0.17, 0.25]
 
     /// The frame's cells: for each strength (and amber), the dot size in every lit cell. Shapes
     /// that overlap keep the larger dot, so each cell is drawn once per strength.
@@ -160,9 +167,10 @@ enum Aquarium {
         }
     }
 
-    /// The animation clock: seconds into the day, or a fixed moment when the tank holds still.
+    /// The animation clock in seconds (wrapping every thousand days), or a fixed moment when the
+    /// tank holds still.
     static func time(_ date: Date, animate: Bool, still: Double = 1_000) -> Double {
-        animate ? date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 86_400) : still
+        animate ? date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 86_400_000) : still
     }
 
     /// A frame: fish, jellyfish and bubbles. The one under the pointer is drawn stronger.
@@ -230,28 +238,33 @@ enum Aquarium {
             let depth = unit(one.id, 1), seed = unit(one.id, 2) * 100
             let (full, pace) = size(one.species)
             let length = full * one.growth * (0.9 + 0.1 * depth)
-            let layer = one.waiting ? -1 : (depth > 0.5 ? 3 : 2)
+            // Room to swim fully out of view: the largest this species gets, so growing never shifts its path.
+            let margin = full * 1.15 * 1.3
+            let layer = one.waiting ? -1 : one.resting ? (depth > 0.5 ? 1 : 0) : (depth > 0.5 ? 3 : 2)
             var spot: Placed
             if one.species == .jellyfish {
                 // Scheduled: drifting nearly in place, rising a little with each pulse.
                 let pulse = sin(t * 1.2 + seed)
                 spot = Placed(fish: one, x: width * (0.1 + 0.8 * unit(one.id, 3)) + sin(t * 0.02 + seed) * width * 0.08,
-                              y: height * (0.2 + 0.6 * unit(one.id, 8)) + sin(t * 0.05 + seed) * height * 0.07 - (pulse + 1) * 4,
+                              y: height * (0.2 + 0.6 * unit(one.id, 8)) + sin(t * 0.05 + seed) * height * 0.07 - (pulse + 1) * 2.5,
                               direction: 1, length: length, pitch: 0, beat: t * 1.2 + seed, layer: layer, depth: depth)
             } else if one.waiting {
-                // Waiting on you: up at the surface, nose raised, as if waiting to be fed.
+                // Waiting on you: up at the surface, nose raised, as if waiting to be fed. It patrols a
+                // short way and turns at each end, narrowing as it faces you mid-turn.
                 let wander = sin(t * 0.12 + seed)
                 spot = Placed(fish: one, x: width * (0.14 + 0.72 * unit(one.id, 3)) + wander * 34,
                               y: height * 0.075 + length * 0.14 + sin(t * 0.9 + seed) * 3,
-                              direction: cos(t * 0.12 + seed) >= 0 ? 1 : -1, length: length, pitch: -0.2,
+                              direction: max(-1, min(1, cos(t * 0.12 + seed) * 3)), length: length, pitch: -0.2,
                               beat: t * 5 + seed, layer: layer, depth: depth)
             } else {
                 // Thinking harder swims slower.
                 let speed = pace * [1.35, 1.15, 1.0, 0.85, 0.72][min(4, max(0, one.effort))] * (0.85 + 0.3 * unit(one.id, 4))
                 let direction = unit(one.id, 5) < 0.5 ? 1.0 : -1.0
-                let span = width + length * 2.6
-                let travel = (t * speed + unit(one.id, 6) * span).truncatingRemainder(dividingBy: span)
-                let x = direction > 0 ? travel - length * 1.3 : width + length * 1.3 - travel
+                // Position from time alone, as a share of the crossing, so neither growth nor a window
+                // resize makes a fish jump.
+                let phase = (t * speed / 2_400 + unit(one.id, 6)).truncatingRemainder(dividingBy: 1)
+                let run = phase * (width + margin * 2)
+                let x = direction > 0 ? run - margin : width + margin - run
                 let drift = 0.1 + 0.06 * unit(one.id, 7), sway = 22.0
                 let lane = height * (0.16 + 0.68 * unit(one.id, 8))
                 spot = Placed(fish: one, x: x, y: lane + sin(t * drift + seed) * sway, direction: direction, length: length,
@@ -261,7 +274,7 @@ enum Aquarium {
             placed.append(spot); byID[one.id] = spot
         }
         // Subagents: small fry beside their parent, or a loose group of their own.
-        for (index, one) in fish.filter({ $0.species == .fry }).enumerated() {
+        for (index, one) in fish.filter({ $0.species == .fry }).sorted(by: { $0.id < $1.id }).enumerated() {
             let k = unit(one.id, 1), seed = k * 100
             let length = size(.fry).0 * (0.75 + 0.3 * one.growth)
             if let parent = one.parent.flatMap({ byID[$0] }) {
@@ -269,23 +282,22 @@ enum Aquarium {
                 placed.append(Placed(fish: one,
                     x: parent.x - parent.direction * parent.length * (0.1 + 0.4 * unit(one.id, 3)) + sin(t * 0.7 + seed) * 8,
                     y: parent.y + side * parent.length * (0.14 + 0.12 * unit(one.id, 4)) + cos(t * 0.6 + seed) * 5,
-                    direction: parent.direction, length: length, pitch: 0, beat: t * 6 + seed, layer: 2, depth: 0.5))
+                    direction: parent.direction, length: length, pitch: 0, beat: t * 6 + seed, layer: one.resting ? 0 : 2, depth: 0.5))
             } else {
                 let group = one.parent.map { unit($0, 9) } ?? 0.5
-                let span = width + 120
-                let travel = (t * 18 + group * span).truncatingRemainder(dividingBy: span)
-                placed.append(Placed(fish: one, x: travel - 60 - Double(index % 5) * 16 + sin(t + seed) * 6,
+                let phase = (t * 18 / 2_400 + group).truncatingRemainder(dividingBy: 1)
+                placed.append(Placed(fish: one, x: phase * (width + 200) - 100 - Double(index % 5) * 16 + sin(t + seed) * 6,
                     y: height * (0.3 + 0.4 * group) + Double(index % 3) * 12 + sin(t * 0.8 + seed) * 6,
-                    direction: 1, length: length, pitch: 0, beat: t * 6 + seed, layer: 2, depth: 0.5))
+                    direction: 1, length: length, pitch: 0, beat: t * 6 + seed, layer: one.resting ? 0 : 2, depth: 0.5))
             }
         }
         return placed
     }
 
-    /// The fish under a point, nearest first; forgiving by a cell either way.
+    /// The fish under a point: active before resting, nearest first; forgiving by a cell either way.
     static func fish(at point: CGPoint, size: CGSize, t: Double, fish: [AquariumFish]) -> AquariumFish? {
-        let placed = place(fish, width: Double(size.width), height: Double(size.height), t: t)
-        for spot in placed.reversed() {
+        let placed = place(fish, width: Double(size.width), height: Double(size.height), t: t).reversed()
+        for spot in placed.filter({ !$0.fish.resting }) + placed.filter(\.fish.resting) {
             for (dx, dy) in [(0.0, 0.0), (cell, 0), (-cell, 0), (0, cell), (0, -cell)] {
                 let (p, n) = frame(spot, Double(point.x) + dx, Double(point.y) + dy)
                 if shape(spot.fish.species, p, n, fins: fins(spot.fish.effort)) != nil { return spot.fish }
@@ -324,6 +336,8 @@ enum Aquarium {
 
     /// A point in a fish's own frame. Side view: the dorsal fin stays up whichever way it swims.
     private static func frame(_ spot: Placed, _ x: Double, _ y: Double) -> (Double, Double) {
+        // Mid-turn the fish narrows (a fractional facing) instead of flipping in one frame.
+        let facing = abs(spot.direction) < 0.15 ? (spot.direction < 0 ? -0.15 : 0.15) : spot.direction
         if spot.fish.species == .jellyfish {
             var p = (x - spot.x) / spot.length + 0.5
             let n = (y - spot.y) / spot.length
@@ -331,12 +345,12 @@ enum Aquarium {
             else { p += 0.05 * sin(n * 8 - spot.beat * 1.5) * min(1, n * 2.5) }      // tentacles trail and wave
             return (p, n)
         }
-        let lx = spot.direction * (x - spot.x), py = y - spot.y
+        let lx = (x - spot.x) / facing, py = y - spot.y
         let (cp, sp) = (cos(spot.pitch), sin(spot.pitch))
         var p = (lx * cp + py * sp) / spot.length + 0.5
         let n = (-lx * sp + py * cp) / spot.length
-        // The tail beats side to side, which from the side reads as it shortening and lengthening.
-        if p < 0.1 { p = 0.1 - (0.1 - p) / (0.68 + 0.32 * abs(cos(spot.beat))) }
+        // The tail beats side to side, which from the side reads as it shortening a little and back.
+        if p < 0.1 { p = 0.1 - (0.1 - p) / (0.9 + 0.1 * sin(spot.beat)) }
         return (p, n)
     }
 

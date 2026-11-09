@@ -69,13 +69,53 @@ final class AquariumTests: XCTestCase {
     }
 
     func testSchoolPutsWaitingFirstAndCapsFish() {
-        let running = (0..<20).map { session("r\($0)", .claude) }
+        let running = (0..<30).map { session("r\($0)", .claude) }
         let waiting = [session("w", .codex)]
         let school = AquariumFish.school(running: running + waiting, waiting: waiting)
         XCTAssertEqual(school.first?.id, "w")
         XCTAssertTrue(school.first?.waiting == true)
         XCTAssertEqual(school.filter { $0.id == "w" }.count, 1)
-        XCTAssertEqual(school.count, 10)
+        XCTAssertEqual(school.count, 24)
+    }
+
+    func testTodaysOtherChatsSwimDarker() {
+        let idle = session("i", .claude, state: .idle), working = session("r", .codex)
+        let school = AquariumFish.school(running: [working], waiting: [], today: [idle, working])
+        XCTAssertEqual(school.map(\.id), ["r", "i"])
+        XCTAssertEqual(school.map(\.resting), [false, true])
+        XCTAssertTrue(school[1].detail.hasSuffix("idle"))
+        let now = Date()
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Calendar.current.startOfDay(for: now))!
+        var old = session("o", .codex, state: .inactive); old.updatedAt = yesterday
+        var recent = session("n", .codex, state: .inactive); recent.updatedAt = now
+        XCTAssertEqual(HomeSummary.build(sessions: [old, recent], worktrees: [], now: now).today.map(\.id), ["n"])
+    }
+
+    func testFishDoNotJumpWhenTheyGrowOrTheWindowResizes() {
+        let t = 41_234.5
+        func x(_ growth: Double, width: Double = 1400) -> Double {
+            Aquarium.place([AquariumFish(id: "a", species: .shark, effort: 2, growth: growth)], width: width, height: 900, t: t)[0].x
+        }
+        XCTAssertEqual(x(0.8), x(0.8003), accuracy: 0.5)
+        XCTAssertEqual(x(0.8, width: 1400), x(0.8, width: 1401), accuracy: 2)
+        // Frame to frame, a swimming fish moves a few points, never across the tank.
+        let fish = [AquariumFish(id: "b", species: .tuna, effort: 0, growth: 1)]
+        var last = Aquarium.place(fish, width: 1400, height: 900, t: t)[0].x
+        for step in 1...600 {
+            let next = Aquarium.place(fish, width: 1400, height: 900, t: t + Double(step) / 6)[0].x
+            if abs(next - last) < 500 { XCTAssertLessThan(abs(next - last), 12) }   // (or wrapping round, out of view)
+            last = next
+        }
+    }
+
+    func testWaitingFishTurnInsteadOfFlipping() {
+        let fish = [AquariumFish(id: "w", species: .shark, waiting: true)]
+        var last = Aquarium.place(fish, width: 1400, height: 900, t: 0)[0].direction
+        for step in 1...1_200 {
+            let next = Aquarium.place(fish, width: 1400, height: 900, t: Double(step) / 6)[0].direction
+            XCTAssertLessThan(abs(next - last), 0.2)
+            last = next
+        }
     }
 
     func testClickHitsTheFishThatIsDrawnThere() throws {
