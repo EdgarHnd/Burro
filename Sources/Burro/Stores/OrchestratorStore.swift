@@ -13,6 +13,8 @@ import BurroCore
     private(set) var error: String?
     private(set) var loadedHistory = false
     private(set) var sessionID: String? { didSet { defaults.set(sessionID, forKey: "orchestrator.session") } }
+    /// How hard the orchestrator thinks; applies from the next message.
+    var effort: String { didSet { defaults.set(effort, forKey: "orchestrator.effort") } }
     var draft = ""
 
     /// Burro's current picture, written for the tool server before and during each turn.
@@ -25,6 +27,8 @@ import BurroCore
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         sessionID = defaults.string(forKey: "orchestrator.session")
+        let saved = defaults.string(forKey: "orchestrator.effort") ?? Orchestrator.defaultEffort
+        effort = Orchestrator.efforts.contains(saved) ? saved : Orchestrator.defaultEffort
     }
 
     var setupProblem: String? {
@@ -97,7 +101,7 @@ import BurroCore
         do {
             let config = try Orchestrator.prepare(toolServer: server)
             writeSnapshot()
-            let turn = try OrchestratorTurn(executable: executable, arguments: Orchestrator.arguments(sessionID: id, resume: resume, mcpConfig: config), prompt: prompt)
+            let turn = try OrchestratorTurn(executable: executable, arguments: Orchestrator.arguments(sessionID: id, resume: resume, mcpConfig: config, effort: effort), prompt: prompt)
             self.turn = turn
             if !resume { sessionID = id }
             // Keep the snapshot fresh during long turns.

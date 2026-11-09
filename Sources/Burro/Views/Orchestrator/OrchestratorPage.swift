@@ -104,6 +104,23 @@ private struct OrchestratorConversation: View {
                 }
             }
             Spacer()
+            Menu {
+                Picker("Effort", selection: Bindable(orchestrator).effort) {
+                    ForEach(Orchestrator.efforts, id: \.self) { Text(Orchestrator.effortTitle($0)).tag($0) }
+                }
+                .pickerStyle(.inline).labelsHidden()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "brain").font(.system(size: 11, weight: .semibold))
+                    Text(Orchestrator.effortTitle(orchestrator.effort)).font(.system(size: 12.5, weight: .medium))
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.6)
+                }
+                .foregroundStyle(AppAppearance.secondary)
+                .padding(.horizontal, 12).frame(height: 30)
+                .background(AppAppearance.raised.opacity(0.6), in: Capsule())
+            }
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+            .help("How hard the orchestrator thinks. Higher is more careful and slower; applies from your next message.")
             if !empty && !orchestrator.running {
                 PillButton(title: "New conversation", symbol: "square.and.pencil") { orchestrator.newConversation() }
             }

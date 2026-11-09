@@ -69,6 +69,13 @@ final class OrchestratorTests: XCTestCase {
         XCTAssertEqual(Orchestrator.arguments(sessionID: chatID, resume: true, mcpConfig: config).suffix(2), ["--resume", chatID])
         func value(_ flag: String) -> String? { first.firstIndex(of: flag).map { first[$0 + 1] } }
         XCTAssertEqual(value("--model"), "claude-opus-5-5")
+        XCTAssertEqual(value("--effort"), "xhigh", "Thorough by default")
+        func effort(_ level: String) -> String? {
+            let args = Orchestrator.arguments(sessionID: chatID, resume: true, mcpConfig: config, effort: level)
+            return args.firstIndex(of: "--effort").map { args[$0 + 1] }
+        }
+        XCTAssertEqual(effort("max"), "max")
+        XCTAssertEqual(effort("ludicrous"), "xhigh", "Unknown levels fall back to the default")
         XCTAssertEqual(value("--allowedTools"), "mcp__burro,Read,Grep,Glob")
         XCTAssertTrue(value("--disallowedTools")?.contains("Bash") == true)
         XCTAssertTrue(first.contains("--strict-mcp-config"))

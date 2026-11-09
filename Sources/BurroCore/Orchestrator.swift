@@ -8,6 +8,17 @@ import Foundation
 public enum Orchestrator {
     public static let model = "claude-opus-5-5"
     public static let modelTitle = "Opus 5.5"
+    /// Reasoning effort levels Claude Code accepts, and the orchestrator's default (thorough
+    /// status reports matter more than speed here).
+    public static let efforts = ["low", "medium", "high", "xhigh", "max"]
+    public static let defaultEffort = "xhigh"
+    public static func effortTitle(_ effort: String) -> String {
+        switch effort {
+        case "xhigh": "Extra High"
+        case "max": "Max"
+        default: effort.prefix(1).uppercased() + effort.dropFirst()
+        }
+    }
     /// The pinned row's id in Chats.
     public static let chatID = "burro:orchestrator"
 
@@ -61,9 +72,9 @@ public enum Orchestrator {
 
     /// `claude -p` arguments for one turn. Only Burro's tools plus read-only file tools are allowed;
     /// in print mode anything else is denied rather than asked.
-    public static func arguments(sessionID: String, resume: Bool, mcpConfig: URL) -> [String] {
+    public static func arguments(sessionID: String, resume: Bool, mcpConfig: URL, effort: String = defaultEffort) -> [String] {
         ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-         "--model", model,
+         "--model", model, "--effort", efforts.contains(effort) ? effort : defaultEffort,
          "--mcp-config", mcpConfig.path, "--strict-mcp-config",
          "--permission-mode", "default",
          "--allowedTools", "mcp__burro,Read,Grep,Glob",

@@ -71,7 +71,7 @@ Burro shows the latest 300 messages, read from at most the last 16 MiB of the ch
 
 ### Orchestrator
 
-The **Orchestrator** is one Claude Code chat (Opus 5.5) that Burro runs for you. Open its page with **⌘2** or the sparkles icon in the top bar, or ask from its card on Home: what needs you, where a project stands, what a chat on another machine did, or to get something started. Return sends; ⌥Return adds a line; the stop button ends a turn. **New conversation** starts over (the old one stays in Claude Code's history).
+The **Orchestrator** is one Claude Code chat (Opus 5.5) that Burro runs for you. Open its page with **⌘2** or the sparkles icon in the top bar, or ask from its card on Home: what needs you, where a project stands, what a chat on another machine did, or to get something started. Return sends; ⌥Return adds a line; the stop button ends a turn. **New conversation** starts over (the old one stays in Claude Code's history). The **effort** menu in its header sets how hard it thinks (Low to Max, Extra High by default); it applies from your next message.
 
 The page shows one turn per question: your message, a one-line summary of what it checked (click to open the timeline of steps and their output; it stays open while it works), and its answer. On the right, **Agents** shows your machines with running and waiting counts, the chats it started, then chats that need you, are working or are ready to read, each with its subagents underneath. Click an agent to read it in Chats, or hover and click the sparkles button to ask the orchestrator about it.
 
