@@ -10,6 +10,7 @@ struct ContentView: View {
         Group {
             switch store.page {
             case .home: HomeView(store: store, notch: notch)
+            case .today: TodayView(store: store)
             case .worktrees:
                 worktrees.searchable(text: $store.search, placement: .toolbar, prompt: "Branch, repository, or agent")
             case .usage: UsageDashboardView(usage: store.usage)
@@ -36,7 +37,7 @@ struct ContentView: View {
                     Button { store.addRepository() } label: { Label("Add repository", systemImage: "folder.badge.plus") }
                         .help("Add a repository")
                 }
-                if store.page == .worktrees || store.page == .remote || store.page == .home {
+                if store.page == .worktrees || store.page == .remote || store.page == .home || store.page == .today {
                     Button { Task { await store.refreshCurrentPage() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                         .help("Refresh (⌘R)").disabled(store.refreshingCurrentPage)
                 }

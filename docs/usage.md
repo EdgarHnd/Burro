@@ -46,7 +46,21 @@ The Burro window opens on **Home**. The summary line, chips and cards come from 
 
 Use the toolbar's page switcher or **⌘1–⌘5** for Home, Worktrees, Usage, Mac Health and Remote. **⌘R** refreshes the current page. **Settings → Appearance** chooses Match System, Light or Dark; the notch always stays dark.
 
-### Today
+### Today page
+
+**⌘2** (or **Today** in the toolbar) shows one day. The header has a live clock and a day stepper; past days are read once and kept until you quit.
+
+- **Chats**: everything you talked to that day, grouped by **Status** (Needs you, Working, Ready to read, Earlier) or **Project**, newest first, with the project/worktree path and, with **Previews** on, the first line of the latest reply. Click a row to open the chat. Remote chats appear for today but have no preview (their logs live on the other machine).
+- **Worked so far**: time from your first to your last message, with one cell per hour (shade = how many messages you sent) and, under it, Dayflow's dominant category for that hour.
+- **Messages**: what you sent vs agent replies, across Codex and Claude on this Mac.
+- **To-dos**: done today, still open, and added today (today only).
+- **Questions for you**: explicit questions agents asked (Codex `request_user_input`, Claude `AskUserQuestion`) plus chats waiting on you right now. Approval prompts aren't written to the logs, so they don't count.
+- **Chats**: active chats and the number of projects ("places") they touched.
+- **Dayflow** (if installed): focused time, a category bar and the latest activities. Burro reads Dayflow's own `dayflow timeline <date> --json`; activities still waiting for Dayflow's analysis show up later.
+
+Counting runs in the bundled Rust worker's history process while the page is on screen (at most once a minute for today; Dayflow every five minutes) and starts no background work otherwise. Very large transcripts are read from the end.
+
+### Today card
 
 The **Today** card on Home is a deliberately small to-do list. Type and press Return to add, click the circle to tick, double-click to edit, and hover for the delete button (or right-click). Unfinished to-dos from earlier days stay at the top until done; finished ones show until midnight.
 

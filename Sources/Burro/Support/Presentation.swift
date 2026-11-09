@@ -4,11 +4,12 @@ import BurroCore
 
 /// Top-level destinations. Home is the landing page; the others open from it, the toolbar or ⌘1–⌘5.
 enum AppPage: String, CaseIterable, Identifiable, Hashable {
-    case home, worktrees, usage, health, remote
+    case home, today, worktrees, usage, health, remote
     var id: String { rawValue }
     var title: String {
         switch self {
         case .home: "Home"
+        case .today: "Today"
         case .worktrees: "Worktrees"
         case .usage: "Usage"
         case .health: "Mac Health"
@@ -18,6 +19,7 @@ enum AppPage: String, CaseIterable, Identifiable, Hashable {
     var icon: String {
         switch self {
         case .home: "house"
+        case .today: "calendar"
         case .worktrees: "arrow.triangle.branch"
         case .usage: "gauge.with.dots.needle.33percent"
         case .health: NotchPage.mac.symbol
@@ -26,7 +28,7 @@ enum AppPage: String, CaseIterable, Identifiable, Hashable {
     }
     var shortcut: KeyEquivalent { KeyEquivalent(Character(String((Self.allCases.firstIndex(of: self) ?? 0) + 1))) }
     /// Pages that show worktree facts, so opening them refreshes a stale inventory.
-    var showsWorktrees: Bool { self == .home || self == .worktrees }
+    var showsWorktrees: Bool { self == .home || self == .today || self == .worktrees }
 }
 
 enum WorktreeFilter: Hashable {

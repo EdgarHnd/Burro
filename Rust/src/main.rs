@@ -1,5 +1,6 @@
 //! Private, parent-owned stdio worker. Reads only the files requested by Swift.
 //! No network, provider credentials, or persistent storage.
+mod activity;
 mod catalog;
 mod claude;
 mod completed;
@@ -27,6 +28,8 @@ struct Request {
     usage: Option<usage::Request>,
     completed: Option<String>,
     catalog: Option<catalog::Request>,
+    #[serde(default)]
+    activity: Option<activity::Request>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -57,6 +60,8 @@ struct Response {
     usage: Option<usage::Batch>,
     completed: Option<completed::Batch>,
     catalog: Option<catalog::Batch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activity: Option<activity::Batch>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +93,7 @@ struct Worker {
     usage: usage::Worker,
     completed: completed::Worker,
     catalog: catalog::Worker,
+    activity: activity::Worker,
 }
 
 fn parse_tail(bytes: &[u8]) -> (Option<EventState>, bool) {
@@ -189,6 +195,12 @@ impl Worker {
                 && (request.claude.is_some()
                     || request.completed.is_some()
                     || !request.paths.is_empty()))
+            || (request.activity.is_some()
+                && (request.claude.is_some()
+                    || request.completed.is_some()
+                    || request.usage.is_some()
+                    || request.catalog.is_some()
+                    || !request.paths.is_empty()))
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -201,7 +213,8 @@ impl Worker {
             || (request.claude.is_none()
                 && request.completed.is_none()
                 && request.usage.is_none()
-                && request.catalog.is_none())
+                && request.catalog.is_none()
+                && request.activity.is_none())
         {
             self.cache.retain(|path, _| active.contains(path.as_str()));
         }
@@ -230,6 +243,10 @@ impl Worker {
             catalog: request
                 .catalog
                 .map(|request| self.catalog.scan(request))
+                .transpose()?,
+            activity: request
+                .activity
+                .map(|request| self.activity.scan(request))
                 .transpose()?,
         })
     }
@@ -307,6 +324,7 @@ mod tests {
             usage: None,
             completed: None,
             catalog: None,
+            activity: None,
         }
     }
 

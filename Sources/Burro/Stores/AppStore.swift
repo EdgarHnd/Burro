@@ -98,6 +98,7 @@ import BurroCore
     var projectActivity: ProjectActivity?
     @ObservationIgnored private var activityScan: Task<Void, Never>?
     let todos: TodoStore
+    let today = TodayStore()
     // New chat launcher
     var newChatPresented = false
     var codexModels: [LaunchModel] = []
@@ -295,6 +296,9 @@ import BurroCore
         case .home:
             refreshProjectActivity(force: true)
             await refreshAgents(); await refreshRemotes(); await refresh()
+        case .today:
+            today.refresh(force: true); todos.sync()
+            await refreshAgents()
         }
     }
     var refreshingCurrentPage: Bool {
@@ -302,6 +306,7 @@ import BurroCore
         case .usage: checkingUsage
         case .health: health.refreshing
         case .remote: checkingRemotes
+        case .today: today.scanning
         case .home, .worktrees: scanning
         }
     }
