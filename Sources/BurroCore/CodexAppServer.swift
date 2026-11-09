@@ -68,18 +68,22 @@ final class CodexAppServer {
 
     /// The same connection to Codex's daemon on another machine: `codex app-server proxy` runs
     /// there over SSH with remote monitoring's hardened options. The remote command is fixed.
-    static func remote(_ host: RemoteHost, timeout: TimeInterval = 30) throws -> CodexAppServer {
+    static func remote(_ host: RemoteHost, timeout: TimeInterval = 45) throws -> CodexAppServer {
         guard host.enabled, host.validationError == nil else { throw LaunchError.failed("\(host.name) can't be reached from Burro.") }
         do { return try CodexAppServer(command: "/usr/bin/ssh", arguments: MachineProbe.sshArguments(for: host, command: remoteProxy), timeout: timeout) }
-        catch { throw LaunchError.failed(remoteProblem(host)) }
+        catch { throw LaunchError.failed(remoteProblem(host, underlying: error)) }
     }
     /// Why Codex's daemon can't be reached on that machine, in words you can act on.
-    static func remoteProblem(_ host: RemoteHost) -> String {
+    static func remoteProblem(_ host: RemoteHost, underlying: Error) -> String {
         let result = CommandRunner().run("/usr/bin/ssh", MachineProbe.sshArguments(for: host, command: remoteDiagnosis), timeout: 30)
-        return remoteProblem(host.name, output: result.output, reachable: result.succeeded)
+        return remoteProblem(host.name, output: result.output, reachable: result.succeeded,
+                             underlying: (underlying as? LocalizedError)?.errorDescription ?? "\(underlying)")
     }
-    static func remoteProblem(_ name: String, output: String, reachable: Bool) -> String {
+    static func remoteProblem(_ name: String, output: String, reachable: Bool, underlying: String = "") -> String {
         if !reachable { return "Couldn't reach \(name) over SSH." }
+        if output.contains("alreadyRunning") || output.contains("\"started\"") {
+            return "Codex is running on \(name), but Burro couldn't talk to it: \(underlying)"
+        }
         if output.contains("NO_CODEX") { return "Codex isn't installed on \(name)." }
         if output.contains("standalone") {
             return "Codex on \(name) isn't the standalone install, which its app server needs for replies from another Mac. On \(name), run: curl -fsSL https://chatgpt.com/codex/install.sh | sh"

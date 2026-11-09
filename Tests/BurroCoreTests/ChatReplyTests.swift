@@ -193,6 +193,41 @@ final class ChatReplyTests: XCTestCase {
         try await wait(for: "second")
     }
 
+    /// On the first configured machine: a throwaway read-only Codex thread in /tmp started through
+    /// its daemon, a reply through Burro's remote path, then the thread is archived.
+    func testLiveRemoteCodexReply() async throws {
+        guard ProcessInfo.processInfo.environment["BURRO_LIVE_REMOTE_REPLY"] == "1" else { throw XCTSkip("set BURRO_LIVE_REMOTE_REPLY=1") }
+        let state = try XCTUnwrap(Orchestrator.readState())
+        let host = try XCTUnwrap(state.hosts.first(where: \.enabled))
+        let server = try CodexAppServer.remote(host)
+        let thread = try server.request("thread/start", ["cwd": "/tmp", "sandbox": "read-only", "approvalPolicy": "on-request", "serviceName": "burro"])
+        let threadID = try XCTUnwrap((thread["thread"] as? [String: Any])?["id"] as? String)
+        _ = try server.request("turn/start", ["threadId": threadID, "input": [["type": "text", "text": "Reply with exactly the word: first"]]])
+        server.close()
+        addTeardownBlock {
+            if let cleanup = try? CodexAppServer.remote(host) { _ = try? cleanup.request("thread/archive", ["threadId": threadID]); cleanup.close() }
+        }
+        var chat = AgentSession(id: "remote:\(host.id.uuidString):codex:\(threadID.lowercased())", provider: .codex, title: "live", cwd: "/tmp",
+                                state: .idle, updatedAt: Date(), evidence: "live")
+        chat.remote = RemoteOrigin(hostID: host.id, hostName: host.name, sampledAt: Date(), stale: false)
+        func answers() -> [String] {
+            ((try? ChatTranscripts.load(chatID: chat.id, hosts: state.hosts)).map { $0.messages.filter { $0.kind == .assistant }.map(\.text) }) ?? []
+        }
+        func wait(for word: String) async throws {
+            for _ in 0..<45 {
+                if answers().contains(where: { $0.localizedCaseInsensitiveContains(word) }) { return }
+                try await Task.sleep(for: .seconds(3))
+            }
+            XCTFail("No \(word) in \(answers())")
+        }
+        try await wait(for: "first")
+        let models = try ChatReply.codexModels(host: host)
+        XCTAssertFalse(models.isEmpty)
+        let confirmation = try ChatReply.send(ReplyRequest(text: "Now reply with exactly the word: second", access: .readOnly), to: chat, host: host)
+        XCTAssertTrue(confirmation.hasPrefix("Sent"), confirmation)
+        try await wait(for: "second")
+    }
+
     /// Starts a throwaway read-only Codex chat, replies to it through Burro's reply path, checks the
     /// answer lands, then archives the thread. Also lists Codex models and copies one media file
     /// from a remote chat when a machine is configured.

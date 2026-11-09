@@ -45,12 +45,14 @@ struct BurroMark: View {
     var working = false
     var tint: Color = .white
     var phase: Double = 0
+    /// The orchestrator's look: sunglasses and a soft glow.
+    var shades = false
     @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         AnimatedBurroMark(active: active && appeared, working: working, reduceMotion: reduceMotion,
-                          tint: NSColor(tint), phase: phase)
+                          tint: NSColor(tint), phase: phase, shades: shades)
             .accessibilityHidden(true)
             .onAppear { appeared = true }
             .onDisappear { appeared = false }
@@ -63,10 +65,11 @@ private struct AnimatedBurroMark: NSViewRepresentable {
     let reduceMotion: Bool
     let tint: NSColor
     let phase: Double
+    let shades: Bool
 
     func makeNSView(context: Context) -> BurroMascotView { BurroMascotView() }
     func updateNSView(_ view: BurroMascotView, context: Context) {
-        view.configure(active: active, working: working, reduceMotion: reduceMotion, tint: tint, phase: phase)
+        view.configure(active: active, working: working, reduceMotion: reduceMotion, tint: tint, phase: phase, shades: shades)
     }
     static func dismantleNSView(_ view: BurroMascotView, coordinator: ()) { view.stopAnimating() }
 }

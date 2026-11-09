@@ -3,23 +3,31 @@
 import SwiftUI
 import BurroCore
 
+/// The orchestrator is Burro's butter in gold: fills use the butter colour, text and small icons
+/// a deeper gold that stays readable on the light background.
 enum OrchestratorStyle {
-    static let gradient = LinearGradient(colors: [Color(red: 0.46, green: 0.36, blue: 0.98), Color(red: 0.93, green: 0.42, blue: 0.62)],
+    static let gradient = LinearGradient(colors: [Color(red: 1.0, green: 0.86, blue: 0.40), Color(red: 0.95, green: 0.70, blue: 0.18)],
                                          startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let tint = Color(red: 0.55, green: 0.40, blue: 0.95)
+    static let tint = HomeStyle.butter
+    static let ink = AppAppearance.adaptive(light: (0.64, 0.45, 0.03, 1), dark: (1, 0.83, 0.33, 1))
+    /// Icons drawn on the gold gradient.
+    static let onGold = Color(red: 0.16, green: 0.13, blue: 0.08)
     @MainActor static func suggestions(_ store: AppStore) -> [String] {
         ["What needs me right now?", "Where is \(store.mainProject?.name ?? "my main project") at?", "Plan my day from my to-dos and chats"]
     }
 }
 
+/// Burro's butter in gold, with sunglasses and a warm glow (brighter while it works).
 struct OrchestratorAvatar: View {
     var size: CGFloat
     var working = false
     var body: some View {
         ZStack {
-            Circle().fill(OrchestratorStyle.gradient)
-            Image(systemName: "sparkles").font(.system(size: size * 0.44, weight: .semibold)).foregroundStyle(.white)
-                .symbolEffect(.pulse, isActive: working)
+            Circle().fill(OrchestratorStyle.tint.opacity(working ? 0.34 : 0.21))
+                .frame(width: size * 0.7, height: size * 0.7).blur(radius: size * 0.32)
+                .animation(.easeInOut(duration: 0.4), value: working)
+            BurroMark(active: true, working: working, tint: OrchestratorStyle.tint, shades: true)
+                .frame(width: size, height: size)
         }
         .frame(width: size, height: size)
     }
@@ -49,7 +57,7 @@ struct OrchestratorComposer: View {
     private func send() { orchestrator.send(orchestrator.draft) }
     private func circleButton(_ symbol: String, help: String, enabled: Bool = true, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+            Image(systemName: symbol).font(.system(size: 12, weight: .bold)).foregroundStyle(enabled ? OrchestratorStyle.onGold : .white)
                 .frame(width: 30, height: 30)
                 .background(Circle().fill(enabled ? AnyShapeStyle(OrchestratorStyle.gradient) : AnyShapeStyle(AppAppearance.tertiary.opacity(0.35))))
         }
@@ -86,8 +94,8 @@ struct HomeOrchestrator: View {
                     HStack(spacing: 8) {
                         Text("Orchestrator").font(.system(size: 17, weight: .semibold))
                         Text(Orchestrator.modelTitle.uppercased()).font(.system(size: 10, weight: .bold)).tracking(0.8)
-                            .foregroundStyle(OrchestratorStyle.tint)
-                            .padding(.horizontal, 7).padding(.vertical, 3).background(OrchestratorStyle.tint.opacity(0.12), in: Capsule())
+                            .foregroundStyle(OrchestratorStyle.ink)
+                            .padding(.horizontal, 7).padding(.vertical, 3).background(OrchestratorStyle.tint.opacity(0.2), in: Capsule())
                     }
                     Text(subtitle).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
                 }

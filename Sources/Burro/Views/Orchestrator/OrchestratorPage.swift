@@ -90,14 +90,13 @@ private struct OrchestratorConversation: View {
 
     private func header(_ orchestrator: OrchestratorStore, empty: Bool) -> some View {
         HStack(spacing: 14) {
-            OrchestratorAvatar(size: 40, working: orchestrator.running)
-                .shadow(color: OrchestratorStyle.tint.opacity(0.35), radius: 10, y: 3)
+            OrchestratorAvatar(size: 44, working: orchestrator.running)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     Text("Orchestrator").font(.system(size: 20, weight: .bold, design: .rounded))
                     Text(Orchestrator.modelTitle.uppercased()).font(.system(size: 10, weight: .bold)).tracking(0.8)
-                        .foregroundStyle(OrchestratorStyle.tint)
-                        .padding(.horizontal, 7).padding(.vertical, 3).background(OrchestratorStyle.tint.opacity(0.12), in: Capsule())
+                        .foregroundStyle(OrchestratorStyle.ink)
+                        .padding(.horizontal, 7).padding(.vertical, 3).background(OrchestratorStyle.tint.opacity(0.2), in: Capsule())
                 }
                 HStack(spacing: 6) {
                     Circle().fill(orchestrator.running ? OrchestratorStyle.tint : AppAppearance.green).frame(width: 6, height: 6)
@@ -123,7 +122,7 @@ private struct OrchestratorConversation: View {
     private var emptyState: some View {
         VStack(spacing: 18) {
             Spacer(minLength: 20)
-            OrchestratorAvatar(size: 68).shadow(color: OrchestratorStyle.tint.opacity(0.4), radius: 22, y: 6)
+            OrchestratorAvatar(size: 76)
             VStack(spacing: 8) {
                 Text("What should we get done?").font(.system(size: 26, weight: .bold, design: .rounded))
                 Text("I see every Codex and Claude chat on your machines, read them when I need detail, and start new ones on this Mac. Ask what needs you, where a project stands, or to get something going.")
@@ -160,7 +159,7 @@ private struct SuggestionCard: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: symbol).font(.system(size: 13, weight: .medium)).foregroundStyle(OrchestratorStyle.tint).frame(width: 18)
+                Image(systemName: symbol).font(.system(size: 13, weight: .medium)).foregroundStyle(OrchestratorStyle.ink).frame(width: 18)
                 Text(text).font(.system(size: 13)).foregroundStyle(AppAppearance.text).multilineTextAlignment(.leading).lineLimit(2)
                 Spacer(minLength: 0)
             }
@@ -188,7 +187,7 @@ private struct TurnView: View {
                     VStack(alignment: .trailing, spacing: 4) {
                         Text(question.text).font(.system(size: 14)).textSelection(.enabled)
                             .padding(.horizontal, 15).padding(.vertical, 10)
-                            .background(OrchestratorStyle.tint.opacity(0.11), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .background(OrchestratorStyle.tint.opacity(0.22), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                         if let at = question.at {
                             Text(Calendar.current.isDateInToday(at) ? at.formatted(date: .omitted, time: .shortened) : at.formatted(date: .abbreviated, time: .shortened))
                                 .font(.system(size: 10.5)).foregroundStyle(AppAppearance.tertiary).padding(.trailing, 6)
@@ -229,7 +228,7 @@ private struct StepsView: View {
                     HStack(spacing: -5) {
                         ForEach(Array(tools.prefix(4).enumerated()), id: \.offset) { _, step in
                             Image(systemName: Self.describe(step, title: title).symbol).font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(OrchestratorStyle.tint).frame(width: 20, height: 20)
+                                .foregroundStyle(OrchestratorStyle.ink).frame(width: 20, height: 20)
                                 .background(Circle().fill(AppAppearance.surface)).overlay(Circle().strokeBorder(AppAppearance.separator))
                         }
                     }
@@ -247,7 +246,7 @@ private struct StepsView: View {
                 }
                 .padding(.leading, 9).padding(.top, 10)
                 .overlay(alignment: .leading) {
-                    Rectangle().fill(OrchestratorStyle.tint.opacity(0.25)).frame(width: 1.5).padding(.top, 12).padding(.bottom, 4)
+                    Rectangle().fill(OrchestratorStyle.tint.opacity(0.5)).frame(width: 1.5).padding(.top, 12).padding(.bottom, 4)
                 }
             }
         }
@@ -294,7 +293,7 @@ private struct StepRow: View {
                 Button { if step.output?.isEmpty == false { withAnimation(.easeOut(duration: 0.15)) { showOutput.toggle() } } } label: {
                     HStack(spacing: 8) {
                         Circle().fill(AppAppearance.background).frame(width: 9, height: 9)
-                            .overlay(Circle().strokeBorder(OrchestratorStyle.tint.opacity(0.6), lineWidth: 1.5))
+                            .overlay(Circle().strokeBorder(OrchestratorStyle.ink.opacity(0.7), lineWidth: 1.5))
                             .offset(x: -4)
                         if live && step.output == nil {
                             ProgressView().controlSize(.mini).frame(width: 14)
@@ -441,7 +440,7 @@ private struct AgentPanelRow: View {
                 Spacer(minLength: 4)
                 if hovering {
                     Button(action: ask) {
-                        Image(systemName: "sparkles").font(.system(size: 10, weight: .semibold)).foregroundStyle(.white)
+                        Image(systemName: "sparkles").font(.system(size: 10, weight: .semibold)).foregroundStyle(OrchestratorStyle.onGold)
                             .frame(width: 22, height: 22).background(Circle().fill(OrchestratorStyle.gradient))
                     }
                     .buttonStyle(.plain).help("Ask the orchestrator about this chat")
