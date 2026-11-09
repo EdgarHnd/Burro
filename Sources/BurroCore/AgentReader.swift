@@ -147,7 +147,9 @@ public struct AgentReader: Sendable {
                     title: AgentParsing.codexDisplayName(name: row["name"], title: row["title"], isSubagent: isSubagent), cwd: canonical.canonical(cwd),
                     attachedPaths: attachments[id] ?? [], state: state, updatedAt: updated,
                     pinned: row["is_pinned"] == "1", evidence: evidence, turnCompleted: completed, isSubagent: isSubagent,
-                    parentSessionID: AgentParsing.codexParentID(source: row["source"])))
+                    parentSessionID: AgentParsing.codexParentID(source: row["source"]),
+                    model: row["model"], effort: row["reasoning_effort"],
+                    startedAt: row["created_at"].flatMap(Double.init).map { Date(timeIntervalSince1970: $0) }))
                 if held != 0 { result.roots.append(cwd) }
             }
             // A new/replaced lock file must never be hidden by the filename
@@ -209,13 +211,16 @@ public struct AgentReader: Sendable {
                        processes: processes.processes, now: now, deadline: deadline, workerEvidence: delegatedStates[id]) {
                     state = delegated.state; evidence = delegated.evidence
                 }
+                let ran: (model: String?, effort: String?) = live ? ClaudeTranscriptTail.shared.modelAndEffort(home: home, cwd: cwd, sessionID: id) : (nil, nil)
                 result.sessions.append(AgentSession(id: "claude:\(id)", provider: .claude,
                     title: object["name"] as? String ?? "Claude Code session", cwd: canonical.canonical(cwd),
                     state: state, updatedAt: updated, pid: live ? pid : nil,
                     evidence: evidence,
                     claudeDesktopSessionID: object["hostSessionId"] as? String,
                     claudeBridgeSessionID: object["bridgeSessionId"] as? String,
-                    turnCompleted: completed.contains(object["hostSessionId"] as? String ?? "") && object["status"] as? String == "idle" && (state == .idle || state == .inactive)))
+                    turnCompleted: completed.contains(object["hostSessionId"] as? String ?? "") && object["status"] as? String == "idle" && (state == .idle || state == .inactive),
+                    model: ran.model, effort: ran.effort,
+                    startedAt: (object["startedAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }))
                 result.roots.append(cwd)
             }
         } catch { result.warnings.append("Claude session directory could not be read") }

@@ -25,6 +25,11 @@ public struct AgentSession: Identifiable, Codable, Sendable, Equatable {
     public var hasUnreadResult: Bool? = nil
     public var isSubagent: Bool? = nil
     public var parentSessionID: String? = nil
+    /// The model and reasoning effort the chat last ran with, when the provider records them.
+    public var model: String? = nil
+    public var effort: String? = nil
+    /// When the chat began.
+    public var startedAt: Date? = nil
     public var isDone: Bool {
         hasUnreadResult == true && isSubagent != true && remote?.stale != true && (state == .idle || state == .inactive)
     }

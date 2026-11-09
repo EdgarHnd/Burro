@@ -10,10 +10,18 @@ struct HomeView: View {
     var notch: NotchController
     @State private var onScreen = false
     @State private var editingBench: Bench?
+    @State private var hover = AquariumHover()
+    @AppStorage("home.coverStyle") private var coverStyle = CoverField.Style.aquarium.rawValue
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private static let space = "home"
 
     var body: some View {
         let summary = store.homeSummary
+        let fish = coverStyle == CoverField.Style.aquarium.rawValue ? AquariumFish.school(running: summary.running, waiting: summary.needsYou) : []
+        GeometryReader { geometry in
         ZStack(alignment: .bottom) {
+            // The backdrop stays put; the page scrolls over it.
+            CoverBackdrop(running: summary.counts.running, waiting: summary.counts.waiting, fish: fish, hover: hover, animate: onScreen)
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     HomeCover(store: store, summary: summary)
@@ -37,13 +45,26 @@ struct HomeView: View {
                 }
                 .padding(.horizontal, 30).padding(.top, 20).padding(.bottom, 120)
                 .frame(maxWidth: 1240).frame(maxWidth: .infinity)
+                .frame(minHeight: geometry.size.height, alignment: .top)
+                // Behind the cards: the open water, where a fish can be hovered and clicked.
+                .background {
+                    AquariumCatcher(hover: hover, fish: fish, size: geometry.size, animate: onScreen && !reduceMotion, space: Self.space) { id in
+                        if let session = (summary.needsYou + summary.running).first(where: { $0.id == id }) { store.showChat(session) }
+                    }
+                }
             }
             .scrollIndicators(.automatic)
-            // Content fades out under the floating dock instead of colliding with it.
-            LinearGradient(colors: [AppAppearance.background.opacity(0), AppAppearance.background.opacity(0.92)],
-                           startPoint: .top, endPoint: .bottom)
-                .frame(height: 96).allowsHitTesting(false)
+            // Content fades out under the floating dock, leaving the backdrop showing through.
+            .mask {
+                VStack(spacing: 0) {
+                    Color.black
+                    LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: 110)
+                }
+            }
             HomeDock(store: store, summary: summary, notch: notch).padding(.bottom, 20).padding(.horizontal, 24)
+            AquariumLabel(hover: hover, size: geometry.size)
+        }
+        .coordinateSpace(name: Self.space)
         }
         .background(AppAppearance.background)
         .background(WindowOcclusionReader { onScreen = $0 })

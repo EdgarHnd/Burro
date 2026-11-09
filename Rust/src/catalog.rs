@@ -182,8 +182,20 @@ fn read(db: &Connection, scope: Option<&Scope>) -> rusqlite::Result<Snapshot> {
     } else {
         "NULL AS source"
     };
+    // Model, effort and start time: optional, for Home's aquarium.
+    let extra = ["created_at", "model", "reasoning_effort"]
+        .iter()
+        .map(|column| {
+            if columns.contains(*column) {
+                (*column).to_owned()
+            } else {
+                format!("NULL AS {column}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     let selection = format!(
-        "SELECT id,cwd,title,updated_at,rollout_path,{pinned},{name},{source} FROM threads WHERE archived=0"
+        "SELECT id,cwd,title,updated_at,rollout_path,{pinned},{name},{source},{extra} FROM threads WHERE archived=0"
     );
     let threads = if let Some(scope) = scope {
         let ids = serde_json::to_string(&scope.ids).map_err(|_| rusqlite::Error::InvalidQuery)?;

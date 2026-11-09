@@ -12,7 +12,8 @@ struct CodexCatalog: Decodable, Sendable, Equatable {
         let pinned = columns.contains("is_pinned") ? "is_pinned" : "0 AS is_pinned"
         let name = columns.contains("name") ? "name" : "NULL AS name"
         let source = columns.contains("source") ? "source" : "NULL AS source"
-        let threads = try db.rows("SELECT id,cwd,title,updated_at,rollout_path,\(pinned),\(name),\(source) FROM threads WHERE archived=0 ORDER BY updated_at DESC")
+        let extra = ["created_at", "model", "reasoning_effort"].map { columns.contains($0) ? $0 : "NULL AS \($0)" }.joined(separator: ",")
+        let threads = try db.rows("SELECT id,cwd,title,updated_at,rollout_path,\(pinned),\(name),\(source),\(extra) FROM threads WHERE archived=0 ORDER BY updated_at DESC")
         let tables = Set(try db.rows("SELECT name FROM sqlite_master WHERE type='table'").compactMap { $0["name"] })
         let roots = tables.contains("project_roots") ? try db.rows("SELECT path FROM project_roots").compactMap { $0["path"] } : []
         let attachments = tables.contains("thread_attachments") ? try db.rows("SELECT thread_id,identity_key,payload FROM thread_attachments WHERE attachment_type='worktree'") : []

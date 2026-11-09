@@ -6,41 +6,72 @@ import BurroCore
 
 // MARK: Cover
 
-/// The cover photo: an image you pick, otherwise your current desktop picture (read at runtime,
-/// nothing bundled), otherwise a soft gradient.
+/// Home's backdrop, fixed behind the page while it scrolls. The aquarium fills the whole page; the
+/// glyph and pixel fields and a photo sit across the top and fade into it. Part of the page, not a card.
+struct CoverBackdrop: View {
+    var running: Int
+    var waiting: Int
+    var fish: [AquariumFish]
+    var hover: AquariumHover
+    /// Home is on screen; the field only animates then.
+    var animate: Bool
+    @AppStorage("home.cover") private var coverPath = ""
+    @AppStorage("home.coverStyle") private var styleRaw = CoverField.Style.aquarium.rawValue
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var image: NSImage?
+
+    private var style: CoverField.Style { CoverField.Style(rawValue: styleRaw) ?? .aquarium }
+
+    var body: some View {
+        Group {
+            if style == .aquarium {
+                CoverField(style: .aquarium, running: running, waiting: waiting, fish: fish, hover: hover, animate: animate && !reduceMotion)
+            } else {
+                Group {
+                    if style != .photo {
+                        CoverField(style: style, running: running, waiting: waiting, animate: animate && !reduceMotion)
+                    } else if let image {
+                        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .frame(maxWidth: .infinity).frame(height: 380).clipped()
+                .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.42),
+                                             .init(color: .black.opacity(0.45), location: 0.68), .init(color: .clear, location: 1)],
+                                     startPoint: .top, endPoint: .bottom))
+                .frame(maxHeight: .infinity, alignment: .top)
+            }
+        }
+        .allowsHitTesting(false)
+        .task(id: coverPath + styleRaw) { image = style == .photo ? await CoverImage.load(path: coverPath) : nil }
+    }
+}
+
+/// The cover's content: the butter, a greeting and live chips, sitting on the backdrop.
 struct HomeCover: View {
     var store: AppStore
     var summary: HomeSummary
     @AppStorage("home.cover") private var coverPath = ""
-    @State private var image: NSImage?
+    @AppStorage("home.coverStyle") private var styleRaw = CoverField.Style.aquarium.rawValue
+
+    private var style: CoverField.Style { CoverField.Style(rawValue: styleRaw) ?? .aquarium }
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            Group {
-                if let image { Image(nsImage: image).resizable().aspectRatio(contentMode: .fill) }
-                else {
-                    LinearGradient(colors: [AppAppearance.blue.opacity(0.55), HomeStyle.butter.opacity(0.6), AppAppearance.green.opacity(0.35)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing)
-                }
-            }
-            .frame(maxWidth: .infinity).frame(height: 250).clipped()
-            LinearGradient(colors: [.clear, .black.opacity(0.08), .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
-            HStack(alignment: .bottom, spacing: 18) {
+            Color.clear.frame(maxWidth: .infinity).frame(height: 230)
+            HStack(alignment: .bottom, spacing: 16) {
                 BurroMark(active: true, working: summary.counts.running > 0, tint: HomeStyle.butter)
-                    .frame(width: 44, height: 44).frame(width: 82, height: 82)
-                    .background {
-                        RoundedRectangle(cornerRadius: 22, style: .continuous).fill(HomeStyle.charcoal.opacity(0.92))
-                            .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
-                    }
-                    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(.white.opacity(0.18)))
+                    .frame(width: 64, height: 64)
+                    .shadow(color: HomeStyle.butter.opacity(0.35), radius: 14)
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(greeting).font(.system(size: 40, weight: .bold, design: .rounded)).foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
+                    Text(greeting).font(.system(size: 40, weight: .bold, design: .rounded)).foregroundStyle(AppAppearance.text)
+                        .shadow(color: AppAppearance.background.opacity(0.9), radius: 12)
                     HStack(spacing: 8) {
                         CoverChip(symbol: "waveform.path", text: "\(summary.counts.running)", help: "Agents running") {
                             store.filter = .working; store.page = .worktrees
                         }
-                        CoverChip(symbol: "tray", text: "\(summary.counts.waiting + summary.counts.done)", help: "Need you or ready to read") { store.page = .today }
+                        CoverChip(symbol: "tray", text: "\(summary.counts.waiting + summary.counts.done)", help: "Need you or ready to read") { store.page = .remote }
                         CoverChip(symbol: "server.rack", text: "\(summary.machines.count) machine\(summary.machines.count == 1 ? "" : "s")", help: "Machines") { store.page = .machines }
                         if let line = usageLine { CoverChip(symbol: "gauge.with.dots.needle.33percent", text: line, help: "Usage") { store.page = .usage } }
                         if let activity = store.projectActivity, activity.tokens > 0 {
@@ -48,21 +79,28 @@ struct HomeCover: View {
                         }
                     }
                 }
-            }.padding(28)
+            }
+            .padding(.bottom, 6)
         }
         .overlay(alignment: .topTrailing) {
             Menu {
+                Picker("Cover", selection: $styleRaw) {
+                    Label("Aquarium", systemImage: "fish").tag(CoverField.Style.aquarium.rawValue)
+                    Label("Glyphs", systemImage: "character.textbox").tag(CoverField.Style.glyphs.rawValue)
+                    Label("Pixels", systemImage: "square.grid.3x3.fill").tag(CoverField.Style.pixels.rawValue)
+                    Label("Photo", systemImage: "photo").tag(CoverField.Style.photo.rawValue)
+                }
+                .pickerStyle(.inline)
+                Divider()
                 Button("Choose Image…") { choose() }
-                Button("Use Desktop Picture") { coverPath = "" }.disabled(coverPath.isEmpty)
+                Button("Use Desktop Picture") { coverPath = ""; styleRaw = CoverField.Style.photo.rawValue }
+                    .disabled(coverPath.isEmpty && style == .photo)
             } label: {
-                Image(systemName: "photo").font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
-                    .frame(width: 32, height: 32).background(.black.opacity(0.25), in: Circle())
+                Image(systemName: style == .photo ? "photo" : "sparkles").font(.system(size: 13, weight: .medium)).foregroundStyle(AppAppearance.secondary)
+                    .frame(width: 32, height: 32).background(.thinMaterial, in: Circle())
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(18).help("Change the cover image")
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(.top, 4).help("Change the cover")
         }
-        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .background { RoundedRectangle(cornerRadius: 26, style: .continuous).fill(AppAppearance.surface).shadow(color: AppAppearance.shadow, radius: 18, y: 6) }
-        .task(id: coverPath) { image = await CoverImage.load(path: coverPath) }
     }
     private var greeting: String {
         switch Calendar.current.component(.hour, from: .now) {
@@ -80,7 +118,7 @@ struct HomeCover: View {
     private func choose() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]; panel.canChooseDirectories = false; panel.prompt = "Use Image"
-        if panel.runModal() == .OK, let url = panel.url { coverPath = url.path }
+        if panel.runModal() == .OK, let url = panel.url { coverPath = url.path; styleRaw = CoverField.Style.photo.rawValue }
     }
 }
 
@@ -96,9 +134,10 @@ private struct CoverChip: View {
                 Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
                 Text(text).font(.system(size: 13, weight: .semibold)).monospacedDigit()
             }
-            .foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 6)
-            .background(.white.opacity(hovering ? 0.32 : 0.2), in: Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.25)))
+            .foregroundStyle(AppAppearance.text).padding(.horizontal, 12).padding(.vertical, 6)
+            .background(.thinMaterial, in: Capsule())
+            .background(AppAppearance.text.opacity(hovering ? 0.1 : 0), in: Capsule())
+            .overlay(Capsule().strokeBorder(AppAppearance.separator))
         }.buttonStyle(.plain).onHover { hovering = $0 }.help(help)
     }
 }
