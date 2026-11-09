@@ -71,6 +71,9 @@ public struct LaunchResult: Sendable, Equatable {
     /// Claude's short background id (what `claude attach` takes).
     public var handle: String?
     public var folder: String
+    public init(provider: LaunchProvider, sessionID: String, handle: String?, folder: String) {
+        self.provider = provider; self.sessionID = sessionID; self.handle = handle; self.folder = folder
+    }
     public var chatURL: URL? {
         provider == .codex ? URL(string: "codex://threads/\(sessionID)") : nil
     }

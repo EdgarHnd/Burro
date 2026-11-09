@@ -9,8 +9,10 @@ let package = Package(
                .executable(name: "burro-mcp", targets: ["BurroMCP"])],
     targets: [
         .target(name: "CSystem", linkerSettings: [.linkedLibrary("proc"), .linkedLibrary("sqlite3")]),
-        .target(name: "BurroCore", dependencies: ["CSystem"], resources: [.copy("Resources/remote_probe.py"), .copy("Resources/remote_transcript.py")]),
-        .executableTarget(name: "Burro", dependencies: ["BurroCore"], resources: [.copy("Resources/Brand")]),
+        .target(name: "BurroCore", dependencies: ["CSystem"], resources: [.copy("Resources/remote_probe.py"), .copy("Resources/remote_transcript.py"),
+                                                                   .copy("Resources/remote_media.py"), .copy("Resources/remote_reply.py")]),
+        .executableTarget(name: "Burro", dependencies: ["BurroCore"], resources: [.copy("Resources/Brand")],
+                          linkerSettings: [.linkedFramework("AVKit")]),
         .executableTarget(name: "BurroInspect", dependencies: ["BurroCore"]),
         .executableTarget(name: "BurroMCP", dependencies: ["BurroCore"]),
         .testTarget(name: "BurroCoreTests", dependencies: ["BurroCore", "Burro"])

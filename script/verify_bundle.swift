@@ -20,7 +20,9 @@ guard let bundle = Bundle(url: app),
       let probe = core.url(forResource: "remote_probe", withExtension: "py"),
       FileManager.default.isReadableFile(atPath: probe.path),
       let transcript = core.url(forResource: "remote_transcript", withExtension: "py"),
-      FileManager.default.isReadableFile(atPath: transcript.path) else {
+      FileManager.default.isReadableFile(atPath: transcript.path),
+      core.url(forResource: "remote_media", withExtension: "py") != nil,
+      core.url(forResource: "remote_reply", withExtension: "py") != nil else {
     fputs("App bundle is missing its executable, Rust log worker, orchestrator tools, icon, brand assets, or remote scripts.\n", stderr)
     exit(1)
 }

@@ -19,6 +19,20 @@ def stamp(value):
     except Exception:
         return None
 
+def embedded_command(code):
+    # Codex's exec tool runs JavaScript like tools.exec_command({cmd:`...`}); show the command.
+    start = code.find("cmd:")
+    if start < 0: return None
+    rest = code[start + 4:].lstrip()
+    if not rest or rest[0] not in "`\"'": return None
+    body = rest[1:]
+    end = body.find(rest[0])
+    body = body if end < 0 else body[:end]
+    for line in re.split(r"[\n;]", body):
+        line = line.replace("\\n", " ").strip()
+        if line and not line.startswith("set -"): return line
+    return None
+
 def summary(name, value):
     text = ""
     if isinstance(value, str):
@@ -27,7 +41,7 @@ def summary(name, value):
             cmd = parsed.get("cmd") or parsed.get("command") if isinstance(parsed, dict) else None
             text = " ".join(cmd) if isinstance(cmd, list) else (cmd or value.splitlines()[0] if value else "")
         except Exception:
-            text = value.splitlines()[0] if value else ""
+            text = embedded_command(value) or (value.splitlines()[0] if value else "")
     elif isinstance(value, dict):
         for key in ("command", "file_path", "path", "pattern", "description", "url", "query", "prompt", "id"):
             if isinstance(value.get(key), str):

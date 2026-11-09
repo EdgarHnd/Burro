@@ -134,6 +134,11 @@ private struct ChatDetail: View {
     var session: AgentSession
     @State private var loader = TranscriptLoader()
     @State private var onScreen = false
+    /// After you send a reply, keep refreshing for a while even before monitoring notices.
+    @State private var followUntil: Date?
+
+    private var host: RemoteHost? { store.remoteHosts.first { $0.id == session.remote?.hostID } }
+    private var media: ChatMediaSource? { session.remote == nil ? .local : host.map { .remote($0) } }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -163,7 +168,8 @@ private struct ChatDetail: View {
                     if transcript.messages.isEmpty {
                         AppEmptyState("No messages yet", symbol: "bubble.left", detail: "This chat hasn't said anything Burro can show.")
                     } else {
-                        ChatTranscriptView(transcript: transcript, provider: session.provider)
+                        ChatTranscriptView(transcript: transcript, provider: session.provider, working: session.state == .working)
+                            .environment(\.chatMediaSource, media)
                     }
                 } else if let error = loader.error {
                     AppEmptyState("Can't show this chat", symbol: "exclamationmark.bubble", detail: error)
@@ -171,6 +177,14 @@ private struct ChatDetail: View {
                     ProgressView("Reading the conversation…").controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            ChatComposer(store: store, session: session, host: host) {
+                followUntil = Date().addingTimeInterval(120)
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    await reload()
+                    if session.remote == nil { await store.refreshAgents() } else { await store.refreshRemotes() }
+                }
+            }
         }
         .background(WindowOcclusionReader { onScreen = $0 })
         .task { await reload() }
@@ -178,12 +192,11 @@ private struct ChatDetail: View {
         .task(id: onScreen) {
             while onScreen && !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(4))
-                if session.state == .working || session.state == .waiting { await reload() }
+                if session.state == .working || session.state == .waiting || (followUntil.map { $0 > Date() } ?? false) { await reload() }
             }
         }
     }
     private func reload() async {
-        let host = store.remoteHosts.first { $0.id == session.remote?.hostID }
         await loader.load(session, host: host, profiles: store.usage.preferences.profiles)
     }
     private var statusColor: Color {
@@ -194,5 +207,172 @@ private struct ChatDetail: View {
         if session.state == .working { return "Working" }
         if session.isDone { return "Ready to read" }
         return "Idle"
+    }
+}
+
+/// Reply to the chat from Burro, with the choices its own app offers: access, model and effort.
+/// Each defaults to "keep what this chat uses".
+private struct ChatComposer: View {
+    @Bindable var store: AppStore
+    var session: AgentSession
+    var host: RemoteHost?
+    var onSent: () -> Void
+    @State private var text = ""
+    @State private var access: ReplyAccess = .keep
+    @State private var model = ""
+    @State private var effort = ""
+    @State private var sending = false
+    @State private var notice: String?
+    @State private var error: String?
+    @State private var remoteModels: [LaunchModel]?
+    /// Set when the chat can't take replies right now (Codex setup on its machine, or a Claude
+    /// session that something still has open), found when the composer appears.
+    @State private var remoteProblem: String?
+    @State private var attachHandle: String?
+    @FocusState private var focused: Bool
+
+    private var agent: String { session.provider == .codex ? "Codex" : "Claude" }
+    private var models: [LaunchModel] {
+        session.provider == .claude ? LaunchModel.claude : (session.remote == nil ? store.codexModels : (remoteModels ?? []))
+    }
+    private var efforts: [String] {
+        guard session.provider == .codex else { return LaunchModel.claudeEfforts }
+        let chosen = models.first { $0.id == model } ?? models.first(where: \.isDefault) ?? models.first
+        return chosen?.efforts.isEmpty == false ? chosen!.efforts : ["low", "medium", "high", "xhigh"]
+    }
+
+    var body: some View {
+        let blocked = ChatReply.unavailable(session, host: host) ?? remoteProblem
+        let empty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        VStack(alignment: .leading, spacing: 8) {
+            if let notice {
+                Label(notice, systemImage: "checkmark.circle.fill").font(.system(size: 12)).foregroundStyle(AppAppearance.green)
+            }
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(AppAppearance.amber).lineLimit(3)
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                if let blocked {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Label(blocked, systemImage: "info.circle").font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
+                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        if let attachHandle, session.remote == nil {
+                            Button("Attach in Terminal") {
+                                store.open(LaunchResult(provider: .claude, sessionID: session.id, handle: attachHandle, folder: session.cwd))
+                            }
+                            .buttonStyle(.plain).font(.system(size: 12, weight: .semibold)).foregroundStyle(AppAppearance.blue)
+                        }
+                    }
+                }
+                TextField(blocked == nil ? "Reply to \(agent)…" : "Replies aren't available for this chat", text: $text, axis: .vertical)
+                    .textFieldStyle(.plain).font(.system(size: 14)).lineLimit(1...8)
+                    .focused($focused).onSubmit(send).disabled(blocked != nil || sending)
+                HStack(spacing: 6) {
+                    option(symbol: access.symbol, title: access == .keep ? "Access" : access.title) {
+                        Picker("Access", selection: $access) {
+                            ForEach(ReplyAccess.options(for: session.provider)) { option in
+                                Text(option == .keep ? "Keep current access" : option.title).tag(option)
+                            }
+                        }.pickerStyle(.inline).labelsHidden()
+                    }
+                    Spacer(minLength: 8)
+                    option(symbol: "bolt.fill", title: modelTitle) {
+                        Picker("Model", selection: $model) {
+                            Text("Keep current model").tag("")
+                            ForEach(models) { Text($0.title).tag($0.id) }
+                        }.pickerStyle(.inline).labelsHidden()
+                    }
+                    option(symbol: nil, title: effort.isEmpty ? "Effort" : Self.effortTitle(effort)) {
+                        Picker("Effort", selection: $effort) {
+                            Text("Keep current effort").tag("")
+                            ForEach(efforts, id: \.self) { Text(Self.effortTitle($0)).tag($0) }
+                        }.pickerStyle(.inline).labelsHidden()
+                    }
+                    Button(action: send) {
+                        Group {
+                            if sending { ProgressView().controlSize(.small).tint(.white) }
+                            else { Image(systemName: "arrow.up").font(.system(size: 13, weight: .bold)) }
+                        }
+                        .foregroundStyle(.white).frame(width: 32, height: 32)
+                        .background(Circle().fill(empty || blocked != nil ? AppAppearance.tertiary.opacity(0.35) : AppAppearance.text))
+                    }
+                    .buttonStyle(.plain).disabled(empty || blocked != nil || sending)
+                    .help(session.state == .working && session.provider == .codex ? "Send now; Codex takes it into the current turn" : "Send (Return)")
+                }
+            }
+            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 10)
+            .background(AppAppearance.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(focused ? AppAppearance.secondary.opacity(0.35) : AppAppearance.separator))
+            .shadow(color: AppAppearance.shadow, radius: 10, y: 3)
+            .opacity(blocked == nil ? 1 : 0.75)
+        }
+        .frame(maxWidth: 840).frame(maxWidth: .infinity)
+        .padding(.horizontal, 36).padding(.top, 8).padding(.bottom, 18)
+        .task(id: session.id) { await loadModels() }
+        .onChange(of: text) { _, _ in if !text.isEmpty { notice = nil } }
+    }
+
+    private var modelTitle: String {
+        guard !model.isEmpty else { return "Model" }
+        return models.first { $0.id == model }?.title ?? model
+    }
+    static func effortTitle(_ value: String) -> String {
+        switch value {
+        case "xhigh": "Extra High"
+        case "max": "Max"
+        default: value.prefix(1).uppercased() + value.dropFirst()
+        }
+    }
+
+    private func option<Content: View>(symbol: String?, title: String, @ViewBuilder content: () -> Content) -> some View {
+        Menu { content() } label: {
+            HStack(spacing: 5) {
+                if let symbol { Image(systemName: symbol).font(.system(size: 10.5, weight: .semibold)) }
+                Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.6)
+            }
+            .foregroundStyle(AppAppearance.secondary)
+            .padding(.horizontal, 10).frame(height: 28)
+            .background(AppAppearance.raised.opacity(0.6), in: Capsule())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+    }
+
+    private func loadModels() async {
+        if session.provider == .claude {
+            let session = session, host = host
+            let check = await Task.detached(priority: .utility) { ChatReply.claudeCheck(session, host: host) }.value
+            remoteProblem = check.problem; attachHandle = check.attach
+            return
+        }
+        if session.remote == nil { store.loadCodexModels(); return }
+        guard remoteModels == nil, let host else { return }
+        let result = await Task.detached(priority: .utility) { () -> Result<[LaunchModel], Error> in
+            Result { try ChatReply.codexModels(host: host) }
+        }.value
+        switch result {
+        case .success(let models): remoteModels = models; remoteProblem = nil
+        case .failure(let failure):
+            remoteModels = []
+            remoteProblem = (failure as? LocalizedError)?.errorDescription
+        }
+    }
+
+    private func send() {
+        let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty, !sending, ChatReply.unavailable(session, host: host) == nil, remoteProblem == nil else { return }
+        sending = true; error = nil; notice = nil
+        let request = ReplyRequest(text: message, model: model.isEmpty ? nil : model, effort: effort.isEmpty ? nil : effort, access: access)
+        let session = session, host = host
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<String, Error> in
+                Result { try ChatReply.send(request, to: session, host: host) }
+            }.value
+            sending = false
+            switch result {
+            case .success(let confirmation): notice = confirmation; text = ""; onSent()
+            case .failure(let failure): error = (failure as? LocalizedError)?.errorDescription ?? "Couldn't send."
+            }
+        }
     }
 }

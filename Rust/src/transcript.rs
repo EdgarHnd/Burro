@@ -89,11 +89,26 @@ fn summary(name: &str, input: &Value) -> String {
                 Value::Array(parts) => parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" "),
                 _ => String::new(),
             }))
+            .or_else(|| embedded_command(s))
             .unwrap_or_else(|| s.lines().next().unwrap_or_default().to_owned()),
         _ => field(&["command", "file_path", "path", "pattern", "description", "url", "query", "prompt", "id"])
             .unwrap_or_else(|| name.to_owned()),
     };
     clip(text.lines().next().unwrap_or_default().trim(), MAX_TOOL)
+}
+
+/// Codex's `exec` tool runs JavaScript such as ``tools.exec_command({cmd:`set -e\nswift build`})``;
+/// show the shell command it runs, skipping `set -…` preambles.
+fn embedded_command(code: &str) -> Option<String> {
+    let start = code.find("cmd:")? + 4;
+    let rest = code[start..].trim_start();
+    let quote = rest.chars().next().filter(|c| matches!(c, '`' | '"' | '\''))?;
+    let body = &rest[quote.len_utf8()..];
+    let end = body.find(quote).unwrap_or(body.len());
+    body[..end]
+        .split(|c| c == '\n' || c == ';')
+        .map(|line| line.replace("\\n", " ").trim().to_owned())
+        .find(|line| !line.is_empty() && !line.starts_with("set -"))
 }
 
 fn output_text(value: &Value) -> String {
@@ -364,6 +379,14 @@ mod tests {
         assert_eq!(shape, [("user", "Fix the build", None), ("tool", "swift build", Some("Build complete")), ("assistant", "Fixed.", None)]);
         assert_eq!(cwd.as_deref(), Some("/work/app"));
         assert!(messages[0].at.is_some());
+    }
+
+    #[test]
+    fn codex_exec_javascript_shows_the_shell_command() {
+        assert_eq!(embedded_command("const r=await tools.exec_command({cmd:`set -e\nrg -n foo src`})").as_deref(), Some("rg -n foo src"));
+        assert_eq!(embedded_command("text(await tools.exec_command({cmd:\"set -euo pipefail; swift test\"}))").as_deref(), Some("swift test"));
+        assert_eq!(embedded_command("// @exec: {\"yield_time_ms\": 1000}"), None);
+        assert_eq!(summary("exec", &Value::String("text(await tools.exec_command({cmd:`git status`}))".into())), "git status");
     }
 
     #[test]

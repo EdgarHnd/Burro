@@ -66,10 +66,38 @@ final class CodexAppServer {
         return try CodexAppServer(executable: executable, timeout: timeout)
     }
 
-    private init(executable: String, timeout: TimeInterval) throws {
+    /// The same connection to Codex's daemon on another machine: `codex app-server proxy` runs
+    /// there over SSH with remote monitoring's hardened options. The remote command is fixed.
+    static func remote(_ host: RemoteHost, timeout: TimeInterval = 30) throws -> CodexAppServer {
+        guard host.enabled, host.validationError == nil else { throw LaunchError.failed("\(host.name) can't be reached from Burro.") }
+        do { return try CodexAppServer(command: "/usr/bin/ssh", arguments: MachineProbe.sshArguments(for: host, command: remoteProxy), timeout: timeout) }
+        catch { throw LaunchError.failed(remoteProblem(host)) }
+    }
+    /// Why Codex's daemon can't be reached on that machine, in words you can act on.
+    static func remoteProblem(_ host: RemoteHost) -> String {
+        let result = CommandRunner().run("/usr/bin/ssh", MachineProbe.sshArguments(for: host, command: remoteDiagnosis), timeout: 30)
+        return remoteProblem(host.name, output: result.output, reachable: result.succeeded)
+    }
+    static func remoteProblem(_ name: String, output: String, reachable: Bool) -> String {
+        if !reachable { return "Couldn't reach \(name) over SSH." }
+        if output.contains("NO_CODEX") { return "Codex isn't installed on \(name)." }
+        if output.contains("standalone") {
+            return "Codex on \(name) isn't the standalone install, which its app server needs for replies from another Mac. On \(name), run: curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+        }
+        let line = output.split(whereSeparator: \.isNewline).map(String.init).first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        return "Couldn't reach Codex on \(name)" + (line.map { ": \($0.prefix(200))" } ?? ".")
+    }
+    static let remoteDiagnosis = #"sh -c 'PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; command -v codex >/dev/null 2>&1 || { echo NO_CODEX; exit 0; }; codex app-server daemon start 2>&1 | head -5'"#
+    static let remoteProxy = #"sh -c 'PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; command -v codex >/dev/null 2>&1 || exit 127; codex app-server proxy 2>/dev/null || { codex app-server daemon start >/dev/null 2>&1 && exec codex app-server proxy; }'"#
+
+    private convenience init(executable: String, timeout: TimeInterval) throws {
+        try self.init(command: executable, arguments: ["app-server", "proxy"], timeout: timeout)
+    }
+
+    private init(command: String, arguments: [String], timeout: TimeInterval) throws {
         self.timeout = timeout
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = ["app-server", "proxy"]
+        process.executableURL = URL(fileURLWithPath: command)
+        process.arguments = arguments
         process.standardInput = toServer
         process.standardOutput = fromServer
         process.standardError = FileHandle.nullDevice

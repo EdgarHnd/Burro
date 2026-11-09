@@ -211,6 +211,8 @@ import BurroCore
     }
     func start() {
         guard monitorTask == nil else { return }
+        // Media copied from other machines is kept for one run only; the files may change.
+        Task.detached(priority: .background) { ChatMedia.clearCache() }
         // Owned by the app store so closing the window keeps the menu-bar monitor alive.
         usage.start()
         let coordinator = AgentRefreshCoordinator { [weak self] in
