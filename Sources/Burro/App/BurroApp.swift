@@ -17,15 +17,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
     }
-    func applicationWillTerminate(_ notification: Notification) { notchController?.stop(); store?.stop() }
+    func applicationWillTerminate(_ notification: Notification) { notchController?.stop(); store?.notes.flush(); store?.stop() }
 }
 @main struct BurroApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var store = AppStore(todos: TodoStore(), notes: NotesStore())
     @State private var notch = NotchController()
+    @State private var notesPanel = NotesPanelController()
     var body: some Scene {
         WindowGroup("Burro", id: "main") {
-            DesktopRootView(store: store, notch: notch)
+            DesktopRootView(store: store, notch: notch, notesPanel: notesPanel)
                 .onAppear { delegate.notchController = notch; delegate.store = store }
         }
         .defaultSize(width: 1240, height: 800)
@@ -58,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 private struct DesktopRootView: View {
     var store: AppStore
     var notch: NotchController
+    var notesPanel: NotesPanelController
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         ContentView(store: store, notch: notch)
@@ -69,6 +71,7 @@ private struct DesktopRootView: View {
             .task {
                 store.start()
                 notch.start(store: store) { openWindow(id: "main") }
+                notesPanel.start(store: store) { notch.openDashboardWindow() }
             }
     }
 }
@@ -82,6 +85,7 @@ struct MonitorMenu: View {
         if store.agentActivity.scheduledCount > 0 { Text("\(store.agentActivity.scheduledCount) scheduled") }
         Divider()
         Button("Show Agent Notch") { notch.show() }
+        Button(store.notesShortcut ? "Notes  ⌥P" : "Notes") { store.showNotes?(.last) }
         Toggle("Enable Notch", isOn: $store.notchEnabled)
         Button("Open Burro") { store.page = .home; notch.openDashboardWindow() }
         Button("Open Usage") { store.page = .usage; notch.openDashboardWindow() }

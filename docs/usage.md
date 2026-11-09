@@ -50,7 +50,7 @@ Use the top bar or **⌘1–⌘8** for Home, Orchestrator, Today, Chats, Worktre
 
 The window has its own top bar (drag it to move the window; double-click to zoom), with **Today**, **Home** and the **Orchestrator** (a dot pulses while it works) on the left (with the current page as a breadcrumb), and on the right **Chats** (badge: chats that need you or have results to read), **Worktrees**, **Machines**, **Usage**, **Mac Health** (badge: leftover processes) and **New chat**. ⌘1–⌘8 jump to Home, Orchestrator, Today, Chats, Worktrees, Machines, Usage and Mac Health.
 
-Home's cover shows your current desktop picture; use the photo button to choose any image or go back to the desktop picture. The chips on it open the matching pages. Below: **Chat**, **Project** and **Machine** quick actions, the **Orchestrator**, your **main project**, project and machine cards (gradient tile, live counts or "Quiet"), the plain-language summary, and on the right **To-dos**, the inbox when something needs you, **Notes** (click + or a note to edit; stored on this Mac) and a **Scratchpad** that saves as you type. The dock shows running and attention avatars (click to open the chat), your machines with status dots, the **+** New chat button, and shortcuts.
+Home's cover shows your current desktop picture; use the photo button to choose any image or go back to the desktop picture. The chips on it open the matching pages. Below: **Chat**, **Project** and **Machine** quick actions, the **Orchestrator**, your **main project**, project and machine cards (gradient tile, live counts or "Quiet"), the plain-language summary, and on the right **To-dos**, the inbox when something needs you, **Notes** (click + or a note to open it in the Notes window) and a **Scratchpad** that saves as you type. The dock shows running and attention avatars (click to open the chat), your machines with status dots, the **+** New chat button, and shortcuts.
 
 ### Main project
 
@@ -86,6 +86,17 @@ Benches group projects the way you think about them. Choose **Group into benches
 **Machines** lists this Mac, every SSH machine you added, and every device on your Tailscale network (if Tailscale is installed). Cards show the OS, presence, running agents, project folders and a **Software** list. Tailscale devices you haven't added get **Add over SSH**, which opens the remote-machine form prefilled with the device's tailnet name; SSH machines link to their **Chats**.
 
 **Harnesses** compares agent tool versions across machines: each cell shows the installed version (green = latest, amber = older, grey = not installed) and the latest release from npm next to the tool's name. **Update** asks first, then runs the tool's own updater on that machine (`claude update`, `codex update`, `cursor-agent update`, `opencode upgrade`); chats that are already running keep the version they started with. Versions are re-read at most every ten minutes per machine and npm at most every six hours, only while the page is open.
+
+### Notes window
+
+**⌥P** opens Notes from any app (turn the shortcut off in **Settings → Notes**; the menu bar's **Notes** item and Home's Notes card open it too). It floats over every app and Space without switching away from what you were doing; ⌥P again, Esc or ⌘W hides it, and it reopens on the note you had.
+
+The first line is the note's title. Type `- [ ] ` or press **⇧⌘L** for a checklist: click a box to tick it, Return adds the next item, Return on an empty item ends the list, and ⌫ right after a box turns the line back into text. `- ` makes a bullet and `# ` a heading. Everything saves as you type, to `notes.json` on this Mac.
+
+- **⌘P** browses notes: type to search, ↑↓ and Return to open, pin or delete from the row (delete asks twice). Pinned notes stay on top, the rest by when you last opened them.
+- **⌘K** lists every action with its shortcut: New Note ⌘N, Duplicate ⌘D, Send to Orchestrator ⌘J (puts the note in the Orchestrator's composer and opens it), Pin ⇧⌘P, Go Back ⌘[ and Forward ⌘], Toggle Checklist ⇧⌘L, Find ⌘F, Copy as Markdown ⇧⌘C or Plain Text, Add Open Items to To-dos, and Delete Note.
+
+If Burro can't get ⌥P (another app such as Raycast Notes holds it), Settings → Notes says so; free the shortcut there and toggle it off and on.
 
 ### Today page
 

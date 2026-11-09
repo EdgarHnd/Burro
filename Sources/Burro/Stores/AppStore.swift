@@ -113,6 +113,11 @@ import BurroCore
     let notes: NotesStore
     let benches: BenchesStore
     let orchestrator: OrchestratorStore
+    /// ⌥P opens the Notes window from any app.
+    var notesShortcut: Bool { didSet { defaults.set(notesShortcut, forKey: "notes.shortcut"); onNotesShortcutChange?() } }
+    var notesShortcutProblem: String?
+    @ObservationIgnored var onNotesShortcutChange: (() -> Void)?
+    @ObservationIgnored var showNotes: ((NotesTarget) -> Void)?
     /// The project Home features. Nil means "the repository with the most worktrees".
     var mainProjectPath: String? { didSet { defaults.set(mainProjectPath, forKey: "home.mainProject") } }
     /// Preselects the project in the New chat sheet.
@@ -142,6 +147,7 @@ import BurroCore
         // The app passes its real notes store; tests and previews get a throwaway folder.
         benches = BenchesStore(defaults: defaults)
         orchestrator = OrchestratorStore(defaults: defaults)
+        notesShortcut = defaults.object(forKey: "notes.shortcut") as? Bool ?? true
         mainProjectPath = defaults.string(forKey: "home.mainProject")
         self.notes = notes ?? NotesStore(folder: FileManager.default.temporaryDirectory.appendingPathComponent("burro-notes-\(UUID().uuidString)"))
         self.cleanupBatch = cleanupBatch ?? CleanupBatchStore()

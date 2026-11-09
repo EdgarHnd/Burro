@@ -13,6 +13,15 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             TodoSyncSection(todos: store.todos)
+            Section("Notes") {
+                Toggle("Open Notes with ⌥P from any app", isOn: $store.notesShortcut)
+                if let problem = store.notesShortcutProblem {
+                    Text(problem).font(.caption).foregroundStyle(.orange)
+                }
+                Text("A floating notes window over every app and Space. ⌘P browses notes, ⌘K shows actions, ⇧⌘L turns lines into a checklist. Notes are stored on this Mac and listed on Home.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Open Notes") { store.showNotes?(.last) }
+            }
             Section("Agent notch") {
                 Toggle("Show agent notch", isOn: $store.notchEnabled)
                 Toggle("Prefer the main display", isOn: $store.notchPreferMainDisplay)

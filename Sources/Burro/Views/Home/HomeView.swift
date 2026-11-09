@@ -30,7 +30,7 @@ struct HomeView: View {
                         VStack(spacing: 16) {
                             HomeTodayCard(todos: store.todos)
                             if !summary.needsYou.isEmpty || !summary.unread.isEmpty { HomeInbox(store: store, summary: summary) }
-                            HomeNotesCard(notes: store.notes)
+                            HomeNotesCard(notes: store.notes) { store.showNotes?($0) }
                             HomeScratchpadCard(notes: store.notes)
                         }.frame(width: 320)
                     }

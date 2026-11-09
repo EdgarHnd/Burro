@@ -251,26 +251,27 @@ private struct NoteCardShell<Content: View>: View {
     }
 }
 
+/// Notes open in the floating Notes window (⌥P from anywhere).
 struct HomeNotesCard: View {
     var notes: NotesStore
-    @State private var editing: HomeNote?
+    var open: (NotesTarget) -> Void
     var body: some View {
-        NoteCardShell(title: "Notes", symbol: "square.and.pencil", count: notes.notes.count,
-                      add: { editing = HomeNote(id: UUID(), title: "", body: "", updatedAt: Date()) }) {
+        NoteCardShell(title: "Notes", symbol: "square.and.pencil", count: notes.sorted.count, add: { open(.new) }) {
             VStack(alignment: .leading, spacing: 0) {
-                if notes.notes.isEmpty {
-                    Text("Keep the context agents and future you will need.").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
+                if notes.sorted.isEmpty {
+                    Text("Keep the context agents and future you will need. ⌥P opens Notes from any app.")
+                        .font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
                         .padding(16)
                 } else {
                     ForEach(Array(notes.sorted.prefix(4).enumerated()), id: \.element.id) { index, note in
                         if index > 0 { Divider().overlay(AppAppearance.separator) }
-                        Button { editing = note } label: {
+                        Button { open(.note(note.id)) } label: {
                             HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: "doc.text").font(.system(size: 13)).foregroundStyle(AppAppearance.tertiary).padding(.top, 1)
+                                Image(systemName: note.isPinned ? "pin.fill" : "doc.text").font(.system(size: 13)).foregroundStyle(AppAppearance.tertiary).padding(.top, 1)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(note.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                                     if !note.body.isEmpty {
-                                        Text(note.body.split(whereSeparator: \.isNewline).joined(separator: " "))
+                                        Text(NoteText.plain(note.body).split(whereSeparator: \.isNewline).joined(separator: " "))
                                             .font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).lineLimit(1)
                                     }
                                 }
@@ -282,31 +283,6 @@ struct HomeNotesCard: View {
                 }
             }
         }
-        .sheet(item: $editing) { note in NoteEditor(note: note, notes: notes) }
-    }
-}
-
-private struct NoteEditor: View {
-    @State var note: HomeNote
-    var notes: NotesStore
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            TextField("Title", text: $note.title).textFieldStyle(.plain).font(.system(size: 20, weight: .semibold))
-            TextEditor(text: $note.body).font(.system(size: 14)).scrollContentBackground(.hidden)
-                .frame(minHeight: 260).padding(8)
-                .background(AppAppearance.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(AppAppearance.separator))
-            HStack {
-                if notes.notes.contains(where: { $0.id == note.id }) {
-                    Button("Delete", role: .destructive) { notes.remove(note); dismiss() }
-                }
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Save") { notes.save(note); dismiss() }.keyboardShortcut(.return, modifiers: .command)
-            }
-        }
-        .padding(22).frame(width: 520).modifier(AppTheme())
     }
 }
 
