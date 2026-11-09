@@ -46,6 +46,22 @@ The Burro window opens on **Home**. The summary line, chips and cards come from 
 
 Use the toolbar's page switcher or **⌘1–⌘5** for Home, Worktrees, Usage, Mac Health and Remote. **⌘R** refreshes the current page. **Settings → Appearance** chooses Match System, Light or Dark; the notch always stays dark.
 
+### Today
+
+The **Today** card on Home is a deliberately small to-do list. Type and press Return to add, click the circle to tick, double-click to edit, and hover for the delete button (or right-click). Unfinished to-dos from earlier days stay at the top until done; finished ones show until midnight.
+
+Edits apply instantly and queue on disk; if you're offline they upload later, in order, and a retried add never duplicates. To share the list with Maurice, open **Settings → To-dos → Import from Maurice**. Burro reads `CONVEX_URL` and `EDGAR_API_TOKEN` from `~/Dev/maurice-app/Config/Secrets.xcconfig` once, checks them against the deployment, and keeps them in your Keychain (or enter them by hand). While Home is on screen it syncs once a minute and after every change; there's no other polling. Without sync, to-dos stay on this Mac and upload when you connect.
+
+### New chat
+
+**⌘N**, **New chat** on Home, or the dock's **+** opens the launcher. Write the prompt, pick **Codex** or **Claude Code**, the project, the model and effort (Codex's list comes from its app server; Claude offers Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.1), and an access level:
+
+- **Ask before acting**: edits inside the workspace and asks before anything else (Codex `workspace-write` + `on-request`; Claude `manual`). Waiting chats appear in Home's inbox and the notch.
+- **Edit files freely**: no approval prompts; Codex keeps its workspace sandbox (`never` approval), Claude uses `acceptEdits`.
+- **Read only**: reads and plans, changes nothing (Codex `read-only`; Claude `plan`).
+
+Codex chats start on Codex's shared app-server daemon (Burro starts it if needed), so they keep running after the sheet closes and open in the Codex app. Claude chats start as `claude --bg` background sessions; **Attach in Terminal** opens `claude attach <id>`, and `claude agents` lists them. Claude only starts in folders you've already trusted in Claude Code; run `claude` there once if Burro says it isn't trusted. Your last choices are remembered. Starting chats on other machines is not available yet.
+
 ### Usage limits
 
 Open **Usage** in the notch for a compact remaining-limit summary, including Claude's separate **Fable weekly** quota when reported. The arrow opens the desktop **Usage** page. The desktop dashboard has an overview and Codex, Claude, and Grok tabs with account/plan labels, full limit bars, resets, optional linear pace markers, extra-usage balances, quota history, and links to each provider's usage dashboard and status page. Burro connects directly; it never reads, launches, or requires CodexBar.

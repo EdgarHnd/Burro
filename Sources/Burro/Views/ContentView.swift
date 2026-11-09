@@ -50,6 +50,7 @@ struct ContentView: View {
         .sheet(isPresented: $store.cleanupDetailsPresented) {
             CleanupResultsView(batch: store.cleanupBatch)
         }
+        .sheet(isPresented: $store.newChatPresented) { NewChatSheet(store: store) }
         .frame(minWidth: 1000, minHeight: 620)
         .onChange(of: store.page) { _, page in
             if page == .worktrees { store.reconcileSelection(selectFirst: true) }

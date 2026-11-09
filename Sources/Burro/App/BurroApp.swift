@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 @main struct BurroApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @State private var store = AppStore()
+    @State private var store = AppStore(todos: TodoStore())
     @State private var notch = NotchController()
     var body: some Scene {
         WindowGroup("Burro", id: "main") {
@@ -31,7 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         .defaultSize(width: 1240, height: 800)
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
-            CommandGroup(after: .newItem) {
+            CommandGroup(replacing: .newItem) {
+                Button("New Chat…") { store.page = .home; store.newChatPresented = true; notch.openDashboardWindow() }
+                    .keyboardShortcut("n")
                 Button("Add Repository…") { store.addRepository() }.keyboardShortcut("o", modifiers: [.command, .shift])
                 Button("Refresh \(store.page.title)") { Task { await store.refreshCurrentPage() } }
                     .keyboardShortcut("r").disabled(store.refreshingCurrentPage)

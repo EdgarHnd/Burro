@@ -97,6 +97,11 @@ import BurroCore
     /// Today's tokens per working folder from the Rust history worker; nil until scanned or if unavailable.
     var projectActivity: ProjectActivity?
     @ObservationIgnored private var activityScan: Task<Void, Never>?
+    let todos: TodoStore
+    // New chat launcher
+    var newChatPresented = false
+    var codexModels: [LaunchModel] = []
+    var launching = false
     var repositories: [String] { didSet { save() } }
     var protectedPaths: Set<String> { didSet { save() } }
     var discover: Bool { didSet { save() } }
@@ -108,10 +113,13 @@ import BurroCore
     @ObservationIgnored private var visibleDashboards: Set<ObjectIdentifier> = []
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard, cleanupBatch: CleanupBatchStore? = nil,
+    /// The app passes a persistent, synced `TodoStore`; tests get a throwaway local one.
+    init(defaults: UserDefaults = .standard, cleanupBatch: CleanupBatchStore? = nil, todos: TodoStore? = nil,
          scan: @escaping Scan = { await Scanner().scan($0) }) {
         self.defaults = defaults
         self.scan = scan
+        self.todos = todos ?? TodoStore(cacheURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("burro-todos-\(UUID().uuidString).json"), config: nil)
         self.cleanupBatch = cleanupBatch ?? CleanupBatchStore()
         usage = UsageStore(defaults: defaults)
         health = MacHealthStore(defaults: defaults)
@@ -295,6 +303,47 @@ import BurroCore
         case .health: health.refreshing
         case .remote: checkingRemotes
         case .home, .worktrees: scanning
+        }
+    }
+    // MARK: New chat
+    /// Folders offered in the launcher: repositories first by recent activity, then the rest.
+    var launchFolders: [(path: String, name: String)] {
+        let active = homeSummary.projects.filter(\.isRepository).map { (path: $0.id, name: $0.name) }
+        let seen = Set(active.map(\.path))
+        return active + repositoriesFound.filter { !seen.contains($0.path) }
+    }
+    func loadCodexModels() {
+        guard codexModels.isEmpty else { return }
+        Task {
+            let models = await Task.detached(priority: .userInitiated) { (try? CodexLaunch.listModels()) ?? [] }.value
+            if !models.isEmpty { codexModels = models }
+        }
+    }
+    /// Starts a chat (an explicit user action), then refreshes the feed so it appears at once.
+    func startChat(_ request: LaunchRequest, openWhenStarted: Bool) async throws -> LaunchResult {
+        guard !request.trimmedPrompt.isEmpty else { throw LaunchError.emptyPrompt }
+        launching = true
+        defer { launching = false }
+        let result = try await Task.detached(priority: .userInitiated) { () throws -> LaunchResult in
+            request.provider == .codex ? try CodexLaunch.start(request) : try ClaudeLaunch.start(request)
+        }.value
+        if openWhenStarted { open(result) }
+        await refreshAgents()
+        return result
+    }
+    /// Codex chats open in the Codex app; Claude background sessions attach in Terminal.
+    func open(_ result: LaunchResult) {
+        if let url = result.chatURL { NSWorkspace.shared.open(url); return }
+        guard let handle = result.handle, let claude = ClaudeLaunch.executable() else { return }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("burro-attach")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let script = folder.appendingPathComponent("claude-\(handle).command")
+        func quoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let body = "#!/bin/zsh -l\ncd -- \(quoted(result.folder)) && exec \(quoted(claude)) attach \(quoted(handle))\n"
+        guard (try? body.write(to: script, atomically: true, encoding: .utf8)) != nil else { return }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        if let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
+            NSWorkspace.shared.open([script], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
         }
     }
     // MARK: Home

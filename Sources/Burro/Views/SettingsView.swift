@@ -12,6 +12,7 @@ struct SettingsView: View {
                 Text("Applies to the Burro window and Settings. The agent notch stays dark so it blends with the camera housing.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            TodoSyncSection(todos: store.todos)
             Section("Agent notch") {
                 Toggle("Show agent notch", isOn: $store.notchEnabled)
                 Toggle("Prefer the main display", isOn: $store.notchPreferMainDisplay)

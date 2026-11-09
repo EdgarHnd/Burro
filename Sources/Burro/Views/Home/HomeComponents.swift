@@ -413,6 +413,7 @@ struct HomeDock: View {
             .padding(.horizontal, 14).frame(height: 44)
             .modifier(FloatingSurface())
             HStack(spacing: 2) {
+                action("plus", "New chat (⌘N)") { store.newChatPresented = true }
                 action("rectangle.topthird.inset.filled", "Show agent notch (⇧⌘B)") { notch.show() }
                 action("folder.badge.plus", "Add repository") { store.addRepository() }
                 action("arrow.clockwise", "Refresh everything") { Task { await store.refreshCurrentPage() } }

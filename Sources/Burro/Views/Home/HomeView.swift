@@ -21,6 +21,7 @@ struct HomeView: View {
                             machines(summary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         VStack(spacing: 14) {
+                            HomeTodayCard(todos: store.todos)
                             HomeInbox(store: store, summary: summary)
                             HomeUsageTile(store: store)
                             HomeMacTile(store: store)
@@ -38,6 +39,13 @@ struct HomeView: View {
         // Each task ends when Home is hidden, covered or closed.
         .task(id: onScreen) { if onScreen { await store.health.observe() } }
         .task(id: onScreen) { if onScreen { await store.refreshUsage() } }
+        // To-dos sync while Home is visible (once a minute) and after every change.
+        .task(id: onScreen) {
+            while onScreen && !Task.isCancelled {
+                store.todos.sync()
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
         .task(id: onScreen) {
             while onScreen && !Task.isCancelled {
                 store.refreshProjectActivity()
@@ -104,6 +112,12 @@ private struct HomeHero: View {
                     Spacer()
                     Text(Date.now, format: .dateTime.weekday(.wide).day().month(.wide))
                         .font(.system(size: 12, weight: .medium)).foregroundStyle(AppAppearance.secondary)
+                    Button { store.newChatPresented = true } label: {
+                        Label("New chat", systemImage: "plus").font(.system(size: 12, weight: .semibold))
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .foregroundStyle(AppAppearance.background)
+                            .background(AppAppearance.text, in: Capsule())
+                    }.buttonStyle(.plain).help("Start a Codex or Claude chat (⌘N)").padding(.leading, 10)
                 }
                 Text(store.didCheckAgents ? summary.sentence : "Checking on your agents…")
                     .font(.system(size: 14)).foregroundStyle(AppAppearance.secondary)
