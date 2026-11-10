@@ -108,7 +108,9 @@ import BurroCore
     var projectActivity: ProjectActivity?
     @ObservationIgnored private var activityScan: Task<Void, Never>?
     let todos: TodoStore
-    let today = TodayStore()
+    let today: TodayStore
+    /// Burro's own on-device activity tracker (off by default).
+    let activityTracker: ActivityTracker
     let shipped = ShippedStore()
     let machines = MachinesStore()
     let notes: NotesStore
@@ -148,6 +150,8 @@ import BurroCore
         // The app passes its real notes store; tests and previews get a throwaway folder.
         benches = BenchesStore(defaults: defaults)
         orchestrator = OrchestratorStore(defaults: defaults)
+        activityTracker = ActivityTracker(defaults: defaults)
+        today = TodayStore(defaults: defaults, tracker: activityTracker)
         notesShortcut = defaults.object(forKey: "notes.shortcut") as? Bool ?? true
         mainProjectPath = defaults.string(forKey: "home.mainProject")
         self.notes = notes ?? NotesStore(folder: FileManager.default.temporaryDirectory.appendingPathComponent("burro-notes-\(UUID().uuidString)"))
@@ -223,6 +227,7 @@ import BurroCore
         Task.detached(priority: .background) { ChatMedia.clearCache() }
         // Owned by the app store so closing the window keeps the menu-bar monitor alive.
         usage.start()
+        activityTracker.start()
         let coordinator = AgentRefreshCoordinator { [weak self] in
             guard let self else { return 15 }
             await self.refreshAgents()
@@ -267,6 +272,7 @@ import BurroCore
     }
     func stop() {
         usage.stop()
+        activityTracker.stop()
         agentWatcher?.stop(); agentWatcher = nil
         agentRefresh?.stop(); agentRefresh = nil
         monitorTask?.cancel(); monitorTask = nil

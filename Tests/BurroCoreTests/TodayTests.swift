@@ -26,24 +26,7 @@ final class TodayTests: XCTestCase {
         XCTAssertFalse(try JSONDecoder().decode(DailyActivityBatch.self, from: batch(first: "1")).valid(for: request()))
     }
 
-    func testDayflowTimelineParsing() throws {
-        let json = Data(#"""
-        {"cards":[
-          {"record_id":2,"start":"2026-11-09T11:00:00+09:00","end":"2026-11-09T11:30:00+09:00","duration_minutes":30,
-           "category":"Idle","title":"Away","apps":[]},
-          {"record_id":1,"start":"2026-11-09T10:32:00+09:00","end":"2026-11-09T10:48:00+09:00","duration_minutes":16,
-           "category":"Engineering / Product","subcategory":"Dashboard","title":"Planning Burro","apps":["Claude"]}],
-         "date":"2026-11-09","day_boundary_hour":4,"schema_version":1,"time_zone":"Asia/Seoul"}
-        """#.utf8)
-        let day = try XCTUnwrap(Dayflow.parseTimeline(json))
-        XCTAssertEqual(day.cards.map(\.title), ["Planning Burro", "Away"], "sorted by start")
-        XCTAssertEqual(day.focusedMinutes, 16, "idle time isn't focus")
-        XCTAssertEqual(day.minutesByCategory.first?.category, "Idle")
-        XCTAssertNil(Dayflow.parseTimeline(Data(#"{"error":{"code":"invalid_date"},"schema_version":1}"#.utf8)))
-        XCTAssertNil(Dayflow.parseTimeline(Data(#"{"cards":[],"date":"2026-11-09","schema_version":2}"#.utf8)), "unknown schema versions are ignored")
-    }
-
-    func testHoursCombineTurnsWithTheDominantDayflowCategory() throws {
+    func testHoursCombineTurnsWithTrackedCategories() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"))
         let day = Date(timeIntervalSince1970: since) // midnight in Seoul
@@ -51,16 +34,18 @@ final class TodayTests: XCTestCase {
         let activity = DailyActivity(day: day, turnsByHour: turns, repliesByHour: Array(repeating: 0, count: 24), questions: 0,
                                      firstTurn: nil, lastTurn: nil, chats: [], partial: false)
         let at = { (h: Double) in Date(timeIntervalSince1970: self.since + h * 3600) }
-        let dayflow = DayflowDay(date: "2026-11-09", cards: [
-            .init(id: "a", start: at(10.0), end: at(10.4), minutes: 24, category: "Engineering / Product", subcategory: nil, title: "", apps: []),
-            .init(id: "b", start: at(10.4), end: at(11.2), minutes: 48, category: "Communication", subcategory: nil, title: "", apps: []),
-        ])
-        let hours = TodaySummary.hours(activity: activity, dayflow: dayflow, day: day, calendar: calendar)
+        let key = { (bundle: String) in ActivityPrivacy.key(bundleID: bundle, app: bundle, title: nil) }
+        let tracked = ActivityDay.build(spans: [
+            ActivitySpan(key("com.apple.dt.Xcode"), start: at(10.0), end: at(10.4)),
+            ActivitySpan(key("com.tinyspeck.slackmacgap"), start: at(10.4), end: at(11.2)),
+        ], rules: ActivityRules(), day: day, calendar: calendar)
+        let hours = TodaySummary.hours(activity: activity, tracked: tracked)
         XCTAssertEqual(hours.count, 24)
         XCTAssertEqual(hours[10].turns, 4)
-        XCTAssertEqual(hours[10].category, "Communication", "36 of the hour's minutes beat 24")
-        XCTAssertEqual(hours[11].category, "Communication")
+        XCTAssertEqual(hours[10].category, .comms, "36 of the hour's minutes beat 24")
+        XCTAssertEqual(hours[11].category, .comms)
         XCTAssertNil(hours[12].category)
+        XCTAssertEqual(TodaySummary.hours(activity: nil, tracked: nil).count, 24)
     }
 
     func testDecisionsAndDurations() {
@@ -71,7 +56,7 @@ final class TodayTests: XCTestCase {
         XCTAssertEqual(TodaySummary.duration(59 * 60), "59m")
     }
 
-    /// BURRO_LIVE_ACTIVITY=1: scan today's real logs and Dayflow (read-only; prints counts only).
+    /// BURRO_LIVE_ACTIVITY=1: scan today's real logs (read-only; prints counts only).
     func testLiveTodayScan() throws {
         guard ProcessInfo.processInfo.environment["BURRO_LIVE_ACTIVITY"] == "1" else { throw XCTSkip("set BURRO_LIVE_ACTIVITY=1") }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -84,9 +69,5 @@ final class TodayTests: XCTestCase {
         let warmStart = Date()
         _ = DailyActivityScanner.scan(day: Date(), previews: false, profiles: [:], now: Date(), calendar: .current, worker: worker)
         print("warm rescan in \(Int(Date().timeIntervalSince(warmStart) * 1000)) ms")
-        if Dayflow.executable() != nil {
-            let dayflow = try XCTUnwrap(Dayflow.day(Date()))
-            print("dayflow: cards \(dayflow.cards.count) focused \(dayflow.focusedMinutes)m pending \(dayflow.pendingBatches ?? -1)")
-        }
     }
 }

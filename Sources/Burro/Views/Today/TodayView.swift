@@ -1,5 +1,5 @@
 // The Today page: one day at a glance. What shipped on GitHub, chats grouped by status or project, how long you've been
-// at it, messages, to-dos, questions agents asked, and Dayflow's timeline when it's installed.
+// at it, messages, to-dos, questions agents asked, and the activity Burro tracked on this Mac (when turned on).
 import SwiftUI
 import BurroCore
 
@@ -25,7 +25,7 @@ struct TodayView: View {
                     TodayQuestionsCard(asked: today.activity?.questions ?? 0,
                                        waitingNow: today.isToday ? store.agentActivity.waitingCount : 0)
                     TodayChatsCard(rows: rows)
-                    if today.dayflowInstalled { TodayDayflowCard(dayflow: today.dayflow) }
+                    TodayActivityCard(today: today)
                 }.frame(width: 320)
             }
             .padding(.horizontal, 36).padding(.vertical, 28)
@@ -46,6 +46,7 @@ struct TodayView: View {
             }
         }
         .task(id: onScreen) { if onScreen && today.isToday { store.todos.sync() } }
+        .onChange(of: today.tracker.revision) { if onScreen { today.refreshTracked() } }
     }
 
     @ViewBuilder private func chats(_ rows: [TodayRow]) -> some View {

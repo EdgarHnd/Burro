@@ -1,5 +1,6 @@
-// One day of agent activity (from the Rust history worker) and Dayflow's timeline (from its own
-// read-only CLI), plus the small rollups the Today page shows. Nothing here is persisted.
+// One day of agent activity (from the Rust history worker), plus the small rollups the Today
+// page shows, including each hour's main category from Burro's own activity tracker. Nothing
+// here is persisted.
 import Foundation
 
 struct DailyActivityRequest: Encodable, Sendable, Equatable {
@@ -104,96 +105,23 @@ public enum DailyActivityScanner {
     }
 }
 
-// MARK: Dayflow
-
-/// Dayflow's timeline through its own read-only CLI (`dayflow timeline <date> --json`), which
-/// works even when Dayflow isn't running. Burro never records the screen itself.
-public struct DayflowDay: Sendable, Equatable {
-    public struct Card: Sendable, Equatable, Identifiable {
-        public var id: String
-        public var start: Date
-        public var end: Date
-        public var minutes: Int
-        public var category: String
-        public var subcategory: String?
-        public var title: String
-        public var apps: [String]
-    }
-    public var date: String
-    public var cards: [Card]
-    public var pendingBatches: Int?
-    public var failedBatches: Int?
-    public static let idleCategories: Set<String> = ["Idle", "Distraction"]
-    /// Minutes outside Idle and Distraction.
-    public var focusedMinutes: Int { cards.filter { !Self.idleCategories.contains($0.category) }.reduce(0) { $0 + $1.minutes } }
-    public var minutesByCategory: [(category: String, minutes: Int)] {
-        Dictionary(grouping: cards, by: \.category).map { (category: $0.key, minutes: $0.value.reduce(0) { $0 + $1.minutes }) }
-            .sorted { $0.minutes > $1.minutes }
-    }
-}
-
-public enum Dayflow {
-    public static func executable(home: String = FileManager.default.homeDirectoryForCurrentUser.path,
-                                  exists: (String) -> Bool = FileManager.default.isExecutableFile(atPath:)) -> String? {
-        ["/Applications/Dayflow.app/Contents/Helpers/dayflow", home + "/Applications/Dayflow.app/Contents/Helpers/dayflow"].first(where: exists)
-    }
-
-    public static func day(_ date: Date, calendar: Calendar = .current, executable: String? = executable()) -> DayflowDay? {
-        guard let executable else { return nil }
-        let key = TodoDay.key(date, calendar: calendar)
-        let timeline = CommandRunner().run(executable, ["timeline", key, "--json"], timeout: 12)
-        guard timeline.succeeded, var day = parseTimeline(Data(timeline.output.utf8)) else { return nil }
-        let status = CommandRunner().run(executable, ["status", "--json"], timeout: 8)
-        if status.succeeded, let object = try? JSONSerialization.jsonObject(with: Data(status.output.utf8)) as? [String: Any] {
-            day.pendingBatches = object["pending_batches"] as? Int
-            day.failedBatches = object["failed_batches"] as? Int
-        }
-        return day
-    }
-
-    static func parseTimeline(_ data: Data) -> DayflowDay? {
-        guard data.count <= 8 * 1024 * 1024,
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["error"] == nil, (object["schema_version"] as? Int) == 1,
-              let date = object["date"] as? String, let rows = object["cards"] as? [[String: Any]] else { return nil }
-        let iso = ISO8601DateFormatter()
-        let cards: [DayflowDay.Card] = rows.prefix(2000).compactMap { row in
-            guard let start = (row["start"] as? String).flatMap(iso.date), let end = (row["end"] as? String).flatMap(iso.date),
-                  end >= start, let title = row["title"] as? String, let category = row["category"] as? String else { return nil }
-            let id = (row["record_id"] as? Int).map(String.init) ?? (row["record_id"] as? String) ?? "\(start.timeIntervalSince1970)"
-            let minutes = (row["duration_minutes"] as? Int) ?? Int(end.timeIntervalSince(start) / 60)
-            return DayflowDay.Card(id: id, start: start, end: end, minutes: max(0, minutes), category: String(category.prefix(80)),
-                                   subcategory: (row["subcategory"] as? String).map { String($0.prefix(120)) },
-                                   title: String(title.prefix(200)), apps: Array((row["apps"] as? [String] ?? []).prefix(8)))
-        }
-        return DayflowDay(date: date, cards: cards.sorted { $0.start < $1.start })
-    }
-}
-
 // MARK: Today rollups
 
 public struct TodayHour: Sendable, Equatable {
     public var hour: Int
     public var turns: Int
     public var replies: Int
-    /// Dayflow's category with the most minutes in this hour, if any.
-    public var category: String?
+    /// The tracked category with the most time in this hour, if any.
+    public var category: ActivityCategory?
 }
 
 public enum TodaySummary {
-    /// Up to 24 cells (DST days can have 23 or 25 hours), combining agent turns with Dayflow categories.
-    public static func hours(activity: DailyActivity?, dayflow: DayflowDay?, day: Date, calendar: Calendar = .current) -> [TodayHour] {
-        let start = calendar.startOfDay(for: day)
-        let count = activity?.turnsByHour.count ?? 24
+    /// Up to 24 cells (DST days can have 23 or 25 hours), combining agent turns with tracked categories.
+    public static func hours(activity: DailyActivity?, tracked: ActivityDay?) -> [TodayHour] {
+        let count = activity?.turnsByHour.count ?? tracked?.hourly.count ?? 24
         return (0..<count).map { index in
-            let from = start.addingTimeInterval(Double(index) * 3600), to = from.addingTimeInterval(3600)
-            var minutes: [String: Double] = [:]
-            for card in dayflow?.cards ?? [] {
-                let overlap = min(card.end, to).timeIntervalSince(max(card.start, from))
-                if overlap > 0 { minutes[card.category, default: 0] += overlap }
-            }
-            return TodayHour(hour: index, turns: activity?.turnsByHour[index] ?? 0, replies: activity?.repliesByHour[index] ?? 0,
-                             category: minutes.max { $0.value < $1.value }?.key)
+            TodayHour(hour: index, turns: activity?.turnsByHour[index] ?? 0, replies: activity?.repliesByHour[index] ?? 0,
+                      category: tracked.flatMap { index < $0.hourly.count ? $0.hourly[index] : nil })
         }
     }
 

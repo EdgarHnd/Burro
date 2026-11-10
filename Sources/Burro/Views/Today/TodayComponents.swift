@@ -1,4 +1,5 @@
-// Pieces of the Today page: the date header, chat groups and the stat cards.
+// Pieces of the Today page: the date header, chat groups and the stat cards. The tracked-activity
+// card is in TodayActivity.swift.
 import SwiftUI
 import BurroCore
 
@@ -138,7 +139,7 @@ private struct TodayChatRow: View {
 
 // MARK: Stat cards
 
-private struct TodayCard<Content: View>: View {
+struct TodayCard<Content: View>: View {
     var title: String
     var symbol: String
     var color: Color
@@ -153,7 +154,7 @@ private struct TodayCard<Content: View>: View {
     }
 }
 
-private struct BigPair: View {
+struct BigPair: View {
     var left: String
     var leftLabel: String
     var right: String? = nil
@@ -181,17 +182,17 @@ private struct BigPair: View {
 struct TodayWorkedCard: View {
     var today: TodayStore
     var body: some View {
-        let activity = today.activity, dayflow = today.dayflow
-        let hours = TodaySummary.hours(activity: activity, dayflow: dayflow, day: today.day)
+        let activity = today.activity, tracked = today.tracked
+        let hours = TodaySummary.hours(activity: activity, tracked: tracked)
         let peak = max(1, hours.map(\.turns).max() ?? 1)
         let currentHour = today.isToday ? Calendar.current.component(.hour, from: Date()) : nil
         TodayCard(title: "Worked so far", symbol: "clock", color: AppAppearance.amber) {
             VStack(alignment: .leading, spacing: 4) {
-                let worked = activity?.span.map(TodaySummary.duration) ?? dayflow.map { TodaySummary.duration(Double($0.focusedMinutes) * 60) }
+                let worked = activity?.span.map(TodaySummary.duration) ?? tracked.flatMap { $0.focused > 0 ? TodaySummary.duration($0.focused) : nil }
                 Text(worked ?? "—")
                     .font(.system(size: 40, weight: .bold, design: .rounded)).monospacedDigit()
                     .foregroundStyle(worked == nil ? AppAppearance.tertiary : AppAppearance.text)
-                Text(subtitle(activity, dayflow)).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
+                Text(subtitle(activity, tracked)).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
             }
             HStack(spacing: 3) {
                 ForEach(hours, id: \.hour) { hour in
@@ -201,7 +202,7 @@ struct TodayWorkedCard: View {
                             .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous)
                                 .strokeBorder(hour.hour == currentHour ? AppAppearance.text.opacity(0.5) : .clear, lineWidth: 1.2))
                             .frame(height: 26)
-                        RoundedRectangle(cornerRadius: 1.5).fill(hour.category.map(DayflowStyle.color) ?? .clear).frame(height: 3)
+                        RoundedRectangle(cornerRadius: 1.5).fill(hour.category.map(ActivityStyle.color) ?? .clear).frame(height: 3)
                     }
                     .help(help(hour))
                 }
@@ -214,18 +215,18 @@ struct TodayWorkedCard: View {
             }
         }
     }
-    private func subtitle(_ activity: DailyActivity?, _ dayflow: DayflowDay?) -> String {
+    private func subtitle(_ activity: DailyActivity?, _ tracked: ActivityDay?) -> String {
         var parts: [String] = []
         if let first = activity?.firstTurn, let last = activity?.lastTurn {
             parts.append("First message \(first.formatted(date: .omitted, time: .shortened)) · last \(last.formatted(date: .omitted, time: .shortened))")
         } else if activity == nil { parts.append("Reading your agent logs…") }
         else { parts.append("No messages from you yet") }
-        if let dayflow, dayflow.focusedMinutes > 0 { parts.append("Dayflow: \(TodaySummary.duration(Double(dayflow.focusedMinutes) * 60)) focused") }
+        if let tracked, tracked.focused > 0 { parts.append("Tracked: \(TodaySummary.duration(tracked.focused)) focused") }
         return parts.joined(separator: "\n")
     }
     private func help(_ hour: TodayHour) -> String {
         var text = "\(hour.hour):00 — \(hour.turns) message\(hour.turns == 1 ? "" : "s") from you, \(hour.replies) replies"
-        if let category = hour.category { text += "\nDayflow: \(category)" }
+        if let category = hour.category { text += "\nMostly \(category.title)" }
         return text
     }
 }
@@ -296,61 +297,6 @@ struct TodayChatsCard: View {
         TodayCard(title: "Chats", symbol: "person.2", color: .indigo) {
             BigPair(left: "\(rows.count)", leftLabel: "active", right: "\(Set(rows.map(\.project)).count)", rightLabel: "places",
                     leftColor: .indigo)
-        }
-    }
-}
-
-struct TodayDayflowCard: View {
-    var dayflow: DayflowDay?
-    var body: some View {
-        TodayCard(title: "Dayflow", symbol: "waveform.path.ecg", color: AppAppearance.secondary) {
-            if let dayflow {
-                if dayflow.cards.isEmpty {
-                    Text("No activities analysed yet.").font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
-                } else {
-                    HStack(spacing: 2) {
-                        ForEach(dayflow.minutesByCategory, id: \.category) { item in
-                            Rectangle().fill(DayflowStyle.color(item.category))
-                                .frame(maxWidth: .infinity).frame(height: 6)
-                                .layoutPriority(Double(item.minutes))
-                                .help("\(item.category): \(TodaySummary.duration(Double(item.minutes) * 60))")
-                        }
-                    }.clipShape(Capsule())
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(dayflow.cards.suffix(6).reversed()) { card in
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Circle().fill(DayflowStyle.color(card.category)).frame(width: 6, height: 6)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(card.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                                    Text("\(card.start.formatted(date: .omitted, time: .shortened))–\(card.end.formatted(date: .omitted, time: .shortened)) · \(card.category)")
-                                        .font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
-                                }
-                            }
-                        }
-                    }
-                }
-                if let waiting = dayflow.pendingBatches, waiting > 0 {
-                    Text("\(waiting) recording\(waiting == 1 ? "" : "s") still waiting for Dayflow to analyse.")
-                        .font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
-                }
-            } else {
-                Text("Reading Dayflow…").font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
-            }
-        }
-    }
-}
-
-enum DayflowStyle {
-    static func color(_ category: String) -> Color {
-        switch category {
-        case "Idle": AppAppearance.tertiary
-        case "Distraction": AppAppearance.amber
-        case "Personal": .pink
-        case "Communication": .teal
-        case "Engineering / Product": AppAppearance.blue
-        case "Research & Strategy": .purple
-        case "Data & Insights": AppAppearance.green
-        default: HomeStyle.tint(for: category)
         }
     }
 }

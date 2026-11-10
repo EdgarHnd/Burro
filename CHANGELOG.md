@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Replace the Dayflow integration with Burro's own on-device activity tracker on the Today page. Off by default; it records the frontmost app, its window title (with Accessibility) and a browser's host only, never the screen, and keeps it in owner-only daily files for 30 days. Password managers, private windows and banking sites keep no title, and every title is clipped and scrubbed of long numbers, IBANs and email addresses. Rule-based categories you can change per app or site, pause, delete a day or everything. Event-driven sampling with a slow idle check and coalesced writes.
+
 ## 0.6.19 — Unreleased
 
 - Move local token-history scanning for Codex, Claude and Grok into a separately supervised Rust worker with bounded counter caches and Swift recovery. Prioritize recent logs and clearly label partial totals.
