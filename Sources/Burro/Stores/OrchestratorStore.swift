@@ -1,4 +1,4 @@
-// The orchestrator chat: one Claude Code (Opus 5.5) conversation Burro runs headless, one
+// The orchestrator chat: one Claude Code (Fable 5.2) conversation Burro runs headless, one
 // `claude -p` process per turn, resumed by session id. History is the chat's own transcript,
 // read back through the Rust worker after each turn; the turn in progress streams live.
 import Foundation
@@ -27,6 +27,11 @@ import BurroCore
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         sessionID = defaults.string(forKey: "orchestrator.session")
+        // A new orchestrator model starts at its own default effort; a pick made since stays.
+        if defaults.string(forKey: "orchestrator.model") != Orchestrator.model {
+            defaults.removeObject(forKey: "orchestrator.effort")
+            defaults.set(Orchestrator.model, forKey: "orchestrator.model")
+        }
         let saved = defaults.string(forKey: "orchestrator.effort") ?? Orchestrator.defaultEffort
         effort = Orchestrator.efforts.contains(saved) ? saved : Orchestrator.defaultEffort
     }

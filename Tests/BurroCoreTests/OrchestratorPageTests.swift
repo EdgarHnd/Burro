@@ -33,6 +33,18 @@ final class OrchestratorPageTests: XCTestCase {
         XCTAssertEqual(turns[0].answer?.text, "Earlier reply")
     }
 
+    @MainActor func testANewModelStartsAtItsDefaultEffortAndLaterPicksStay() throws {
+        let suite = "burro-orchestrator-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("xhigh", forKey: "orchestrator.effort")   // picked for the previous model
+        let first = OrchestratorStore(defaults: defaults)
+        XCTAssertEqual(first.effort, "high")
+        XCTAssertEqual(defaults.string(forKey: "orchestrator.model"), "claude-fable-5-2")
+        first.effort = "max"
+        XCTAssertEqual(OrchestratorStore(defaults: defaults).effort, "max")
+    }
+
     func testMarkdownBlocks() {
         let blocks = MarkdownBlock.blocks("""
         **Lead** line

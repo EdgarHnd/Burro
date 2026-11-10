@@ -1,4 +1,4 @@
-// The orchestrator: one Claude Code chat (Opus 5.5) that Burro runs headless in its own folder.
+// The orchestrator: one Claude Code chat (Fable 5.2) that Burro runs headless in its own folder.
 // It sees what Burro sees (every machine, chat, subagent, project, worktree and to-do) through
 // the bundled `burro-mcp` tool server, which reads a snapshot Burro writes next to it. It can
 // read and search files, read any chat and start new chats on this Mac; it can't edit files or
@@ -6,12 +6,11 @@
 import Foundation
 
 public enum Orchestrator {
-    public static let model = "claude-opus-5-5"
-    public static let modelTitle = "Opus 5.5"
-    /// Reasoning effort levels Claude Code accepts, and the orchestrator's default (thorough
-    /// status reports matter more than speed here).
+    public static let model = "claude-fable-5-2"
+    public static let modelTitle = "Fable 5.2"
+    /// Reasoning effort levels Claude Code accepts, and the orchestrator's default.
     public static let efforts = ["low", "medium", "high", "xhigh", "max"]
-    public static let defaultEffort = "xhigh"
+    public static let defaultEffort = "high"
     public static func effortTitle(_ effort: String) -> String {
         switch effort {
         case "xhigh": "Extra High"
