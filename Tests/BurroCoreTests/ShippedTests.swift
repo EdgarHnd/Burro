@@ -475,7 +475,9 @@ final class ShippedTests: XCTestCase {
                      "a new day changes the week: write it again")
 
         let text = report.render(summary: "You: the week.")
-        XCTAssertTrue(text.contains("You: the week.\n\nDays\nMon 9 Nov: You 1 · Dante 2 · dependabot 1 merged · shipped to production\n  You: postcard."), text)
+        // The day's label follows the reader's region ("Mon 9 Nov" or "Mon, Nov 9"), so check around it.
+        XCTAssertTrue(text.contains("You: the week.\n\nDays\nMon"), text)
+        XCTAssertTrue(text.contains(": You 1 · Dante 2 · dependabot 1 merged · shipped to production\n  You: postcard."), text)
         XCTAssertTrue(text.hasSuffix("1 day not read yet."))
         XCTAssertTrue(ShippedPeriodReport.instructions(.month).contains("never a day-by-day list"))
     }
