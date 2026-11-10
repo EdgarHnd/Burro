@@ -84,6 +84,9 @@ public enum LaunchError: Error, Equatable, LocalizedError {
     case emptyPrompt
     case missingFolder
     case untrusted(String)
+    /// The session registered but stopped at a terminal prompt before its first turn
+    /// (for example approving a new project MCP server), so it never started working.
+    case blocked(folder: String, reason: String)
     case failed(String)
     public var errorDescription: String? {
         switch self {
@@ -91,6 +94,9 @@ public enum LaunchError: Error, Equatable, LocalizedError {
         case .emptyPrompt: "Write what the agent should do."
         case .missingFolder: "That project folder no longer exists."
         case .untrusted(let folder): "Claude hasn't been trusted in \(URL(fileURLWithPath: folder).lastPathComponent) yet. Run claude there once in Terminal and accept the prompt, then try again."
+        case .blocked(let folder, let reason):
+            "The chat did not start. Claude Code stopped at a prompt in \(URL(fileURLWithPath: folder).lastPathComponent) before its first turn: \(reason). "
+                + "Burro removed that stuck session. Run claude in that folder once in Terminal, answer the prompt, then start the chat again."
         case .failed(let message): message
         }
     }
@@ -125,19 +131,142 @@ public enum ClaudeLaunch {
     /// Runs `claude --bg` in the project folder through a login shell, so the session gets your
     /// usual PATH (git, node, toolchains). Arguments are passed as positional parameters, never
     /// interpolated into the shell script.
+    ///
+    /// `claude --bg` prints its attach line as soon as the daemon claims a session, before that
+    /// session has done anything; it can then sit at a terminal prompt (a new project MCP server
+    /// to approve, say) and never write a transcript, while `claude agents` may still list it as
+    /// "working". So a launch only counts once the session's transcript exists. A session stuck at a
+    /// prompt, gone, or silent past the bounded wait is removed and reported as an error, never as started.
     public static func start(_ request: LaunchRequest, executable: String? = executable()) throws -> LaunchResult {
+        try start(request, executable: executable, host: .live)
+    }
+
+    static func start(_ request: LaunchRequest, executable: String?, host: ClaudeLaunchHost) throws -> LaunchResult {
         guard let executable else { throw LaunchError.notInstalled(.claude) }
-        guard FileManager.default.fileExists(atPath: request.folder) else { throw LaunchError.missingFolder }
-        let result = try LaunchShell.run(executable, arguments(for: request), folder: request.folder, timeout: 60)
+        guard host.fileExists(request.folder) else { throw LaunchError.missingFolder }
+        let result = try host.run(executable, arguments(for: request), request.folder, 60)
         let output = result.text
         if output.contains("Workspace not trusted") { throw LaunchError.untrusted(request.folder) }
         guard result.code == 0, let handle = handle(fromOutput: output) else {
             let line = output.split(whereSeparator: \.isNewline).map(String.init).last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             throw LaunchError.failed(line.map { "Claude didn't start: \($0)" } ?? "Claude didn't start.")
         }
-        let agents = try? LaunchShell.run(executable, ["agents", "--json", "--all"], folder: request.folder, timeout: 20)
-        let session = agents.flatMap { sessionID(handle: handle, agentsJSON: Data($0.text.utf8)) } ?? handle
-        return LaunchResult(provider: .claude, sessionID: session, handle: handle, folder: request.folder)
+        let deadline = host.now().addingTimeInterval(host.verifyTimeout)
+        var check = StartCheck.pending(state: nil, sessionID: nil)
+        while true {
+            let agents = try? host.run(executable, ["agents", "--json", "--all"], request.folder, 20)
+            let job = host.readFile(host.configDirectory + "/jobs/\(handle)/state.json")
+            check = startCheck(handle: handle, folder: request.folder, agentsJSON: agents.map { Data($0.text.utf8) }, jobJSON: job) { cwd, session in
+                host.fileExists(host.configDirectory + "/projects/" + ClaudeTranscriptTail.projectFolder(cwd) + "/\(session).jsonl")
+            }
+            switch check {
+            case .started(let session):
+                return LaunchResult(provider: .claude, sessionID: session, handle: handle, folder: request.folder)
+            case .blocked(let reason):
+                discard(handle, executable: executable, folder: request.folder, host: host)
+                throw LaunchError.blocked(folder: request.folder, reason: reason)
+            case .ended(let state):
+                discard(handle, executable: executable, folder: request.folder, host: host)
+                throw LaunchError.failed("The chat did not start. Claude Code's background session \(handle) ended (\(state)) before its first turn. Run `claude logs \(handle)` in Terminal to see why.")
+            case .pending(let state, _):
+                guard host.now() < deadline else {
+                    // The daemon's state can lag: a session sitting at the MCP approval prompt has been seen
+                    // listed as "working / starting…". Its terminal output says what it is waiting for.
+                    let screen = try? host.run(executable, ["logs", handle], request.folder, 20)
+                    discard(handle, executable: executable, folder: request.folder, host: host)
+                    if let prompt = screen.flatMap({ pendingPrompt(inLogs: $0.text) }) {
+                        throw LaunchError.blocked(folder: request.folder, reason: prompt)
+                    }
+                    let seconds = Int(host.verifyTimeout.rounded())
+                    throw LaunchError.failed(state.map {
+                        "The chat did not start. Claude Code's background session \(handle) was still \"\($0)\" after \(seconds) seconds and never wrote a transcript, so Burro removed it."
+                    } ?? "The chat did not start. Claude Code printed a background id (\(handle)) but no such session appeared in `claude agents` within \(seconds) seconds.")
+                }
+                host.sleep(host.pollInterval)
+            }
+        }
+    }
+
+    /// What a just-launched background session looks like right now.
+    enum StartCheck: Equatable {
+        /// Its transcript exists: the chat really started.
+        case started(sessionID: String)
+        /// It stopped at a terminal prompt before writing anything.
+        case blocked(String)
+        /// It exited before writing anything.
+        case ended(String)
+        /// Not listed yet, or listed but hasn't written its first line.
+        case pending(state: String?, sessionID: String?)
+    }
+
+    /// Reads `claude agents --json --all`, the daemon's job record (`<config>/jobs/<handle>/state.json`)
+    /// and whether the transcript exists. A transcript wins: a session that started and then asks for
+    /// a permission is a normal chat that needs you.
+    static func startCheck(handle: String, folder: String, agentsJSON: Data?, jobJSON: Data?,
+                           transcriptExists: (_ cwd: String, _ sessionID: String) -> Bool) -> StartCheck {
+        let rows = agentsJSON.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] } ?? []
+        let row = rows.first { ($0["id"] as? String) == handle } ?? rows.first { ($0["sessionId"] as? String)?.hasPrefix(handle) == true }
+        let job = jobJSON.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        guard row != nil || job != nil else { return .pending(state: nil, sessionID: nil) }
+        let session = [row?["sessionId"], job?["sessionId"]].compactMap { $0 as? String }
+            .first { UUID(uuidString: $0) != nil }?.lowercased()
+        let cwd = row?["cwd"] as? String ?? job?["cwd"] as? String ?? folder
+        if let session, transcriptExists(cwd, session) { return .started(sessionID: session) }
+        let state = (row?["state"] as? String ?? job?["state"] as? String)?.lowercased()
+        let detail = [job?["needs"], job?["detail"]].compactMap { $0 as? String }.first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        switch state ?? "" {
+        case "blocked":
+            // "approve 1 new project MCP server (x) — attach to respond": Burro removes the session, so drop the attach hint.
+            let reason = detail.map { $0.components(separatedBy: " — ").first ?? $0 }?.trimmingCharacters(in: .whitespaces)
+            return .blocked(reason.flatMap { $0.isEmpty ? nil : $0 } ?? "it is waiting for an answer in the terminal")
+        case let ended where ["done", "failed", "error", "errored", "exited", "killed", "stopped", "completed"].contains(ended):
+            return .ended(detail.map { "\(ended): \($0)" } ?? ended)
+        default:
+            return .pending(state: state, sessionID: session)
+        }
+    }
+
+    /// The startup prompt a background session's screen (`claude logs <id>`) is showing, if one is known.
+    static func pendingPrompt(inLogs logs: String) -> String? {
+        // Cursor moves stand in for spaces on that screen: turn every escape sequence into a space.
+        let plain = logs.replacingOccurrences(of: #"\x{1B}\[[0-9;?]*[A-Za-z]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"[ \t]+"#, with: " ", options: .regularExpression)
+        if let range = plain.range(of: #"New MCP servers? found in this project: [^\n]+"#, options: .regularExpression) {
+            let names = plain[range].components(separatedBy: ": ").dropFirst().joined(separator: ": ").trimmingCharacters(in: .whitespaces)
+            return "approve the new project MCP server \(names)"
+        }
+        if plain.range(of: "Do you trust the files in this folder", options: .caseInsensitive) != nil { return "trust this folder" }
+        return nil
+    }
+
+    /// Stops and deletes a background session that never started, so retries don't pile up stuck copies.
+    private static func discard(_ handle: String, executable: String, folder: String, host: ClaudeLaunchHost) {
+        _ = try? host.run(executable, ["stop", handle], folder, 20)
+        _ = try? host.run(executable, ["rm", handle], folder, 20)
+    }
+}
+
+/// Everything `ClaudeLaunch.start` touches outside itself; swapped in tests.
+struct ClaudeLaunchHost {
+    var run: (_ executable: String, _ arguments: [String], _ folder: String, _ timeout: TimeInterval) throws -> LaunchShell.Output
+    /// Claude Code's config folder (`~/.claude`, or `$CLAUDE_CONFIG_DIR`): holds `jobs/` and `projects/`.
+    var configDirectory: String
+    var fileExists: (String) -> Bool
+    var readFile: (String) -> Data?
+    var now: () -> Date
+    var sleep: (TimeInterval) -> Void
+    var verifyTimeout: TimeInterval = 20
+    var pollInterval: TimeInterval = 0.5
+
+    static var live: ClaudeLaunchHost {
+        let custom = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+        return ClaudeLaunchHost(
+            run: { try LaunchShell.run($0, $1, folder: $2, timeout: $3) },
+            configDirectory: custom ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path,
+            fileExists: FileManager.default.fileExists(atPath:),
+            readFile: { FileManager.default.contents(atPath: $0) },
+            now: Date.init,
+            sleep: { Thread.sleep(forTimeInterval: $0) })
     }
 }
 

@@ -138,3 +138,145 @@ final class AgentLaunchTests: XCTestCase {
         XCTAssertTrue(models.contains { $0.isDefault })
     }
 }
+
+/// `ClaudeLaunch.start` only reports a chat as started once it verifiably exists. All fakes; nothing runs `claude`.
+final class ClaudeLaunchVerificationTests: XCTestCase {
+    private let handle = "3bd38d55"
+    private let session = "3bd38d55-0725-46e7-9d0b-f449a6d27e9c"
+    private let folder = "/Users/me/Dev/focustown-rn-godot"
+    private let bgOutput = "backgrounded · 3bd38d55\n  claude agents             list sessions\n  claude attach 3bd38d55    open in this terminal\n"
+    /// The job record Claude Code wrote for the stuck Orchestrator launches on 2026-11-10.
+    private var blockedJob: Data {
+        Data(#"{"state":"blocked","detail":"1 new MCP server needs approval","sessionId":"3bd38d55-0725-46e7-9d0b-f449a6d27e9c","cwd":"/Users/me/Dev/focustown-rn-godot","needs":"approve 1 new project MCP server (focustown-insights) — attach to respond"}"#.utf8)
+    }
+    private func agents(state: String) -> Data {
+        Data(#"[{"id":"3bd38d55","cwd":"/Users/me/Dev/focustown-rn-godot","kind":"background","sessionId":"3bd38d55-0725-46e7-9d0b-f449a6d27e9c","state":"\#(state)"}]"#.utf8)
+    }
+
+    func testStartCheckReadsTheAgentListJobRecordAndTranscript() {
+        func check(agents: Data?, job: Data?, transcript: Bool = false) -> ClaudeLaunch.StartCheck {
+            ClaudeLaunch.startCheck(handle: handle, folder: folder, agentsJSON: agents, jobJSON: job) { cwd, id in
+                XCTAssertEqual(cwd, self.folder)
+                XCTAssertEqual(id, self.session)
+                return transcript
+            }
+        }
+        XCTAssertEqual(check(agents: agents(state: "blocked"), job: blockedJob),
+                       .blocked("approve 1 new project MCP server (focustown-insights)"), "the stuck Orchestrator launches")
+        XCTAssertEqual(check(agents: agents(state: "blocked"), job: nil), .blocked("it is waiting for an answer in the terminal"))
+        XCTAssertEqual(check(agents: agents(state: "blocked"), job: blockedJob, transcript: true), .started(sessionID: session),
+                       "a chat that started and then asks for a permission is a normal chat that needs you")
+        XCTAssertEqual(check(agents: agents(state: "working"), job: nil, transcript: true), .started(sessionID: session))
+        XCTAssertEqual(check(agents: agents(state: "working"), job: nil), .pending(state: "working", sessionID: session))
+        XCTAssertEqual(check(agents: agents(state: "failed"), job: nil), .ended("failed"))
+        XCTAssertEqual(check(agents: Data("[]".utf8), job: nil), .pending(state: nil, sessionID: nil))
+        XCTAssertEqual(check(agents: nil, job: blockedJob), .blocked("approve 1 new project MCP server (focustown-insights)"),
+                       "the job record alone is enough when claude agents can't be read")
+        XCTAssertEqual(check(agents: Data(#"[{"id":"3bd38d55","state":"working","sessionId":"3bd38d55"}]"#.utf8), job: nil),
+                       .pending(state: "working", sessionID: nil), "a short handle is never mistaken for a session id")
+    }
+
+    /// A scripted `claude`: `--bg` prints the attach line, `agents` returns the next scripted list.
+    private final class FakeClaude: @unchecked Sendable {
+        var agentLists: [Data]
+        var job: Data?
+        var transcriptAfterPolls: Int?
+        var logs = ""
+        var calls: [[String]] = []
+        var polls = 0
+        var clock = Date(timeIntervalSince1970: 0)
+        init(agentLists: [Data], job: Data? = nil, transcriptAfterPolls: Int? = nil) {
+            self.agentLists = agentLists; self.job = job; self.transcriptAfterPolls = transcriptAfterPolls
+        }
+        func host(bgOutput: String) -> ClaudeLaunchHost {
+            ClaudeLaunchHost(
+                run: { _, arguments, _, _ in
+                    self.calls.append(arguments)
+                    if arguments.first == "--bg" { return LaunchShell.Output(code: 0, text: bgOutput) }
+                    if arguments.first == "agents" {
+                        self.polls += 1
+                        let list = self.agentLists[min(self.polls, self.agentLists.count) - 1]
+                        return LaunchShell.Output(code: 0, text: String(decoding: list, as: UTF8.self))
+                    }
+                    if arguments.first == "logs" { return LaunchShell.Output(code: 0, text: self.logs) }
+                    return LaunchShell.Output(code: 0, text: "")
+                },
+                configDirectory: "/Users/me/.claude",
+                fileExists: { path in
+                    if path.hasSuffix(".jsonl") {
+                        XCTAssertEqual(path, "/Users/me/.claude/projects/-Users-me-Dev-focustown-rn-godot/3bd38d55-0725-46e7-9d0b-f449a6d27e9c.jsonl")
+                        return self.transcriptAfterPolls.map { self.polls >= $0 } ?? false
+                    }
+                    return true
+                },
+                readFile: { path in path == "/Users/me/.claude/jobs/3bd38d55/state.json" ? self.job : nil },
+                now: { self.clock },
+                sleep: { self.clock.addTimeInterval($0) })
+        }
+        var stopped: Bool { calls.contains(["stop", "3bd38d55"]) && calls.contains(["rm", "3bd38d55"]) }
+    }
+
+    private func request() -> LaunchRequest {
+        LaunchRequest(provider: .claude, prompt: "Fix it", folder: folder, model: "claude-opus-5-5", effort: "medium", access: .edit)
+    }
+
+    func testAStuckSessionIsAnErrorAndIsRemoved() {
+        let claude = FakeClaude(agentLists: [agents(state: "blocked")], job: blockedJob)
+        XCTAssertThrowsError(try ClaudeLaunch.start(request(), executable: "/bin/claude", host: claude.host(bgOutput: bgOutput))) { error in
+            XCTAssertEqual(error as? LaunchError, .blocked(folder: folder, reason: "approve 1 new project MCP server (focustown-insights)"))
+            let message = (error as? LocalizedError)?.errorDescription ?? ""
+            XCTAssertTrue(message.contains("did not start"), message)
+            XCTAssertTrue(message.contains("focustown-insights"), message)
+            XCTAssertTrue(message.contains("focustown-rn-godot"), message)
+        }
+        XCTAssertTrue(claude.stopped, "a stuck session is stopped and removed so retries don't pile up")
+    }
+
+    func testStartWaitsForTheTranscriptBeforeCountingTheChat() throws {
+        let claude = FakeClaude(agentLists: [Data("[]".utf8), agents(state: "working")], transcriptAfterPolls: 3)
+        let result = try ClaudeLaunch.start(request(), executable: "/bin/claude", host: claude.host(bgOutput: bgOutput))
+        XCTAssertEqual(result.sessionID, session)
+        XCTAssertEqual(result.handle, handle)
+        XCTAssertEqual(claude.polls, 3)
+        XCTAssertFalse(claude.stopped)
+        XCTAssertEqual(claude.calls.first, ["--bg", "--permission-mode", "acceptEdits", "--model", "claude-opus-5-5", "--effort", "medium", "--", "Fix it"])
+    }
+
+    func testASessionThatNeverAppearsIsAnError() {
+        let claude = FakeClaude(agentLists: [Data("[]".utf8)])
+        XCTAssertThrowsError(try ClaudeLaunch.start(request(), executable: "/bin/claude", host: claude.host(bgOutput: bgOutput))) { error in
+            let message = (error as? LocalizedError)?.errorDescription ?? ""
+            XCTAssertTrue(message.contains("did not start") && message.contains("3bd38d55"), message)
+        }
+        XCTAssertGreaterThan(claude.polls, 5, "it polls for the whole bounded wait")
+        XCTAssertLessThan(claude.polls, 60)
+    }
+
+    /// Seen live: a session at the MCP approval prompt listed as "working / starting…" with no transcript.
+    func testAWorkingSessionThatNeverWritesATranscriptIsAnError() {
+        let claude = FakeClaude(agentLists: [agents(state: "working")])
+        claude.logs = "\u{1B}[3G\u{1B}[38;2;255;193;7m\u{1B}[1mNew\u{1B}[7GMCP\u{1B}[11Gserver\u{1B}[18Gfound\u{1B}[24Gin\u{1B}[27Gthis\u{1B}[32Gproject:\u{1B}[41Gfocustown-insights\u{1B}[22m\u{1B}[39m\n\n\u{1B}[3GMCP servers may execute code\n"
+        XCTAssertThrowsError(try ClaudeLaunch.start(request(), executable: "/bin/claude", host: claude.host(bgOutput: bgOutput))) { error in
+            XCTAssertEqual(error as? LaunchError, .blocked(folder: folder, reason: "approve the new project MCP server focustown-insights"))
+        }
+        XCTAssertTrue(claude.stopped)
+
+        let quiet = FakeClaude(agentLists: [agents(state: "working")])
+        XCTAssertThrowsError(try ClaudeLaunch.start(request(), executable: "/bin/claude", host: quiet.host(bgOutput: bgOutput))) { error in
+            let message = (error as? LocalizedError)?.errorDescription ?? ""
+            XCTAssertTrue(message.contains("still \"working\"") && message.contains("never wrote a transcript"), message)
+        }
+        XCTAssertTrue(quiet.stopped)
+    }
+
+    func testPendingPromptReadsTheSessionScreen() {
+        XCTAssertNil(ClaudeLaunch.pendingPrompt(inLogs: "Thinking…\n"))
+        XCTAssertEqual(ClaudeLaunch.pendingPrompt(inLogs: "New MCP servers found in this project: a, b\n"), "approve the new project MCP server a, b")
+    }
+
+    func testASessionThatEndsBeforeItsFirstTurnIsAnError() {
+        let claude = FakeClaude(agentLists: [agents(state: "failed")])
+        XCTAssertThrowsError(try ClaudeLaunch.start(request(), executable: "/bin/claude", host: claude.host(bgOutput: bgOutput)))
+        XCTAssertTrue(claude.stopped)
+    }
+}

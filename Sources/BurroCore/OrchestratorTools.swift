@@ -78,6 +78,7 @@ public struct OrchestratorTools {
             "folder": ["type": "string", "description": "Project name or absolute folder path."],
             "prompt": ["type": "string", "description": "A self-contained task: goal, context, what done looks like."],
             "model": ["type": "string", "description": "Optional model id."],
+            "effort": ["type": "string", "enum": ["low", "medium", "high", "xhigh", "max"], "description": "Optional reasoning effort."],
             "access": ["type": "string", "enum": ["ask", "edit", "readOnly"], "description": "Default ask: the agent asks before acting."],
         ], required: ["agent", "folder", "prompt"]),
     ] }
@@ -222,8 +223,10 @@ public struct OrchestratorTools {
         guard !Orchestrator.owns(folder: folder) else { return ("Start chats in a project folder, not the orchestrator's own.", true) }
         let access = (arguments["access"] as? String).flatMap(LaunchAccess.init(rawValue:)) ?? .ask
         let model = (arguments["model"] as? String)?.trimmingCharacters(in: .whitespaces)
+        let effort = (arguments["effort"] as? String)?.trimmingCharacters(in: .whitespaces).lowercased()
         do {
-            let result = try launch(LaunchRequest(provider: agent, prompt: prompt, folder: folder, model: model?.isEmpty == false ? model : nil, access: access))
+            let result = try launch(LaunchRequest(provider: agent, prompt: prompt, folder: folder, model: model?.isEmpty == false ? model : nil,
+                                                  effort: effort?.isEmpty == false ? effort : nil, access: access))
             let id = (agent == .codex ? "codex:" : "claude:") + result.sessionID.lowercased()
             return ("Started \(agent.title) in \(folder) (\(access.title.lowercased())). Chat id: \(id). It shows in Burro within a few seconds; use read_chat to follow it.", false)
         } catch {

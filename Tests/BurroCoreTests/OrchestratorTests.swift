@@ -200,6 +200,32 @@ final class OrchestratorTests: XCTestCase {
         XCTAssertNil(launched)
     }
 
+    /// A launch that didn't really start reaches the orchestrator as an error, never as "Started".
+    func testStartChatReportsALaunchThatDidNotStart() throws {
+        let root = try folder()
+        let project = root.appendingPathComponent("focustown-rn-godot")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        var value = state(chats: [])
+        value.projects = [.init(name: "focustown-rn-godot", path: project.path, isRepository: true, worktrees: 1, readyToRemove: 0, tokensToday: 0, lastActive: nil)]
+        var tools = try tools(value)
+        var launched: LaunchRequest?
+        tools.launch = { request in
+            launched = request
+            throw LaunchError.blocked(folder: request.folder, reason: "approve 1 new project MCP server (focustown-insights)")
+        }
+        let (text, isError) = tools.startChat(["agent": "claude", "folder": "focustown-rn-godot", "prompt": "Fix it",
+                                               "model": "claude-opus-5-5", "effort": "medium", "access": "edit"])
+        XCTAssertTrue(isError)
+        XCTAssertFalse(text.contains("Started"), text)
+        XCTAssertTrue(text.contains("did not start") && text.contains("focustown-insights"), text)
+        XCTAssertEqual(launched?.effort, "medium", "the effort the orchestrator asks for reaches the launch")
+        XCTAssertEqual(launched?.model, "claude-opus-5-5")
+        let reply = tools.handle(["jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                                  "params": ["name": "start_chat", "arguments": ["agent": "claude", "folder": project.path, "prompt": "Fix it"]]])
+        let result = try XCTUnwrap(reply?["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, true)
+    }
+
     func testMissingSnapshotIsAnError() {
         let tools = OrchestratorTools(stateURL: URL(fileURLWithPath: "/nonexistent/state.json"))
         let (text, isError) = tools.call("overview", [:])
