@@ -13,6 +13,16 @@ import BurroCore
             try PerformanceProfile.run(includeUsage: paths.first == "--profile")
             return
         }
+        // --shipped <owner/name> [days ago]: what shipped on GitHub that day, as text.
+        if paths.first == "--shipped", paths.count >= 2 {
+            let ago = paths.count > 2 ? Int(paths[2]) ?? 0 : 0
+            let day = Calendar.current.date(byAdding: .day, value: -ago, to: Date()) ?? Date()
+            switch await ShippedReader.load(day: day, repository: paths[1]) {
+            case .failure(let failure): print("\(failure.title): \(failure.detail)")
+            case .success(let shipped): print(ShippedText.render(shipped))
+            }
+            return
+        }
         if paths == ["--agents"] {
             let activity = AgentMonitor().sample()
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601

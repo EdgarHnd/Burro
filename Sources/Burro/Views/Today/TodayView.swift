@@ -1,4 +1,4 @@
-// The Today page: one day at a glance. Chats grouped by status or project, how long you've been
+// The Today page: one day at a glance. What shipped on GitHub, chats grouped by status or project, how long you've been
 // at it, messages, to-dos, questions agents asked, and Dayflow's timeline when it's installed.
 import SwiftUI
 import BurroCore
@@ -15,6 +15,7 @@ struct TodayView: View {
             HStack(alignment: .top, spacing: 28) {
                 VStack(alignment: .leading, spacing: 26) {
                     TodayHeader(today: today)
+                    TodayShippedSection(store: store)
                     chats(rows)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 VStack(spacing: 14) {
@@ -36,6 +37,11 @@ struct TodayView: View {
             today.profiles = { [weak store] in store?.usage.preferences.profiles ?? [:] }
             while onScreen && !Task.isCancelled {
                 today.refresh()
+                // What shipped on GitHub: the day shown, and yesterday's recap on today.
+                store.shipped.refresh(today.day)
+                if today.isToday, let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: today.day) {
+                    store.shipped.refresh(yesterday)
+                }
                 try? await Task.sleep(for: .seconds(30))
             }
         }

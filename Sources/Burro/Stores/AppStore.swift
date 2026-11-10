@@ -109,6 +109,7 @@ import BurroCore
     @ObservationIgnored private var activityScan: Task<Void, Never>?
     let todos: TodoStore
     let today = TodayStore()
+    let shipped = ShippedStore()
     let machines = MachinesStore()
     let notes: NotesStore
     let benches: BenchesStore
@@ -164,6 +165,7 @@ import BurroCore
         baseOverrides = defaults.dictionary(forKey: "baseOverrides") as? [String: String] ?? [:]
         orchestrator.snapshot = { [weak self] in self?.orchestratorState() }
         orchestrator.profiles = { [weak self] in self?.usage.preferences.profiles ?? [:] }
+        shipped.project = { [weak self] in self?.mainProject?.path }
     }
     func matches(_ filter: WorktreeFilter, tree: Worktree) -> Bool {
         if filter == .candidates { return cleanupEligibility(tree).allowed }
