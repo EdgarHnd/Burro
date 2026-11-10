@@ -407,7 +407,7 @@ struct LiveActivity: View {
         }
     }
     /// "Locating the build config", or "Running swift test" when the call gave no description.
-    static func describe(_ step: ChatMessage) -> String {
+    nonisolated static func describe(_ step: ChatMessage) -> String {
         if let note = step.note, !note.isEmpty { return note }
         let kind = StepKind(step)
         let doing: String = switch kind {
