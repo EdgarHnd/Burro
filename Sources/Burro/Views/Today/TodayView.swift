@@ -1,5 +1,6 @@
-// The Today page: one day at a glance. What shipped on GitHub, chats grouped by status or project, how long you've been
-// at it, messages, to-dos, questions agents asked, and the activity Burro tracked on this Mac (when turned on).
+// The Today page: one day at a glance. The day Burro tracked on this Mac (when turned on: a timeline and the day so far,
+// right under the date), what shipped on GitHub, chats grouped by status or project, how long you've been at it, messages,
+// to-dos and questions agents asked. With tracking off, a small card in the side column explains it and turns it on.
 import SwiftUI
 import BurroCore
 
@@ -15,6 +16,7 @@ struct TodayView: View {
             HStack(alignment: .top, spacing: 28) {
                 VStack(alignment: .leading, spacing: 26) {
                     TodayHeader(today: today)
+                    if today.tracker.enabled { TodayDaySection(today: today) }
                     TodayShippedSection(store: store)
                     chats(rows)
                 }.frame(maxWidth: .infinity, alignment: .leading)
@@ -25,7 +27,7 @@ struct TodayView: View {
                     TodayQuestionsCard(asked: today.activity?.questions ?? 0,
                                        waitingNow: today.isToday ? store.agentActivity.waitingCount : 0)
                     TodayChatsCard(rows: rows)
-                    TodayActivityCard(today: today)
+                    if !today.tracker.enabled { TodayActivityCard(today: today) }
                 }.frame(width: 320)
             }
             .padding(.horizontal, 36).padding(.vertical, 28)

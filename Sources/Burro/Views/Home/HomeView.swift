@@ -1,7 +1,8 @@
 // Burro's landing page: a cover, your projects and machines as benches, a plain-language summary,
-// and to-dos, notes and a scratchpad on the side. Read-only like the rest of monitoring. While on
-// screen it keeps Mac Health sampling, syncs to-dos and rescans today's activity at most every
-// 90 seconds; it starts no other background work.
+// and to-dos, today so far (when activity tracking is on), notes and a scratchpad on the side.
+// Read-only like the rest of monitoring. While on screen it keeps Mac Health sampling, syncs
+// to-dos, rescans today's activity at most every 90 seconds and re-reads today's tracked activity
+// once a minute; it starts no other background work.
 import SwiftUI
 import BurroCore
 
@@ -37,6 +38,11 @@ struct HomeView: View {
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         VStack(spacing: 16) {
                             HomeTodayCard(todos: store.todos)
+                            if store.activityTracker.enabled {
+                                HomeActivityCard(tracker: store.activityTracker, active: onScreen) {
+                                    store.today.show(Date()); store.page = .today
+                                }
+                            }
                             if !summary.needsYou.isEmpty || !summary.unread.isEmpty { HomeInbox(store: store, summary: summary) }
                             HomeNotesCard(notes: store.notes) { store.showNotes?($0) }
                             HomeScratchpadCard(notes: store.notes)

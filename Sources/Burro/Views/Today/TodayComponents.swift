@@ -149,7 +149,7 @@ struct TodayCard<Content: View>: View {
             Label(title, systemImage: symbol).font(.system(size: 13, weight: .semibold)).foregroundStyle(color)
             content()
         }
-        .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
     }
 }

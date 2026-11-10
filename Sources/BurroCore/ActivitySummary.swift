@@ -1,5 +1,6 @@
-// One day of tracked activity rolled up for the Today page: focused time, time per category, top
-// apps and sites, the latest activities and each hour's main category. Categories come from the
+// One day of tracked activity rolled up for the Today page and Home: focused time, time per
+// category, top apps and sites, the latest activities, each hour's main category, and the
+// timeline's blocks and focus stretches (ActivityTimeline.swift). Categories come from the
 // current rules, so a rule you change applies to past days as well.
 import Foundation
 
@@ -36,6 +37,9 @@ public struct ActivityDay: Sendable, Equatable {
     public var entries: [Entry]
     /// One cell per hour of the day (23 or 25 on DST days): the category with the most time.
     public var hourly: [ActivityCategory?]
+    /// The day timeline: readable blocks, idle gaps left out.
+    public var blocks: [ActivityBlock]
+    public var focus: ActivityFocus
     /// Everything except Break.
     public var focused: TimeInterval { categories.filter { $0.category != .break }.reduce(0) { $0 + $1.seconds } }
 
@@ -98,6 +102,7 @@ public struct ActivityDay: Sendable, Equatable {
                 .sorted { $0.seconds > $1.seconds },
             sites: sites.map { Item(id: $0.key, name: $0.key, category: main($0.value.categories), seconds: $0.value.seconds) }
                 .sorted { $0.seconds > $1.seconds },
-            entries: entries, hourly: hourly)
+            entries: entries, hourly: hourly,
+            blocks: ActivityTimeline.blocks(categorized), focus: ActivityTimeline.focus(categorized))
     }
 }

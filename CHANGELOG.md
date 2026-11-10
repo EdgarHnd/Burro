@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Replace the Dayflow integration with Burro's own on-device activity tracker on the Today page. Off by default; it records the frontmost app, its window title (with Accessibility) and a browser's host only, never the screen, and keeps it in owner-only daily files for 30 days. Password managers, private windows and banking sites keep no title, and every title is clipped and scrubbed of long numbers, IBANs and email addresses. Rule-based categories you can change per app or site, pause, delete a day or everything. Event-driven sampling with a slow idle check and coalesced writes.
+- Add a day view for tracked activity on the Today page: a timeline of readable blocks (one category with short gaps, sub-2-minute runs folded in, titled by the main app and its site or window title, or "Switching between…"; idle time left empty) with app icons, plus Your day so far (category donut and most-used apps and sites), Your focus (focused time and the longest focus stretch) and Break so far, beside the timeline on wide windows and below it on narrow ones. Add a Today so far card to Home while tracking is on (focused and tracked time, what you're on now, Break and the longest focus stretch; click to open Today), read once a minute while Home is on screen.
 
 ## 0.6.19 — Unreleased
 

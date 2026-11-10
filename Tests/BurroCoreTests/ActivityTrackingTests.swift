@@ -285,10 +285,11 @@ final class ActivityTrackingTests: XCTestCase {
                 XCTAssertFalse(text.contains(marker), "\(file) mentions \(marker)")
             }
         }
-        let tracking = try ["ActivityPrivacy", "ActivityLog", "ActivityRecorder", "ActivitySummary", "ActivityCategories"].map {
+        let tracking = try ["ActivityPrivacy", "ActivityLog", "ActivityRecorder", "ActivitySummary", "ActivityCategories", "ActivityTimeline"].map {
             try String(contentsOf: root.appendingPathComponent("Sources/BurroCore/\($0).swift"), encoding: .utf8)
-        } + [try String(contentsOf: root.appendingPathComponent("Sources/Burro/Stores/ActivityTracker.swift"), encoding: .utf8),
-             try String(contentsOf: root.appendingPathComponent("Sources/Burro/Support/ActivitySampler.swift"), encoding: .utf8)]
+        } + ["Stores/ActivityTracker", "Support/ActivitySampler", "Views/Today/TodayActivity", "Views/Today/TodayDayView", "Views/Home/HomeActivity"].map {
+            try String(contentsOf: root.appendingPathComponent("Sources/Burro/\($0).swift"), encoding: .utf8)
+        }
         for text in tracking {
             for marker in ["URLSession", "print(", "NSLog", "os_log", "Logger(", "CommandRunner", "Process("] {
                 XCTAssertFalse(text.contains(marker), "activity tracking code must not use \(marker)")

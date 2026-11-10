@@ -1,56 +1,36 @@
-// The Today page's Activity card: Burro's own on-device tracker (frontmost app, window title, a
-// browser's host; never the screen). Off until you turn it on here. Pause sits in the card; delete
-// this day and delete everything are in its menu, each behind a confirmation. Right-click an app
-// or site to change its category, or mark a site private.
+// Burro's own on-device tracker on the Today page (frontmost app, window title, a browser's host;
+// never the screen). Off, it is a small card in the side column that explains it and turns it on.
+// On, the day view (TodayDayView.swift) takes its place in the main column. The pieces both share
+// live here: the controls (Pause, Turn off, Delete this day…, Delete everything…, each delete
+// behind a confirmation), the Accessibility prompt, app/site rows whose right-click changes the
+// category or marks a site private, app icons and category colours.
+import AppKit
 import SwiftUI
 import BurroCore
 
 struct TodayActivityCard: View {
+    var today: TodayStore
+
+    var body: some View {
+        TodayCard(title: "Activity", symbol: "waveform.path.ecg", color: AppAppearance.secondary) {
+            ActivityControls(today: today)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Notes the app you're in, its window title and a browser's site (host only).")
+                Text("Never the screen. Stays on this Mac for 30 days.")
+            }
+            .font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Recording/Paused, Pause or Turn on, and a menu with Turn off and the deletes.
+struct ActivityControls: View {
     var today: TodayStore
     @State private var confirm: Confirm?
     private enum Confirm { case day, all }
     private var tracker: ActivityTracker { today.tracker }
 
     var body: some View {
-        TodayCard(title: "Activity", symbol: "waveform.path.ecg", color: AppAppearance.secondary) {
-            controls
-            if !tracker.enabled {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Notes the app you're in, its window title and a browser's site (host only).")
-                    Text("Never the screen. Stays on this Mac for 30 days.")
-                }
-                .font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
-            } else if !tracker.accessibilityTrusted {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Image(systemName: "lock").font(.system(size: 10))
-                    Text("Window titles and sites need Accessibility.").fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 4)
-                    Button("Allow…") { tracker.requestAccessibility() }.buttonStyle(.plain).foregroundStyle(AppAppearance.blue)
-                        .help("Asks macOS for Accessibility and opens its settings pane. Without it, Burro records app time only.")
-                }
-                .font(.system(size: 11)).foregroundStyle(AppAppearance.secondary)
-            }
-            if let day = today.tracked, day.total > 0 {
-                summary(day)
-            } else if tracker.enabled {
-                Text(today.tracked == nil ? "Reading…" : today.isToday ? "Nothing recorded yet today." : "Nothing recorded that day.")
-                    .font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
-            }
-        }
-        .confirmationDialog(confirm == .all ? "Delete all recorded activity?" : "Delete this day's activity?",
-                            isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
-                            titleVisibility: .visible, presenting: confirm) { which in
-            Button("Delete", role: .destructive) {
-                if which == .all { tracker.deleteAll() } else { tracker.deleteDay(today.day) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { which in
-            Text(which == .all ? "Removes every day Burro recorded on this Mac. Your category rules stay."
-                 : "Removes what Burro recorded on \(today.day.formatted(.dateTime.weekday(.wide).month().day())). This can't be undone.")
-        }
-    }
-
-    @ViewBuilder private var controls: some View {
         HStack(spacing: 8) {
             if tracker.enabled {
                 Circle().fill(tracker.paused ? AppAppearance.amber : AppAppearance.green).frame(width: 7, height: 7)
@@ -76,6 +56,17 @@ struct TodayActivityCard: View {
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Pause, turn off or delete")
         }
+        .confirmationDialog(confirm == .all ? "Delete all recorded activity?" : "Delete this day's activity?",
+                            isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
+                            titleVisibility: .visible, presenting: confirm) { which in
+            Button("Delete", role: .destructive) {
+                if which == .all { tracker.deleteAll() } else { tracker.deleteDay(today.day) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { which in
+            Text(which == .all ? "Removes every day Burro recorded on this Mac. Your category rules stay."
+                 : "Removes what Burro recorded on \(today.day.formatted(.dateTime.weekday(.wide).month().day())). This can't be undone.")
+        }
     }
 
     private func pill(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
@@ -84,76 +75,103 @@ struct TodayActivityCard: View {
                 .background(AppAppearance.raised, in: Capsule())
         }.buttonStyle(.plain)
     }
+}
 
-    @ViewBuilder private func summary(_ day: ActivityDay) -> some View {
-        BigPair(left: TodaySummary.duration(day.focused), leftLabel: "focused", right: TodaySummary.duration(day.total), rightLabel: "tracked")
-        GeometryReader { geometry in
-            HStack(spacing: 2) {
-                ForEach(day.categories) { item in
-                    Rectangle().fill(ActivityStyle.color(item.category))
-                        .frame(width: max(2, (geometry.size.width - 2 * CGFloat(day.categories.count - 1)) * item.seconds / day.total))
-                        .help("\(item.category.title): \(TodaySummary.duration(item.seconds))")
+/// Window titles and sites need Accessibility; asked only when you click Allow.
+struct ActivityAccessPrompt: View {
+    var tracker: ActivityTracker
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "lock").font(.system(size: 10))
+            Text("Window titles and sites need Accessibility.").fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button("Allow…") { tracker.requestAccessibility() }.buttonStyle(.plain).foregroundStyle(AppAppearance.blue)
+                .help("Asks macOS for Accessibility and opens its settings pane. Without it, Burro records app time only.")
+        }
+        .font(.system(size: 11)).foregroundStyle(AppAppearance.secondary)
+    }
+}
+
+/// Right-click actions for an app or a site: change its category, or treat the site as private.
+struct ActivityCategoryMenu: View {
+    var tracker: ActivityTracker
+    var id: String
+    var name: String
+    var site: Bool
+    var body: some View {
+        let custom = site ? tracker.rules.hosts[id] : tracker.rules.apps[id]
+        Menu("Categorise \(name) as") {
+            ForEach(ActivityCategory.assignable) { category in
+                Button { set(category) } label: {
+                    if custom == category { Label(category.title, systemImage: "checkmark") } else { Text(category.title) }
                 }
             }
-        }
-        .frame(height: 6).clipShape(Capsule())
-        Text(day.categories.prefix(3).map { "\($0.category.title) \(TodaySummary.duration($0.seconds))" }.joined(separator: " · "))
-            .font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
-        Divider().overlay(AppAppearance.separator)
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(day.apps.prefix(4)) { item in row(item, site: false) }
-            ForEach(day.sites.prefix(3)) { item in row(item, site: true) }
-        }
-        if !day.entries.isEmpty {
-            Divider().overlay(AppAppearance.separator)
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(day.entries.suffix(5).reversed()) { entry in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Circle().fill(ActivityStyle.color(entry.category)).frame(width: 6, height: 6)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(entry.label).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                            Text("\(entry.start.formatted(date: .omitted, time: .shortened))–\(entry.end.formatted(date: .omitted, time: .shortened)) · \(entry.app) · \(entry.category.title)")
-                                .font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
-                        }
-                    }
-                }
+            if custom != nil {
+                Divider()
+                Button("Use the built-in category") { set(nil) }
             }
+        }
+        if site {
+            Button("Treat \(name) as private") { tracker.makePrivate(host: id) }
         }
     }
+    private func set(_ category: ActivityCategory?) {
+        if site { tracker.setCategory(category, host: id) } else { tracker.setCategory(category, app: id) }
+    }
+}
 
-    private func row(_ item: ActivityDay.Item, site: Bool) -> some View {
+/// An app or site with its time; right-click to recategorise.
+struct ActivityItemRow: View {
+    var tracker: ActivityTracker
+    var item: ActivityDay.Item
+    var site: Bool
+    var body: some View {
         HStack(spacing: 8) {
-            Circle().fill(ActivityStyle.color(item.category)).frame(width: 6, height: 6)
-            Image(systemName: site ? "globe" : "app").font(.system(size: 10)).foregroundStyle(AppAppearance.tertiary)
-            Text(item.name).font(.system(size: 12)).lineLimit(1)
+            Group {
+                if site { Image(systemName: "globe").font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary) }
+                else { ActivityAppIcon(bundleID: item.id, size: 16) }
+            }.frame(width: 16, height: 16)
+            // Shown like timeline titles, without "www."; rules still use the stored host (`item.id`).
+            Text(site && item.name.hasPrefix("www.") ? String(item.name.dropFirst(4)) : item.name)
+                .font(.system(size: 12)).lineLimit(1).truncationMode(.tail)
+            Circle().fill(ActivityStyle.color(item.category)).frame(width: 5, height: 5)
             Spacer(minLength: 6)
             Text(TodaySummary.duration(item.seconds)).font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.secondary)
         }
         .contentShape(Rectangle())
         .help("\(item.category.title) · right-click to change")
         .contextMenu {
-            if item.category != .private {
-                let custom = site ? tracker.rules.hosts[item.id] : tracker.rules.apps[item.id]
-                Menu("Categorise \(item.name) as") {
-                    ForEach(ActivityCategory.assignable) { category in
-                        Button { set(category, item, site) } label: {
-                            if custom == category { Label(category.title, systemImage: "checkmark") } else { Text(category.title) }
-                        }
-                    }
-                    if custom != nil {
-                        Divider()
-                        Button("Use the built-in category") { set(nil, item, site) }
-                    }
-                }
-                if site {
-                    Button("Treat \(item.name) as private") { tracker.makePrivate(host: item.id) }
-                }
-            }
+            if item.category != .private { ActivityCategoryMenu(tracker: tracker, id: item.id, name: item.name, site: site) }
         }
     }
+}
 
-    private func set(_ category: ActivityCategory?, _ item: ActivityDay.Item, _ site: Bool) {
-        if site { tracker.setCategory(category, host: item.id) } else { tracker.setCategory(category, app: item.id) }
+/// The app's own icon from Launch Services, cached; a neutral symbol when it isn't installed or there's no single app.
+struct ActivityAppIcon: View {
+    var bundleID: String?
+    var size: CGFloat
+    var body: some View {
+        if let bundleID, let image = ActivityAppIcons.image(bundleID) {
+            Image(nsImage: image).resizable().interpolation(.high).frame(width: size, height: size)
+        } else {
+            Image(systemName: bundleID == nil ? "square.stack" : "app.dashed").font(.system(size: size * 0.75))
+                .foregroundStyle(AppAppearance.tertiary).frame(width: size, height: size)
+        }
+    }
+}
+
+@MainActor enum ActivityAppIcons {
+    private static var cache: [String: NSImage?] = [:]
+    static func image(_ bundleID: String) -> NSImage? {
+        if let hit = cache[bundleID] { return hit }
+        if cache.count > 300 { cache.removeAll() }
+        let image = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID).map { url -> NSImage in
+            let icon = NSWorkspace.shared.icon(forFile: url.path)
+            icon.size = NSSize(width: 32, height: 32)
+            return icon
+        }
+        cache[bundleID] = image
+        return image
     }
 }
 
@@ -171,5 +189,10 @@ enum ActivityStyle {
         case .private: AppAppearance.tertiary
         case .other: AppAppearance.secondary
         }
+    }
+
+    /// A start–end range in the viewer's time format, e.g. "20:54 – 21:09".
+    static func range(_ start: Date, _ end: Date) -> String {
+        "\(start.formatted(date: .omitted, time: .shortened)) – \(end.formatted(date: .omitted, time: .shortened))"
     }
 }
