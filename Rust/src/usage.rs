@@ -433,27 +433,41 @@ impl Worker {
         let mut batch = Batch::default();
         let mut records: HashMap<Key, Record> = HashMap::new();
         let mut seen = HashSet::new();
-        let mut stack: Vec<PathBuf> = request.roots.iter().map(PathBuf::from).collect();
+        // Entries carry the type their directory reported, so only the roots and the files
+        // that can hold usage are ever stat'ed: a walk is thousands of entries, mostly not logs.
+        let mut stack: Vec<(PathBuf, Option<fs::FileType>)> = request
+            .roots
+            .iter()
+            .map(|root| (PathBuf::from(root), None))
+            .collect();
         let mut files = Vec::new();
-        while let Some(path) = stack.pop() {
+        while let Some((path, known)) = stack.pop() {
             if batch.visited >= MAX_VISITED || Instant::now() >= deadline {
                 batch.partial = true;
                 break;
             }
             batch.visited += 1;
-            let meta = match fs::symlink_metadata(&path) {
-                Ok(m) => m,
-                Err(e) => {
-                    if e.kind() != io::ErrorKind::NotFound {
-                        batch.partial = true;
+            let mut meta = None;
+            let kind = match known {
+                Some(kind) => kind,
+                None => match fs::symlink_metadata(&path) {
+                    Ok(m) => {
+                        let kind = m.file_type();
+                        meta = Some(m);
+                        kind
                     }
-                    continue;
-                }
+                    Err(e) => {
+                        if e.kind() != io::ErrorKind::NotFound {
+                            batch.partial = true;
+                        }
+                        continue;
+                    }
+                },
             };
-            if meta.is_symlink() {
+            if kind.is_symlink() {
                 continue;
             }
-            if meta.is_dir() {
+            if kind.is_dir() {
                 match fs::read_dir(&path) {
                     Ok(entries) => {
                         for entry in entries {
@@ -462,7 +476,7 @@ impl Worker {
                                 break;
                             }
                             match entry {
-                                Ok(e) => stack.push(e.path()),
+                                Ok(e) => stack.push((e.path(), e.file_type().ok())),
                                 Err(_) => batch.partial = true,
                             }
                         }
@@ -471,13 +485,28 @@ impl Worker {
                 }
                 continue;
             }
-            let modified = meta.mtime() as f64 + meta.mtime_nsec() as f64 / 1e9;
             let relevant = if request.provider == Provider::Grok {
                 path.file_name().is_some_and(|s| s == "signals.json")
             } else {
                 path.extension().is_some_and(|s| s == "jsonl")
             };
-            if !relevant || !meta.is_file() || modified < since {
+            if !relevant {
+                continue;
+            }
+            let meta = match meta {
+                Some(meta) => meta,
+                None => match fs::symlink_metadata(&path) {
+                    Ok(meta) => meta,
+                    Err(e) => {
+                        if e.kind() != io::ErrorKind::NotFound {
+                            batch.partial = true;
+                        }
+                        continue;
+                    }
+                },
+            };
+            let modified = meta.mtime() as f64 + meta.mtime_nsec() as f64 / 1e9;
+            if !meta.is_file() || modified < since {
                 continue;
             }
             files.push((path, meta));

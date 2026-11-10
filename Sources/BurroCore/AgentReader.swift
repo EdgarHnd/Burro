@@ -42,14 +42,17 @@ public enum AgentParsing {
     }
     public static func codexCompleted(tail: String) -> Bool { codexEvent(tail: tail)?.1 ?? false }
     public static func matchesClaudeStart(_ text: String, started: Date) -> Bool {
-        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
-        // Claude records may come from a UTC subprocess on a Mac using local time.
-        for zone in [TimeZone(secondsFromGMT: 0)!, TimeZone.current] {
-            formatter.timeZone = zone
-            if let expected = formatter.date(from: text), abs(started.timeIntervalSince(expected)) < 2 { return true }
+        startFormatters.contains { formatter in
+            formatter.date(from: text).map { abs(started.timeIntervalSince($0)) < 2 } ?? false
         }
-        return false
+    }
+    /// Built once: this runs twice for every Claude chat on every refresh, and creating a
+    /// formatter costs far more than using one. Claude records may come from a UTC subprocess
+    /// on a Mac using local time, so both are tried; the local one follows time zone changes.
+    private static let startFormatters: [DateFormatter] = [TimeZone(secondsFromGMT: 0)!, TimeZone.autoupdatingCurrent].map { zone in
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"; formatter.timeZone = zone
+        return formatter
     }
     public static func claudeState(_ status: String, live: Bool) -> AgentState {
         guard live else { return .inactive }

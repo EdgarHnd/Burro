@@ -74,6 +74,8 @@ public struct CommandRunner: Sendable {
         } catch { return CommandResult(code: -1, output: "", error: error.localizedDescription, timedOut: false) }
     }
     public func git(_ path: String, _ arguments: [String], timeout: Double = 20) -> CommandResult {
-        run("/usr/bin/git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "-C", path] + arguments, timeout: timeout)
+        // Git's index preload starts up to 20 threads per status. With several worktrees scanned
+        // at once they only contend in the kernel: the same answer for several times the CPU.
+        run("/usr/bin/git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.preloadIndex=false", "-C", path] + arguments, timeout: timeout)
     }
 }

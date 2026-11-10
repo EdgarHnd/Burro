@@ -366,18 +366,29 @@ impl Worker {
         let hours = (span / 3600.0).ceil() as usize;
         let mut batch = Batch { turns_by_hour: vec![0; hours], replies_by_hour: vec![0; hours], ..Batch::default() };
         let mut files: Vec<(PathBuf, Provider, f64)> = Vec::new();
-        let mut stack: Vec<(PathBuf, Provider)> = roots.iter().map(|(r, p)| (PathBuf::from(r), *p)).collect();
-        while let Some((path, provider)) = stack.pop() {
+        // Entries carry the type their directory reported; only the roots and logs are stat'ed.
+        let mut stack: Vec<(PathBuf, Provider, Option<fs::FileType>)> =
+            roots.iter().map(|(r, p)| (PathBuf::from(r), *p, None)).collect();
+        while let Some((path, provider, known)) = stack.pop() {
             if batch.visited >= MAX_VISITED || Instant::now() >= deadline {
                 batch.partial = true;
                 break;
             }
             batch.visited += 1;
-            let Ok(meta) = fs::symlink_metadata(&path) else { continue };
-            if meta.is_symlink() {
+            let mut meta = None;
+            let kind = match known {
+                Some(kind) => kind,
+                None => {
+                    let Ok(m) = fs::symlink_metadata(&path) else { continue };
+                    let kind = m.file_type();
+                    meta = Some(m);
+                    kind
+                }
+            };
+            if kind.is_symlink() {
                 continue;
             }
-            if meta.is_dir() {
+            if kind.is_dir() {
                 // Claude worker transcripts live in <session>/subagents; their turns aren't yours.
                 if path.file_name().is_some_and(|n| n == "subagents") {
                     continue;
@@ -389,15 +400,25 @@ impl Worker {
                                 batch.partial = true;
                                 break;
                             }
-                            stack.push((entry.path(), provider));
+                            stack.push((entry.path(), provider, entry.file_type().ok()));
                         }
                     }
                     Err(_) => batch.partial = true,
                 }
                 continue;
             }
+            if path.extension().is_none_or(|e| e != "jsonl") {
+                continue;
+            }
+            let meta = match meta {
+                Some(meta) => meta,
+                None => {
+                    let Ok(meta) = fs::symlink_metadata(&path) else { continue };
+                    meta
+                }
+            };
             let modified = meta.mtime() as f64 + meta.mtime_nsec() as f64 / 1e9;
-            if meta.is_file() && modified >= request.since && path.extension().is_some_and(|e| e == "jsonl") {
+            if meta.is_file() && modified >= request.since {
                 files.push((path, provider, modified));
             }
         }

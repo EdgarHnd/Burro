@@ -22,6 +22,14 @@ public struct Scanner: Sendable {
                 if configuration.repositories.contains(path) { warnings.append("Repository is unavailable: \(path)") }
                 continue
             }
+            // Agents work in dozens of folders, most outside any repository or in a worktree of
+            // one already listed. Reading `.git` answers both without starting Git for each.
+            let marker = Self.gitMarker(above: path)
+            guard marker.found else {
+                if configuration.repositories.contains(path) { warnings.append("Cannot inspect repository: \(path)") }
+                continue
+            }
+            if let known = marker.common, seen.contains(known) { continue }
             let common = runner.git(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
             guard common.succeeded else {
                 if configuration.repositories.contains(path) { warnings.append("Cannot inspect repository: \(path)") }
@@ -55,7 +63,10 @@ public struct Scanner: Sendable {
         let coverageWarnings = Array(Set(agents.warnings + processes.warnings)).sorted()
         let jobs = groups.flatMap { group in group.records.enumerated().filter { !$0.element.bare }.map { (group.path, group.base, $0.offset == 0, $0.element) } }
         var worktrees: [Worktree] = []
-        // Four bounded Git lanes prevent one slow repository from freezing the interface.
+        // Bounded Git lanes prevent one slow repository from freezing the interface. Each Git now
+        // runs single-threaded (see CommandRunner.git), so half the cores, four to eight lanes,
+        // finishes sooner than four preloading ones did and still uses less CPU in total.
+        let lanes = min(8, max(4, ProcessInfo.processInfo.activeProcessorCount / 2))
         await withTaskGroup(of: Worktree.self) { tasks in
             var next = 0
             func enqueue(_ job: (String, String?, Bool, WorktreeRecord)) {
@@ -78,7 +89,7 @@ public struct Scanner: Sendable {
                         facts: facts, agents: matched, processes: local, protectedByUser: protected, assessment: assessment)
                 }
             }
-            while next < min(4, jobs.count) { enqueue(jobs[next]); next += 1 }
+            while next < min(lanes, jobs.count) { enqueue(jobs[next]); next += 1 }
             while let tree = await tasks.next() {
                 worktrees.append(tree)
                 if next < jobs.count { enqueue(jobs[next]); next += 1 }
@@ -91,6 +102,39 @@ public struct Scanner: Sendable {
             return $0.branch.localizedStandardCompare($1.branch) == .orderedAscending
         }
         return ScanSnapshot(worktrees: worktrees, agents: agents.sessions, warnings: Array(Set(warnings)).sorted(), scannedAt: Date(), duration: Date().timeIntervalSince(start))
+    }
+    /// The nearest `.git` at or above a folder, and the shared Git folder it names when that is
+    /// plain to read. `found` is false only when nothing above the folder could be a repository;
+    /// `common` is nil whenever Git itself should decide (a bare repository, an unusual `.git`).
+    /// It only ever saves a Git call whose answer is already known; Git stays the authority.
+    static func gitMarker(above path: String) -> (found: Bool, common: String?) {
+        let fm = FileManager.default
+        var url = URL(fileURLWithPath: path)
+        for _ in 0..<256 {
+            let entry = url.appendingPathComponent(".git")
+            var isDirectory: ObjCBool = false
+            if fm.fileExists(atPath: entry.path, isDirectory: &isDirectory) {
+                if isDirectory.boolValue { return (true, Paths.canonical(entry.path)) }
+                // A linked worktree's `.git` is a one-line file naming its private folder, whose
+                // `commondir` names the repository's shared one.
+                guard let size = (try? fm.attributesOfItem(atPath: entry.path))?[.size] as? Int, size < 8192,
+                      let text = try? String(contentsOf: entry, encoding: .utf8), text.hasPrefix("gitdir: ") else { return (true, nil) }
+                let named = text.dropFirst(8).trimmingCharacters(in: .newlines)
+                guard !named.isEmpty, !named.contains("\n") else { return (true, nil) }
+                let folder = named.hasPrefix("/") ? URL(fileURLWithPath: named) : url.appendingPathComponent(named)
+                guard let shared = try? String(contentsOf: folder.appendingPathComponent("commondir"), encoding: .utf8) else { return (true, nil) }
+                let common = shared.trimmingCharacters(in: .newlines)
+                guard !common.isEmpty, !common.contains("\n") else { return (true, nil) }
+                return (true, Paths.canonical(common.hasPrefix("/") ? common : folder.appendingPathComponent(common).path))
+            }
+            // A bare repository has no `.git`; its own folder holds these.
+            if fm.fileExists(atPath: url.appendingPathComponent("HEAD").path), fm.fileExists(atPath: url.appendingPathComponent("objects").path) {
+                return (true, nil)
+            }
+            if url.path == "/" { return (false, nil) }
+            url.deleteLastPathComponent()
+        }
+        return (true, nil)
     }
     private func discover(in path: String, depth: Int) -> [String] {
         let fm = FileManager.default

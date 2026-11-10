@@ -9,6 +9,42 @@ final class GitIntegrationTests: XCTestCase, @unchecked Sendable {
         try f.git(path, ["add", "--", file])
         try f.git(path, ["-c", "commit.gpgsign=false", "commit", "-m", title])
     }
+    func testReadingDotGitAgreesWithGitAndOnlySkipsWhatGitWouldRefuse() throws {
+        let f = try Fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        let inside = f.path + "/nested/deeper"
+        try FileManager.default.createDirectory(atPath: inside, withIntermediateDirectories: true)
+        // The repository, a linked worktree and a folder deep inside one all name the same shared folder Git reports.
+        for path in [f.main, f.path, inside] {
+            let reported = Paths.canonical(try f.git(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trimmingCharacters(in: .whitespacesAndNewlines))
+            let marker = Scanner.gitMarker(above: Paths.canonical(path))
+            XCTAssertTrue(marker.found)
+            XCTAssertEqual(marker.common, reported, path)
+        }
+        // Outside any repository nothing is found, exactly where Git refuses.
+        let outside = f.root.appendingPathComponent("home").path
+        XCTAssertFalse(CommandRunner().git(outside, ["rev-parse", "--git-common-dir"]).succeeded)
+        XCTAssertFalse(Scanner.gitMarker(above: Paths.canonical(outside)).found)
+        // A bare repository and an unreadable `.git` are left for Git to decide.
+        let bare = f.root.appendingPathComponent("bare.git").path
+        try f.git(f.root.path, ["init", "--bare", bare])
+        XCTAssertTrue(Scanner.gitMarker(above: Paths.canonical(bare)).found)
+        XCTAssertNil(Scanner.gitMarker(above: Paths.canonical(bare)).common)
+        let odd = f.root.appendingPathComponent("odd").path
+        try FileManager.default.createDirectory(atPath: odd, withIntermediateDirectories: true)
+        try "not a pointer".write(toFile: odd + "/.git", atomically: true, encoding: .utf8)
+        XCTAssertTrue(Scanner.gitMarker(above: Paths.canonical(odd)).found)
+        XCTAssertNil(Scanner.gitMarker(above: Paths.canonical(odd)).common)
+    }
+    func testAScanStartedFromManyFoldersOfOneRepositoryListsItOnce() async throws {
+        let f = try Fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        let inside = f.path + "/nested"
+        try FileManager.default.createDirectory(atPath: inside, withIntermediateDirectories: true)
+        var config = f.config
+        config.repositories = [f.main, f.path, inside, f.root.appendingPathComponent("home").path]
+        let scan = await Scanner().scan(config)
+        XCTAssertEqual(scan.worktrees.map(\.path).sorted(), [Paths.canonical(f.main), Paths.canonical(f.path)].sorted())
+        XCTAssertTrue(scan.warnings.contains { $0.hasPrefix("Cannot inspect repository:") })
+    }
     func testCombinedSquashPatchIsRecognized() async throws {
         let f = try Fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
         try commit(f, path: f.path, file: "feature.txt", content: "first\n", title: "Add feature")

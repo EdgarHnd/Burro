@@ -382,29 +382,40 @@ impl Worker {
         }
         let wanted_codex = format!("-{}.jsonl", request.id);
         let wanted_claude = format!("{}.jsonl", request.id);
-        let mut stack: Vec<PathBuf> = request.roots.iter().map(PathBuf::from).collect();
+        // Entries carry the type their directory reported; only the roots and a match are stat'ed.
+        let mut stack: Vec<(PathBuf, Option<fs::FileType>)> =
+            request.roots.iter().map(|root| (PathBuf::from(root), None)).collect();
         let mut visited = 0;
-        while let Some(path) = stack.pop() {
+        while let Some((path, known)) = stack.pop() {
             visited += 1;
             if visited > MAX_VISITED {
                 return None;
             }
-            let Ok(meta) = fs::symlink_metadata(&path) else { continue };
-            if meta.is_symlink() {
+            let kind = match known {
+                Some(kind) => kind,
+                None => {
+                    let Ok(meta) = fs::symlink_metadata(&path) else { continue };
+                    meta.file_type()
+                }
+            };
+            if kind.is_symlink() {
                 continue;
             }
-            if meta.is_dir() {
+            if kind.is_dir() {
                 if path.file_name().is_some_and(|n| n == "subagents") {
                     continue;
                 }
                 if let Ok(entries) = fs::read_dir(&path) {
-                    stack.extend(entries.flatten().map(|e| e.path()));
+                    stack.extend(entries.flatten().map(|e| {
+                        let kind = e.file_type().ok();
+                        (e.path(), kind)
+                    }));
                 }
                 continue;
             }
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
             let hit = if request.provider == "codex" { name.ends_with(&wanted_codex) } else { name == wanted_claude };
-            if hit && meta.is_file() {
+            if hit && fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
                 self.locations.insert(request.id.clone(), path.clone());
                 if self.locations.len() > 2048 {
                     self.locations.clear();
