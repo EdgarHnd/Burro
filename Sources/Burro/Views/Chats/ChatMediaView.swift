@@ -121,18 +121,24 @@ struct ChatMediaView: View {
             state = .failed((error as? LocalizedError)?.errorDescription ?? "Couldn't load it.")
         case .success(let url):
             if kind == .video {
-                if let size = try? await AVURLAsset(url: url).loadTracks(withMediaType: .video).first?.load(.naturalSize), size.height > 0 {
-                    aspect = size.width / size.height
-                }
+                // Only the size (a plain value) crosses back; the asset's tracks stay off the main actor.
+                let size = await Task.detached(priority: .userInitiated) { () -> CGSize? in
+                    try? await AVURLAsset(url: url).loadTracks(withMediaType: .video).first?.load(.naturalSize)
+                }.value
+                if let size, size.height > 0 { aspect = size.width / size.height }
                 player = AVPlayer(url: url)
                 state = .video(url)
-            } else if let image = await Task.detached(priority: .userInitiated, operation: { Self.thumbnail(url) }).value {
+            } else if let image = await Task.detached(priority: .userInitiated, operation: { Decoded(image: Self.thumbnail(url)) }).value.image {
                 state = .image(image, url)
             } else {
                 state = .failed("Couldn't read this image.")
             }
         }
     }
+
+    /// Hands a freshly decoded image from the background task to the view. Nothing else holds the
+    /// image, so the hand-off is safe; older SDKs (Xcode 16) don't yet mark NSImage as sendable.
+    private struct Decoded: @unchecked Sendable { let image: NSImage? }
 
     /// A display-sized copy (big screenshots would otherwise be decoded at full size).
     nonisolated static func thumbnail(_ url: URL) -> NSImage? {

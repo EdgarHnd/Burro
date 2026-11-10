@@ -86,8 +86,9 @@ struct CoverField: View {
     }
     static let amber = Color(red: 1, green: 0.62, blue: 0.2)
 
-    /// Stable pseudo-random 0…1 per cell and tick (the same hash Maurice's cells use).
-    static func hash(_ a: Int, _ b: Int, _ c: Int) -> Double {
+    /// Stable pseudo-random 0…1 per cell and tick (the same hash Maurice's cells use). Plain
+    /// arithmetic, so the aquarium's layout code can call it from outside the main actor.
+    nonisolated static func hash(_ a: Int, _ b: Int, _ c: Int) -> Double {
         let h = sin(Double(a) * 127.1 + Double(b) * 311.7 + Double(c % 100_000) * 74.7) * 43758.5453
         return h - h.rounded(.down)
     }
