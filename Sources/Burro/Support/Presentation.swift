@@ -4,7 +4,7 @@ import BurroCore
 
 /// Top-level destinations. Home is the landing page; the others open from it, the toolbar or ⌘1–⌘5.
 enum AppPage: String, CaseIterable, Identifiable, Hashable {
-    case home, orchestrator, today, worktrees, machines, usage, health, remote
+    case home, orchestrator, today, worktrees, machines, usage, health, remote, timeline
     var id: String { rawValue }
     /// Pages in the top bar, in ⌘1–⌘8 order.
     static let navigable: [AppPage] = [.home, .orchestrator, .today, .remote, .worktrees, .machines, .usage, .health]
@@ -18,6 +18,7 @@ enum AppPage: String, CaseIterable, Identifiable, Hashable {
         case .usage: "Usage"
         case .health: "Mac Health"
         case .remote: "Chats"
+        case .timeline: "Timeline"
         }
     }
     var icon: String {
@@ -30,6 +31,7 @@ enum AppPage: String, CaseIterable, Identifiable, Hashable {
         case .usage: "gauge.with.dots.needle.33percent"
         case .health: NotchPage.mac.symbol
         case .remote: "bubble.left.and.bubble.right"
+        case .timeline: "chart.bar.doc.horizontal"
         }
     }
     var shortcut: KeyEquivalent { KeyEquivalent(Character(String((Self.navigable.firstIndex(of: self) ?? 8) + 1))) }

@@ -354,6 +354,8 @@ import BurroCore
         case .today:
             today.refresh(force: true); todos.sync()
             await refreshAgents()
+        case .timeline:
+            shipped.refreshTimeline()
         }
     }
     var refreshingCurrentPage: Bool {
@@ -364,6 +366,7 @@ import BurroCore
         case .machines: !machines.probing.isEmpty
         case .today: today.scanning
         case .home, .worktrees: scanning
+        case .timeline: false
         }
     }
     // MARK: New chat

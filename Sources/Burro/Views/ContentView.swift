@@ -19,6 +19,7 @@ struct ContentView: View {
                 case .usage: UsageDashboardView(usage: store.usage)
                 case .health: MacHealthView(health: store.health)
                 case .remote: remote
+                case .timeline: ShippedTimelineView(store: store)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

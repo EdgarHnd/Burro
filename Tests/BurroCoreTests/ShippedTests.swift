@@ -29,6 +29,12 @@ final class ShippedTests: XCTestCase {
     }
 
     private func fixture() throws -> ShippedDay {
+        let (graph, deployments, items, runs) = try parts()
+        return ShippedDay.build(day: start, end: end, repository: "acme/app", graph: [graph], deployments: deployments,
+                                activity: items, runs: runs, partial: false, now: end)
+    }
+
+    private func parts() throws -> (ShippedGraph, ShippedGraph, [ShippedActivity], ShippedRuns) {
         let merged = [
             pull(11, "Store: fitted previews bar", author: "dante", head: "claude/store-bar", name: "Dante Kim"),
             pull(12, "fix(insights): pie charts drew as a dot", author: "dante", head: "claude/pie", merged: "2026-11-09T12:00:00Z", name: "Dante Kim"),
@@ -83,8 +89,7 @@ final class ShippedTests: XCTestCase {
            "created_at": "2026-11-09T19:00:00Z", "actor": {"login": "dante"}}
         ]}
         """)
-        return ShippedDay.build(day: start, end: end, repository: "acme/app", graph: [graph], deployments: deployments,
-                                activity: items, runs: runs, partial: false, now: end)
+        return (graph, deployments, items, runs)
     }
 
     func testMergedPullRequestsStayInTheDayAndSkipPromotions() throws {
@@ -211,5 +216,393 @@ final class ShippedTests: XCTestCase {
         XCTAssertTrue(text.contains("- Vendor the Godot bridge (#20, open) · 3 pushes"))
         XCTAssertEqual(ShippedDay.count(1, "branch"), "1 branch")
         XCTAssertEqual(ShippedDay.count(2, "push"), "2 pushes")
+    }
+
+    // MARK: Written summary
+
+    func testSummaryInputHasTitlesPeopleAndProductionButNoPushCounts() throws {
+        let day = try fixture()
+        let input = try XCTUnwrap(ShippedSummary.input(day, calendar: utc))
+        XCTAssertTrue(input.hasPrefix("Day: Monday 2026-11-09\nRepository: acme/app (pull requests merge into staging"))
+        XCTAssertTrue(input.contains("People, in this order: You, Dante, dependabot"))
+        XCTAssertTrue(input.contains("- Web sign-up fixes · promoted staging to main · by You · live"))
+        XCTAssertTrue(input.contains("- Firebase: rules · production workflow · by Dante · failed"))
+        XCTAssertTrue(input.contains("Dante:\n- [Store] Fitted previews bar · +10 −2 lines\n- [Insights] Pie charts drew as a dot · +10 −2 lines"),
+                      "areas split off, oldest pull request first")
+        XCTAssertTrue(input.contains("- Pushed straight to main · by You · status unknown"))
+        XCTAssertFalse(input.contains(" push") || input.contains("pushes"), "no push counts: \(input)")
+        XCTAssertFalse(input.contains("Still in progress"), "everyone here merged something")
+        XCTAssertFalse(input.contains("#1"), "no pull request numbers")
+    }
+
+    func testSummaryInputListsWorkInProgressOnlyForPeopleWhoMergedNothing() throws {
+        var day = try fixture()
+        day.merged.removeAll { $0.author == "dante" }
+        let input = try XCTUnwrap(ShippedSummary.input(day, calendar: utc))
+        XCTAssertTrue(input.contains("Still in progress (pushed today, nothing merged yet):\nDante:\n- pushed commits straight to staging\n- branch claude/closed (no pull request yet)\n- branch claude/reused (no pull request yet)"))
+        XCTAssertFalse(input.contains("Vendor the Godot bridge"), "you merged, so your open branches aren't listed")
+
+        var quiet = day
+        quiet.merged = []; quiet.production = []; quiet.branches = []
+        XCTAssertNil(ShippedSummary.input(quiet, calendar: utc), "an empty day needs no summary and no call")
+        quiet.production = day.production
+        XCTAssertTrue(ShippedSummary.input(quiet, calendar: utc)?.contains("Merged into staging:\n- nothing merged") == true)
+    }
+
+    func testSummaryKeyChangesWithTheItemsNotWithRefreshes() throws {
+        let day = try fixture()
+        let key = ShippedSummary.key(input: try XCTUnwrap(ShippedSummary.input(day, calendar: utc)))
+        func keyOf(_ change: (inout ShippedDay) -> Void) -> String {
+            var copy = day
+            change(&copy)
+            return ShippedSummary.key(input: ShippedSummary.input(copy, calendar: utc) ?? "")
+        }
+        XCTAssertEqual(keyOf { $0.fetchedAt = $0.fetchedAt.addingTimeInterval(300) }, key, "a refresh that finds the same items")
+        XCTAssertEqual(keyOf { $0.branches[0].pushes += 3; $0.branches[0].lastAt = $0.branches[0].lastAt.addingTimeInterval(60) }, key,
+                       "more pushes to a known branch")
+        XCTAssertEqual(keyOf { $0.merged.reverse(); $0.production.reverse() }, key, "order doesn't matter")
+        XCTAssertEqual(keyOf {
+            $0.branches.append(ShippedDay.Branch(actor: "edgar", name: "codex/new", pushes: 1, forced: 0, created: true, lastAt: $0.day, pullRequest: nil))
+        }, key, "a new branch from someone who already merged")
+        XCTAssertNotEqual(keyOf {
+            var pull = $0.merged[0]; pull.number = 99; pull.title = "Store: a new thing"; $0.merged.append(pull)
+        }, key, "a new merge")
+        XCTAssertNotEqual(keyOf { $0.production[0].status = .succeeded }, key, "a production run finished")
+        XCTAssertNotEqual(keyOf { $0.production = [] }, key)
+        XCTAssertEqual(key.count, 32)
+    }
+
+    func testSummaryCacheIsPerRepositoryAndDayAndOnlyFreshForTheSameKey() throws {
+        let day = try fixture()
+        let id = ShippedSummary.cacheID(repository: "acme/app", day: day.day.addingTimeInterval(3600 * 20), calendar: utc)
+        XCTAssertEqual(id, "acme/app 2026-11-09")
+        XCTAssertNotEqual(ShippedSummary.cacheID(repository: "acme/web", day: day.day, calendar: utc), id)
+        XCTAssertNotEqual(ShippedSummary.cacheID(repository: "acme/app", day: end, calendar: utc), id)
+
+        var cache = ShippedSummaryCache()
+        let now = end
+        cache.store(ShippedSummary.Entry(key: "aaa", text: "You: old.", model: ShippedSummary.model, createdAt: now), for: id)
+        XCTAssertEqual(cache.fresh(id, key: "aaa")?.text, "You: old.")
+        XCTAssertNil(cache.fresh(id, key: "bbb"), "the day's items changed: write it again")
+        cache.store(ShippedSummary.Entry(key: "bbb", text: "You: new.", model: ShippedSummary.model, createdAt: now), for: id)
+        XCTAssertEqual(cache.entries.count, 1, "one entry per repository and day")
+        XCTAssertFalse(cache.entries[id]!.isFinal)
+        cache.store(ShippedSummary.Entry(key: "c", text: "You: ancient.", model: ShippedSummary.model, createdAt: now.addingTimeInterval(-300 * 86_400)),
+                    for: "acme/app 2026-01-01")
+        XCTAssertEqual(cache.entries["acme/app 2026-01-01"]?.text, "You: ancient.", "backfilled days are kept for good")
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("burro-summary-\(UUID().uuidString)/summaries.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try cache.write(to: url)
+        XCTAssertEqual(ShippedSummaryCache.read(from: url), cache, "survives a relaunch")
+        XCTAssertEqual(ShippedSummaryCache.read(from: url.appendingPathExtension("missing")), ShippedSummaryCache())
+    }
+
+    func testSummaryCleaningKeepsOnlyPeopleFromTheDayAndRealProduction() throws {
+        let day = try fixture()
+        let messy = """
+        Here's the summary:
+        - **You:** got the postcard fitting again
+          and fixed a thing.
+        * Dante: store previews and Insights pie charts.
+        Carol: invented work.
+        Production: web sign-up fixes went live.
+        """
+        XCTAssertEqual(ShippedSummary.clean(messy, day: day),
+                       "You: got the postcard fitting again and fixed a thing.\nDante: store previews and Insights pie charts.\nProduction: web sign-up fixes went live.")
+        var quiet = day
+        quiet.production = []
+        XCTAssertEqual(ShippedSummary.clean("You: postcard.\nProduction: nothing went out.", day: quiet), "You: postcard.",
+                       "production only when it happened")
+        XCTAssertNil(ShippedSummary.clean("I can't help with that.", day: day))
+        let lines = ShippedSummary.lines("You: postcard fixes.\nDante: store previews.")
+        XCTAssertEqual(lines.map(\.label), ["You", "Dante"])
+        XCTAssertEqual(lines.map(\.text), ["postcard fixes.", "store previews."])
+    }
+
+    func testSummaryReadsClaudesAnswerAndItsFailures() {
+        let ok = #"{"type":"result","subtype":"success","is_error":false,"result":"You: postcard fixes."}"#
+        XCTAssertEqual(try? ShippedSummary.parse("Warning: something on stderr\n" + ok, code: 0).get(), "You: postcard fixes.")
+        let signedOut = #"{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login"}"#
+        XCTAssertEqual(ShippedSummary.parse(signedOut, code: 1), .failure(.signedOut))
+        XCTAssertEqual(ShippedSummary.parse("Invalid API key · Fix external API key", code: 1), .failure(.signedOut))
+        XCTAssertEqual(ShippedSummary.parse("error: unknown option '--effort'\n", code: 1), .failure(.failed("Claude: error: unknown option '--effort'")))
+        XCTAssertEqual(ShippedSummary.parse("", code: 3), .failure(.failed("Claude exited with 3.")))
+        let args = ShippedSummary.arguments(input: "--model opus")
+        XCTAssertEqual(Array(args.suffix(2)), ["--", "--model opus"], "the input can never be read as a flag")
+        XCTAssertTrue(args.contains("--no-session-persistence"))
+        XCTAssertEqual(args[args.firstIndex(of: "--tools")! + 1], "", "no tools")
+        XCTAssertEqual(args[args.firstIndex(of: "--model")! + 1], "claude-haiku-5-5")
+    }
+
+    func testSummaryFallsBackWithoutClaudeAndRunsAFakeOne() throws {
+        let day = try fixture()
+        let input = try XCTUnwrap(ShippedSummary.input(day, calendar: utc))
+        XCTAssertEqual(ShippedSummary.generate(for: day, input: input, executable: nil), .failure(.noClaude))
+
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("burro-fake-claude-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        func fake(_ name: String, _ body: String) throws -> String {
+            let url = folder.appendingPathComponent(name)
+            try ("#!/bin/sh\n" + body + "\n").write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+            return url.path
+        }
+        // Claude's JSON line, with the brief as its result (in a code fence, as models sometimes do).
+        let answer = "```json\n{\"headline\": \"Postcard and store polish.\", \"people\": [{\"name\": \"You\", \"themes\": [{\"area\": \"My Home\", \"text\": \"Postcard fits again\"}]}, {\"name\": \"Mallory\", \"themes\": [{\"area\": \"X\", \"text\": \"Nothing real\"}]}], \"production\": \"Web sign-up fixes went live\"}\n```"
+        let line = String(decoding: try JSONSerialization.data(withJSONObject: ["type": "result", "is_error": false, "result": answer]), as: UTF8.self)
+        try line.write(to: folder.appendingPathComponent("answer.json"), atomically: true, encoding: .utf8)
+        let good = try fake("good", "cat '\(folder.appendingPathComponent("answer.json").path)'")
+        let brief = try XCTUnwrap(ShippedBrief(json: try ShippedSummary.generate(for: day, input: input, executable: good, folder: folder).get()))
+        XCTAssertEqual(brief.headline, "Postcard and store polish")
+        XCTAssertEqual(brief.people.map(\.name), ["You"], "people not in the day are dropped")
+        XCTAssertEqual(brief.production, "Web sign-up fixes went live", "the fixture day did ship")
+        let out = try fake("out", #"echo '{"type":"result","is_error":true,"result":"Not logged in · Please run /login"}'; exit 1"#)
+        XCTAssertEqual(ShippedSummary.generate(for: day, input: input, executable: out, folder: folder), .failure(.signedOut))
+        let odd = try fake("odd", #"echo '{"type":"result","is_error":false,"result":"Sure! Here is a summary."}'"#)
+        if case .failure(.failed) = ShippedSummary.generate(for: day, input: input, executable: odd, folder: folder) {} else {
+            XCTFail("an answer that isn't a brief is a failure, not a summary")
+        }
+    }
+
+    func testCopiedTextCarriesTheSummaryAfterTheHeadline() throws {
+        let day = try fixture()
+        let text = ShippedText.render(day, summary: "You: postcard fixes.\nDante: store previews.")
+        XCTAssertTrue(text.contains(day.headline + "\n\nYou: postcard fixes.\nDante: store previews.\n\nProduction"))
+        XCTAssertFalse(ShippedText.render(day).contains("postcard fixes"))
+    }
+
+    private var utc: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }
+
+    // MARK: Backfill and periods
+
+    func testARangeBuildsTheSameDayAsTheTodayPage() throws {
+        let (graph, deployments, items, runs) = try parts()
+        let range = ShippedHistory.Range(head: graph, merged: graph.data?.merged?.nodes ?? [], touched: graph.data?.touched?.nodes ?? [],
+                                         deployments: deployments.data?.repository?.deployments?.nodes ?? [], activity: items,
+                                         runs: runs.workflow_runs ?? [], activityComplete: true, start: start, end: end.addingTimeInterval(86_400),
+                                         repository: "acme/app", requests: 0)
+        let days = ShippedHistory.days(range, calendar: utc, now: end)
+        XCTAssertEqual(days.map(\.day), [start, end])
+        XCTAssertEqual(ShippedDigest(days[0], calendar: utc), ShippedDigest(try fixture(), calendar: utc),
+                       "same people, merges, production and branches: the app won't rewrite a backfilled day")
+        XCTAssertEqual(ShippedSummary.input(days[0], calendar: utc), ShippedSummary.input(try fixture(), calendar: utc))
+        XCTAssertEqual(days[1].branches.map(\.name), ["codex/bridge"], "the next day keeps only its own pushes")
+        XCTAssertTrue(days[1].merged.isEmpty)
+    }
+
+    func testDigestsRoundTripAndCountPushes() throws {
+        let digest = ShippedDigest(try fixture(), calendar: utc)
+        XCTAssertEqual(digest.date, "2026-11-09")
+        XCTAssertEqual(digest.people.map(\.name), ["You", "Dante", "dependabot"])
+        XCTAssertEqual(digest.people.first?.pushes, 4)
+        XCTAssertEqual(digest.shippedCount, 3)
+        XCTAssertEqual(digest.failedCount, 2)
+        let data = try JSONEncoder().encode(ShippedSummary.Entry(key: "k", text: "You: x.", model: "m", createdAt: end, digest: digest, final: true))
+        let back = try JSONDecoder().decode(ShippedSummary.Entry.self, from: data)
+        XCTAssertEqual(back.digest, digest)
+        XCTAssertTrue(back.isFinal)
+        let old = try JSONDecoder().decode(ShippedSummary.Entry.self, from: Data(#"{"key":"k","text":"t","model":"m","createdAt":0}"#.utf8))
+        XCTAssertNil(old.digest, "entries written before digests still read")
+        XCTAssertFalse(old.isFinal)
+    }
+
+    func testADayIsClosedHalfAnHourAfterMidnight() {
+        XCTAssertFalse(ShippedSummary.isClosed(start, now: end.addingTimeInterval(1799), calendar: utc))
+        XCTAssertTrue(ShippedSummary.isClosed(start, now: end.addingTimeInterval(1800), calendar: utc))
+        XCTAssertFalse(ShippedSummary.isClosed(end, now: end.addingTimeInterval(1800), calendar: utc))
+    }
+
+    func testWeeksAndMonthsHaveStableBoundsAndIDs() {
+        var calendar = utc
+        calendar.firstWeekday = 2
+        let week = ShippedPeriod.containing(start.addingTimeInterval(3600 * 30), .week, calendar: calendar)
+        XCTAssertEqual(week.cacheID(repository: "acme/app", calendar: calendar), "acme/app week 2026-11-09", "Monday-first weeks")
+        XCTAssertEqual(week.days(calendar: calendar).count, 7)
+        XCTAssertEqual(week.previous(calendar: calendar).cacheID(repository: "acme/app", calendar: calendar), "acme/app week 2026-11-02")
+        let month = ShippedPeriod.containing(start, .month, calendar: calendar)
+        XCTAssertEqual(month.cacheID(repository: "acme/app", calendar: calendar), "acme/app month 2026-11")
+        XCTAssertEqual(month.days(calendar: calendar).count, 30)
+        XCTAssertEqual(month.weeks(calendar: calendar).first?.cacheID(repository: "acme/app", calendar: calendar), "acme/app week 2026-10-26",
+                       "a month's first week can start in the month before")
+        XCTAssertEqual(month.weeks(calendar: calendar).count, 6)
+        XCTAssertFalse(week.isClosed(now: week.end, calendar: calendar))
+        XCTAssertTrue(week.isClosed(now: week.end.addingTimeInterval(1800), calendar: calendar))
+    }
+
+    func testAWeekReportPutsItsDaysTogether() throws {
+        var calendar = utc
+        calendar.firstWeekday = 2
+        let monday = ShippedDigest(try fixture(), calendar: utc)
+        var tuesdayDay = try fixture()
+        tuesdayDay.day = end
+        tuesdayDay.production = []
+        tuesdayDay.merged = tuesdayDay.merged.filter { $0.author == "dante" }.map { pull in
+            var pull = pull; pull.number += 100; pull.title = "Insights: board legends"; return pull
+        }
+        let tuesday = ShippedDigest(tuesdayDay, calendar: utc)
+        let week = ShippedPeriod.containing(start, .week, calendar: calendar)
+        let entries: [String: ShippedSummary.Entry] = [
+            "acme/app 2026-11-09": .init(key: "a", text: "You: postcard.", model: "m", createdAt: end, digest: monday, final: true),
+            "acme/app 2026-11-10": .init(key: "b", text: "Dante: legends.", model: "m", createdAt: end, digest: tuesday, final: true),
+        ]
+        let report = ShippedPeriodReport(period: week, repository: "acme/app", entries: entries, through: end.addingTimeInterval(3600 * 30), calendar: calendar)
+        XCTAssertEqual(report.days.count, 3, "through Wednesday")
+        XCTAssertEqual(report.missing, 1, "Wednesday was never read")
+        XCTAssertEqual(report.tallies.map(\.person.name), ["You", "Dante", "dependabot"])
+        XCTAssertEqual(report.tallies.map(\.merged), [1, 4, 1])
+        XCTAssertEqual(report.headline, "You merged 1 pull request into staging, Dante 4 and dependabot 1. Shipped to production 3 times. 2 production runs failed.")
+        let input = try XCTUnwrap(report.input)
+        XCTAssertTrue(input.hasPrefix("Period: one week, Monday 2026-11-09 to Wednesday 2026-11-11 (1 day not read)"))
+        XCTAssertTrue(input.contains("Dante (4):\n- [Insights] Pie charts drew as a dot · +10 −2 lines\n- [Insights] Board legends · +10 −2 lines\n- [Insights] Board legends · +10 −2 lines\n- [Store] Fitted previews bar"),
+                      "grouped by area, biggest area first: \(input)")
+        XCTAssertTrue(input.contains("- 2026-11-09: Web sign-up fixes · promoted staging to main · by You · live"))
+        XCTAssertFalse(report.isFinal(now: week.end.addingTimeInterval(7200), calendar: calendar), "a day is missing")
+        XCTAssertNil(report.summary)
+
+        let key = try XCTUnwrap(report.key)
+        var cached = entries
+        cached[week.cacheID(repository: "acme/app", calendar: calendar)] = .init(key: key, text: "You: the week.", model: "m", createdAt: end)
+        XCTAssertEqual(ShippedPeriodReport(period: week, repository: "acme/app", entries: cached, through: end.addingTimeInterval(3600 * 30), calendar: calendar).summary,
+                       "You: the week.", "written from these exact days")
+        cached["acme/app 2026-11-11"] = .init(key: "", text: "", model: "m", createdAt: end, digest: tuesday, final: true)
+        XCTAssertNil(ShippedPeriodReport(period: week, repository: "acme/app", entries: cached, through: end.addingTimeInterval(3600 * 30), calendar: calendar).summary,
+                     "a new day changes the week: write it again")
+
+        let text = report.render(summary: "You: the week.")
+        XCTAssertTrue(text.contains("You: the week.\n\nDays\nMon 9 Nov: You 1 · Dante 2 · dependabot 1 merged · shipped to production\n  You: postcard."), text)
+        XCTAssertTrue(text.hasSuffix("1 day not read yet."))
+        XCTAssertTrue(ShippedPeriodReport.instructions(.month).contains("never a day-by-day list"))
+    }
+
+    func testDaysBeforeTheRepositoryStartedDontCountAsMissing() throws {
+        var calendar = utc
+        calendar.firstWeekday = 2
+        let digest = ShippedDigest(try fixture(), calendar: utc)
+        let month = ShippedPeriod.containing(start, .month, calendar: calendar)
+        let report = ShippedPeriodReport(period: month, repository: "acme/app",
+                                         entries: ["acme/app 2026-11-09": .init(key: "", text: "", model: "m", createdAt: end, digest: digest, final: true)],
+                                         through: month.end.addingTimeInterval(-3600), calendar: calendar)
+        XCTAssertEqual(report.missing, 21, "1–8 November come before the first recorded day; 10–30 are missing")
+    }
+
+    func testClaudesCostIsRead() {
+        XCTAssertEqual(ShippedSummary.cost(#"{"type":"result","total_cost_usd":0.0005674,"result":"You: x."}"#), 0.0005674)
+        XCTAssertNil(ShippedSummary.cost("not json"))
+    }
+
+    func testRepeatedProductionPushesReadOnceWithACount() {
+        XCTAssertEqual(ShippedDigest.counted(["Pushed straight to main · by You · live", "Hotfix · by You · live", "Pushed straight to main · by You · live"]),
+                       ["Pushed straight to main · by You · live (×2)", "Hotfix · by You · live"])
+    }
+
+    func testAPeriodCallsEachPersonByOneName() throws {
+        var calendar = utc
+        calendar.firstWeekday = 2
+        var pushOnly = try fixture()
+        pushOnly.day = end
+        pushOnly.merged = []; pushOnly.production = []
+        pushOnly.people["dante"]?.name = nil
+        let tuesday = ShippedDigest(pushOnly, calendar: utc)
+        XCTAssertTrue(tuesday.people.contains { $0.name == "dante" }, "a push-only day knows only the login")
+        XCTAssertTrue(tuesday.input?.contains("- branch claude/reused (no pull request yet)") == true)
+        let week = ShippedPeriod.containing(start, .week, calendar: calendar)
+        let report = ShippedPeriodReport(period: week, repository: "acme/app", entries: [
+            "acme/app 2026-11-09": .init(key: "", text: "", model: "m", createdAt: end, digest: ShippedDigest(try fixture(), calendar: utc), final: true),
+            "acme/app 2026-11-10": .init(key: "", text: "", model: "m", createdAt: end, digest: tuesday, final: true),
+        ], through: end, calendar: calendar)
+        XCTAssertEqual(report.tallies.map(\.person.name), ["You", "Dante", "dependabot"], "one Dante, not Dante and dante")
+        XCTAssertEqual(report.tallies.first { $0.person.name == "Dante" }?.pushes, 6)
+    }
+
+    func testAProductionLineRunOntoAPersonsLineGoesBackOnItsOwn() throws {
+        let text = "You: web fixes and checkout. Production: two promotions went live.\nDante: Insights."
+        XCTAssertEqual(ShippedSummary.normalized(text), "You: web fixes and checkout.\nProduction: two promotions went live.\nDante: Insights.")
+        XCTAssertEqual(ShippedSummary.lines(text).map(\.label), ["You", "Production", "Dante"])
+        XCTAssertEqual(ShippedSummary.clean(text, day: try fixture()), "You: web fixes and checkout.\nProduction: two promotions went live.\nDante: Insights.")
+    }
+
+    func testSavingMergesWithWhatAnotherWriterPutInTheFile() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("burro-merge-\(UUID().uuidString)/summaries.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let digest = ShippedDigest(try fixture(), calendar: utc)
+        // A backfill wrote a day; the app, which loaded the file before, then saves today.
+        let stale = ShippedSummaryCache()
+        try ShippedSummaryCache(entries: ["acme/app 2026-11-09": .init(key: "a", text: "You: old day.", model: "m", createdAt: end, digest: digest, final: true)]).write(to: url)
+        try ShippedSummaryCache.save(["acme/app 2026-11-10": .init(key: "b", text: "You: today.", model: "m", createdAt: end)], known: stale, to: url)
+        let merged = ShippedSummaryCache.read(from: url)
+        XCTAssertEqual(merged.entries.count, 2, "the backfilled day survives the app's save")
+        XCTAssertEqual(merged.entries["acme/app 2026-11-09"]?.digest, digest)
+        XCTAssertTrue(merged.entries["acme/app 2026-11-09"]?.isFinal == true)
+    }
+
+    func testAWeekSoFarHasItsOwnCacheEntryUntilTheWeekIsWhole() {
+        var calendar = utc
+        calendar.firstWeekday = 2
+        let week = ShippedPeriod.containing(start, .week, calendar: calendar)
+        let later = week.end.addingTimeInterval(86_400 * 3)
+        XCTAssertEqual(ShippedPeriodReport.cacheID(period: week, repository: "acme/app", through: end, now: later, calendar: calendar),
+                       "acme/app week 2026-11-09 to 2026-11-10", "Monday and Tuesday of a past week")
+        XCTAssertEqual(ShippedPeriodReport.cacheID(period: week, repository: "acme/app", through: week.end.addingTimeInterval(-3600), now: later, calendar: calendar),
+                       "acme/app week 2026-11-09", "the whole week")
+        XCTAssertEqual(ShippedPeriodReport.cacheID(period: week, repository: "acme/app", through: end, now: end.addingTimeInterval(3600), calendar: calendar),
+                       "acme/app week 2026-11-09", "this week so far is the current week's own entry")
+    }
+
+    func testCopiedTextCarriesTheRecap() throws {
+        let text = ShippedText.render(try fixture(), summary: "You: postcard.", recap: [("Yesterday", "You: store.\nDante: pies."), ("Last week", "")])
+        XCTAssertTrue(text.contains("You: postcard.\n\nYesterday\n  You: store.\n  Dante: pies.\n\nProduction"), text)
+        XCTAssertFalse(text.contains("Last week"), "rows without text are left out")
+    }
+
+    // MARK: Briefs
+
+    func testABriefIsHeldToTheDaysPeopleAndShortLines() {
+        let answer = """
+        Here you go: {"headline": "A very long headline that just keeps on going well past what fits in one quick look at it.",
+         "people": [{"name": "You", "themes": [{"area": "Checkout", "text": "New checkout flow behind a flag."}, {"area": "", "text": "  "},
+                    {"area": "Support", "text": "a"}, {"area": "B", "text": "b"}, {"area": "C", "text": "c"}]},
+                    {"name": "You", "themes": [{"text": "duplicate"}]}, {"name": "Eve", "themes": [{"text": "invented"}]}],
+         "production": "Nothing went out"}
+        """
+        let brief = ShippedBrief.parse(answer, shape: .day, names: ["You", "Dante"], production: false)
+        XCTAssertEqual(brief?.headline.hasSuffix("…"), true, "capped at 16 words")
+        XCTAssertEqual(brief?.people.map(\.name), ["You"], "once each, and only people from the day")
+        XCTAssertEqual(brief?.people.first?.themes.map(\.text), ["New checkout flow behind a flag", "a", "b"], "three at most, empty ones dropped")
+        XCTAssertEqual(brief?.people.first?.themes.map(\.area), ["Checkout", "Support", "B"])
+        XCTAssertNil(brief?.production, "no production line when nothing went to production")
+        XCTAssertNil(ShippedBrief.parse("Sorry, I can't.", shape: .day, names: ["You"], production: false))
+        XCTAssertNil(ShippedBrief(json: "You: an older plain summary."), "older entries aren't briefs")
+    }
+
+    func testAPeriodBriefKeepsItsThemesAndWhoWorkedOnThem() throws {
+        let answer = #"{"headline": "Insights grew up", "themes": [{"area": "Insights", "text": "Dashboards and retention", "people": ["Dante", "Zed"]}, {"area": "Web", "text": "Sign-up fixed", "people": ["You"]}], "production": "Two promotions live"}"#
+        let brief = try XCTUnwrap(ShippedBrief.parse(answer, shape: .period, names: ["You", "Dante"], production: true))
+        XCTAssertEqual(brief.themes.first?.people, ["Dante"])
+        XCTAssertTrue(brief.people.isEmpty)
+        XCTAssertEqual(ShippedBrief(json: brief.json), brief, "round-trips through the cache")
+        XCTAssertEqual(brief.plainText, "Insights grew up\n- [Insights] Dashboards and retention (Dante)\n- [Web] Sign-up fixed (You)\nProduction: Two promotions live")
+        XCTAssertEqual(ShippedBrief.plain(brief.json), brief.plainText)
+        XCTAssertEqual(ShippedBrief.plain("You: old.\nDante: lines."), "You: old.\nDante: lines.")
+    }
+
+    func testCompactColumnsTakeEachPersonsBiggestThemeFirst() {
+        let brief = ShippedBrief(headline: "h", people: [
+            .init(name: "You", themes: [.init(area: "A", text: "you 1"), .init(area: "B", text: "you 2")]),
+            .init(name: "Dante", themes: [.init(area: "C", text: "dante 1"), .init(area: "D", text: "dante 2")]),
+        ])
+        XCTAssertEqual(brief.bullets(3).map(\.text), ["you 1", "dante 1", "you 2"])
+    }
+
+    func testAreasComeFromTheDataWithUntaggedWorkLast() throws {
+        let digest = ShippedDigest(try fixture(), calendar: utc)
+        XCTAssertEqual(digest.areas(for: "Dante").map(\.area), ["Insights", "Store"])
+        XCTAssertEqual(digest.areas().last?.area, "Other", "dependabot's untagged bump")
+        XCTAssertEqual(digest.areas().reduce(0) { $0 + $1.count }, digest.merged.count)
     }
 }

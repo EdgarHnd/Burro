@@ -1,7 +1,8 @@
 // What shipped on GitHub in one day, for one repository: pull requests merged into its default
 // branch (staging), production releases (promotions into main, production workflow runs and
 // Production deployments) and every push, per person. Read-only, through the GitHub CLI's own
-// sign-in; nothing is written to GitHub or kept on disk.
+// sign-in; nothing is written to GitHub or kept on disk (the written summary in
+// ShippedSummary.swift keeps its own small cache).
 import Foundation
 
 public struct ShippedDay: Sendable, Equatable {
@@ -12,6 +13,9 @@ public struct ShippedDay: Sendable, Equatable {
         public var isYou: Bool
         public var isBot: Bool
         public var id: String { login }
+        public init(login: String, name: String?, avatar: URL?, isYou: Bool, isBot: Bool) {
+            self.login = login; self.name = name; self.avatar = avatar; self.isYou = isYou; self.isBot = isBot
+        }
         /// "You", a first name, or the login.
         public var displayName: String {
             if isYou { return "You" }
@@ -217,7 +221,7 @@ struct ShippedGraph: Decodable, Sendable {
     struct PageInfo: Decodable, Sendable { let hasNextPage: Bool?; let endCursor: String? }
     struct Search: Decodable, Sendable { let issueCount: Int?; let pageInfo: PageInfo?; let nodes: [Pull]? }
     struct Named: Decodable, Sendable { let name: String? }
-    struct Nodes<Node: Decodable & Sendable>: Decodable, Sendable { let nodes: [Node]? }
+    struct Nodes<Node: Decodable & Sendable>: Decodable, Sendable { var nodes: [Node]?; var pageInfo: PageInfo? = nil }
     struct DeploymentStatus: Decodable, Sendable { let state: String?; let environmentUrl: String?; let logUrl: String? }
     struct Deployment: Decodable, Sendable {
         let createdAt: String?
@@ -668,9 +672,15 @@ public enum ShippedReader {
 
 /// A shipped day as plain Markdown-ish text: for copying into a chat, and for `burro-inspect`.
 public enum ShippedText {
-    public static func render(_ day: ShippedDay, calendar: Calendar = .current) -> String {
+    /// `summary` is the written summary for this exact day, when there is one; it follows the headline.
+    public static func render(_ day: ShippedDay, summary: String? = nil, recap: [(title: String, text: String)] = [],
+                              calendar: Calendar = .current) -> String {
         let time = Date.FormatStyle(date: .omitted, time: .shortened)
         var lines = ["Shipped on \(day.day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))) · \(day.repository)", day.headline]
+        if let summary, !summary.isEmpty { lines += [""] + ShippedBrief.plain(summary).split(whereSeparator: \.isNewline).map(String.init) }
+        for (title, text) in recap where !text.isEmpty {
+            lines += ["", title] + ShippedBrief.plain(text).split(whereSeparator: \.isNewline).map { "  " + $0 }
+        }
         if !day.production.isEmpty {
             lines += ["", "Production"]
             for release in day.production {

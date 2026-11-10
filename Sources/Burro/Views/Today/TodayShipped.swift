@@ -1,6 +1,7 @@
 // The Today page's Shipped section: what reached GitHub that day for the main project, read
 // through the GitHub CLI. One plain sentence on top (who merged how much, what went to
-// production), then Production, Merged into staging and Pushed, each grouped by person.
+// production) and a few written lines on what the work was, per person (by a small Claude model,
+// cached per day), then Production, Merged into staging and Pushed, each grouped by person.
 // On today it also offers yesterday, and opens on yesterday until something ships today.
 import AppKit
 import SwiftUI
@@ -19,10 +20,13 @@ struct TodayShippedSection: View {
         let showing: Pick = today.isToday ? (pick ?? automatic(shipped.state(today.day))) : .today
         let day = showing == .yesterday ? yesterday : today.day
         let state = shipped.state(day)
+        let recap = recapRows(for: day, isToday: today.isToday && showing == .today)
         VStack(alignment: .leading, spacing: 12) {
-            header(state: state, today: today, yesterday: yesterday, showing: showing)
+            header(state: state, today: today, yesterday: yesterday, showing: showing, recap: recap)
             switch state {
-            case .loaded(let value): ShippedDayView(day: value, live: today.isToday && showing == .today)
+            case .loaded(let value):
+                ShippedDayView(day: value, live: today.isToday && showing == .today, summary: shipped.summary(day), recap: recap,
+                               retry: { shipped.retrySummary(day) }, open: open)
             case .failed(let failure):
                 HomeEmptyCard(symbol: "exclamationmark.triangle", title: failure.title, detail: failure.detail) {
                     PillButton(title: "Try again", symbol: "arrow.clockwise") { shipped.refresh(day, force: true) }
@@ -41,7 +45,45 @@ struct TodayShippedSection: View {
         }
         // Again once the main project is known (the first scan may still be running).
         .task(id: "\(day.timeIntervalSince1970)|\(store.mainProject?.path ?? "")") { shipped.refresh(day) }
+        .task(id: "recap|\(day.timeIntervalSince1970)|\(shipped.digestVersion)|\(shipped.repository ?? "")") { shipped.refreshRecap(day) }
         .onChange(of: today.day) { _, _ in pick = nil }
+    }
+
+    /// The day before, the week so far and the week before, each as written lines.
+    private func recapRows(for day: Date, isToday: Bool) -> [RecapRow] {
+        let calendar = Calendar.current, shipped = store.shipped
+        let before = calendar.date(byAdding: .day, value: -1, to: day) ?? day
+        let week = ShippedPeriod.containing(day, .week)
+        var rows: [RecapRow] = []
+        let beforeDigest = shipped.dayDigest(before)
+        rows.append(RecapRow(id: "day", title: isToday ? "Yesterday" : "Day before", text: shipped.daySummary(before),
+                             writing: shipped.summaries[calendar.startOfDay(for: before)]?.writing == true,
+                             empty: shipped.hasDay(before) ? "Nothing reached GitHub." : nil, target: .day(before),
+                             count: beforeDigest?.merged.count, areas: AreaShare.from(beforeDigest?.areas() ?? []),
+                             productionDays: (beforeDigest?.shippedCount ?? 0) > 0 ? 1 : 0))
+        // On the week's first day the week so far is that day: nothing to add.
+        if week.start < calendar.startOfDay(for: day) {
+            let state = shipped.period(week, through: day)
+            rows.append(RecapRow(id: "week", title: isToday ? "This week so far" : "Week so far", text: state?.summary?.text,
+                                 writing: state?.summary?.writing == true, empty: state.map { $0.report.isEmpty ? "Nothing reached GitHub." : nil } ?? nil,
+                                 target: .timeline, count: state?.report.mergedCount, areas: AreaShare.from(state?.report.areas ?? []),
+                                 productionDays: state?.report.productionDays ?? 0))
+        }
+        let last = shipped.period(week.previous())
+        rows.append(RecapRow(id: "last", title: isToday ? "Last week" : "Week before", text: last?.summary?.text,
+                             writing: last?.summary?.writing == true, empty: last.map { $0.report.isEmpty ? "Nothing reached GitHub." : nil } ?? nil,
+                             target: .timeline, count: last?.report.mergedCount, areas: AreaShare.from(last?.report.areas ?? []),
+                             productionDays: last?.report.productionDays ?? 0))
+        return rows
+    }
+
+    private func open(_ target: RecapRow.Target) {
+        switch target {
+        case .day(let date):
+            if store.today.isToday, Calendar.current.isDateInYesterday(date) { pick = .yesterday } else { store.today.show(date) }
+        case .timeline:
+            store.page = .timeline
+        }
     }
 
     /// Today once anything has merged or gone out today; until then, yesterday's recap.
@@ -50,7 +92,7 @@ struct TodayShippedSection: View {
         return .today
     }
 
-    private func header(state: ShippedStore.State?, today: TodayStore, yesterday: Date, showing: Pick) -> some View {
+    private func header(state: ShippedStore.State?, today: TodayStore, yesterday: Date, showing: Pick, recap: [RecapRow]) -> some View {
         HStack(alignment: .center, spacing: 8) {
             Text("SHIPPED").font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(AppAppearance.tertiary)
             if case .loaded(let value) = state {
@@ -64,10 +106,22 @@ struct TodayShippedSection: View {
                 .buttonStyle(.plain).help("Open \(value.repository) on GitHub")
             }
             Spacer()
+            Button { store.page = .timeline } label: {
+                HStack(spacing: 3) {
+                    Text("Timeline")
+                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                }
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(AppAppearance.secondary)
+                .padding(.trailing, 6).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).help("How the project evolved, month by month and week by week")
             if case .loaded(let value) = state {
                 Button {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(ShippedText.render(value), forType: .string)
+                    let summary = store.shipped.summary(value.day).flatMap { $0.current ? $0.text : nil }
+                    NSPasteboard.general.setString(ShippedText.render(value, summary: summary, recap: recap.compactMap { row in
+                        row.text.map { (row.title, $0) }
+                    }), forType: .string)
                     copied = true
                     Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
                 } label: {
@@ -94,6 +148,35 @@ struct TodayShippedSection: View {
     }
 }
 
+/// One line of the recap under a day: what came just before it, in written form.
+struct RecapRow: Identifiable, Equatable {
+    enum Target: Equatable { case day(Date), timeline }
+    var id: String
+    var title: String
+    var text: String?
+    var writing: Bool
+    /// What to say when the period had nothing (nil while unknown).
+    var empty: String?
+    var target: Target
+    var count: Int?
+    var areas: [AreaShare] = []
+    var productionDays = 0
+}
+
+/// One area's share of the merged pull requests, for the thin theme bars.
+struct AreaShare: Equatable, Identifiable {
+    var area: String
+    var count: Int
+    var id: String { area }
+    /// The biggest few, the rest folded into "Other".
+    static func from(_ areas: [(area: String, count: Int)], keep: Int = 4) -> [AreaShare] {
+        let named = areas.filter { $0.area != "Other" }
+        let top = named.prefix(keep).map { AreaShare(area: $0.area, count: $0.count) }
+        let rest = named.dropFirst(keep).reduce(0) { $0 + $1.count } + (areas.first { $0.area == "Other" }?.count ?? 0)
+        return top + (rest > 0 ? [AreaShare(area: "Other", count: rest)] : [])
+    }
+}
+
 /// Opens a GitHub (or deployment) page in the browser; only https links GitHub handed back.
 @MainActor private func openOnGitHub(_ url: URL?) {
     guard let url, url.scheme == "https" else { return }
@@ -105,6 +188,10 @@ struct TodayShippedSection: View {
 private struct ShippedDayView: View {
     var day: ShippedDay
     var live: Bool
+    var summary: ShippedStore.Summary?
+    var recap: [RecapRow]
+    var retry: () -> Void
+    var open: (RecapRow.Target) -> Void
 
     var body: some View {
         let people = day.contributors
@@ -140,27 +227,227 @@ private struct ShippedDayView: View {
         }
     }
 
+    /// The Brief: a one-line gist beside the production pill, one column per person (counts, a
+    /// thin bar of where their merges went, two or three tagged bullets), then the recap.
     private func summary(_ people: [ShippedDay.Person]) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(day.isEmpty ? (live ? "Nothing on GitHub yet today." : "Nothing reached GitHub that day.") : day.headline)
-                .font(.system(size: 15, weight: .medium)).foregroundStyle(AppAppearance.text)
-                .fixedSize(horizontal: false, vertical: true)
+        let brief = summary?.text.flatMap(ShippedBrief.init(json:))
+        let digest = ShippedDigest(day)
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(day.isEmpty ? (live ? "Nothing on GitHub yet today." : "Nothing reached GitHub that day.") : (brief?.headline ?? day.headline))
+                    .font(.system(size: 15, weight: .medium)).foregroundStyle(AppAppearance.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .opacity(summary?.current == false && brief != nil ? 0.55 : 1)
+                Spacer(minLength: 8)
+                if !day.isEmpty { ProductionPill(day: day) }
+            }
+            if let text = summary?.text, brief == nil { ShippedSummaryText(summary: summary!) .id(text) }
             if !people.isEmpty {
-                // Each person's share, so yours and your teammates' read side by side.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 18) { ForEach(people.prefix(4)) { PersonTally(day: day, person: $0) } }
-                    VStack(alignment: .leading, spacing: 8) { ForEach(people.prefix(4)) { PersonTally(day: day, person: $0) } }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 22, alignment: .top)], alignment: .leading, spacing: 14) {
+                    ForEach(people.prefix(6)) { person in
+                        PersonBrief(day: day, person: person, areas: AreaShare.from(digest.areas(for: person.displayName)),
+                                    themes: brief?.people.first { $0.name == person.displayName }?.themes ?? [],
+                                    dimmed: summary?.current == false)
+                    }
                 }
+            }
+            if let production = brief?.production {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "flag").font(.system(size: 10.5, weight: .medium))
+                    Text(production)
+                }
+                .font(.system(size: 12.5)).foregroundStyle(AppAppearance.secondary)
+            }
+            if !recap.isEmpty {
+                Divider().overlay(AppAppearance.separator).padding(.vertical, 2)
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(recap) { row in RecapColumn(row: row) { open(row.target) } }
+                }
+                .padding(.horizontal, -8)
             }
             HStack(spacing: 6) {
                 Text(live ? "Updated \(day.fetchedAt.formatted(date: .omitted, time: .shortened)) · every 5 minutes while open"
                           : "From GitHub at \(day.fetchedAt.formatted(date: .omitted, time: .shortened))")
                 if day.partial { Text("· GitHub's lists were long, so some pushes may be missing").foregroundStyle(AppAppearance.amber) }
+                if let summary { summaryNote(summary) }
             }
             .font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading)
         .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
+    }
+
+    /// Where the summary came from, or why there isn't a current one.
+    @ViewBuilder private func summaryNote(_ summary: ShippedStore.Summary) -> some View {
+        if summary.writing, summary.text != nil {
+            Text("· Updating the summary…")
+        } else if let problem = summary.problem {
+            if case .failed = problem {
+                Button(action: retry) { Text("· \(problem.short) · ") + Text("Retry").foregroundStyle(AppAppearance.secondary) }
+                    .buttonStyle(.plain).help(problem.detail)
+            } else {
+                Text("· \(problem.short)").help(problem.detail)
+            }
+        } else if summary.current {
+            Text("· Summary by \(ShippedSummary.modelTitle)")
+                .help("Written by Claude \(ShippedSummary.modelTitle) from the pull request titles, areas, branches and production status below. Rewritten only when they change.")
+        }
+    }
+}
+
+/// "Nothing to production", "Shipped to production", "Production failed" as a quiet pill.
+private struct ProductionPill: View {
+    var day: ShippedDay
+    var body: some View {
+        let failed = day.production.contains { $0.status == .failed }
+        let shipped = day.production.filter { $0.status != .failed && $0.status != .cancelled }.count
+        let (text, color): (String, Color) = day.production.isEmpty ? ("Nothing to production", AppAppearance.tertiary)
+            : failed && shipped == 0 ? ("Production failed", Color(red: 0.92, green: 0.36, blue: 0.36))
+            : (shipped > 1 ? "\(shipped)× to production" : "Shipped to production", AppAppearance.green)
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(text).font(.system(size: 11.5, weight: .medium)).foregroundStyle(AppAppearance.secondary)
+        }
+        .padding(.horizontal, 9).padding(.vertical, 3)
+        .overlay(Capsule().strokeBorder(AppAppearance.separator))
+        .fixedSize()
+    }
+}
+
+/// A thin bar of where merges went: one grey segment per area, darkest the biggest.
+struct AreaBar: View {
+    var areas: [AreaShare]
+    var height: CGFloat = 6
+    var body: some View {
+        let total = max(1, areas.reduce(0) { $0 + $1.count })
+        GeometryReader { geometry in
+            HStack(spacing: 1.5) {
+                ForEach(Array(areas.enumerated()), id: \.element.id) { index, share in
+                    Rectangle().fill(AppAppearance.text.opacity(share.area == "Other" ? 0.14 : max(0.22, 0.78 - Double(index) * 0.16)))
+                        .frame(width: max(2, (geometry.size.width - CGFloat(areas.count - 1) * 1.5) * CGFloat(share.count) / CGFloat(total)))
+                        .help("\(share.area): \(share.count)")
+                }
+            }
+        }
+        .frame(height: height).clipShape(RoundedRectangle(cornerRadius: height / 2, style: .continuous))
+        .opacity(areas.isEmpty ? 0 : 1)
+    }
+}
+
+/// One person in the Brief: avatar, name and counts with their theme bar, then tagged bullets.
+private struct PersonBrief: View {
+    var day: ShippedDay
+    var person: ShippedDay.Person
+    var areas: [AreaShare]
+    var themes: [ShippedBrief.Theme]
+    var dimmed: Bool
+    var body: some View {
+        let merged = day.merged(by: person.login).count
+        let pushes = day.branches(by: person.login).reduce(0) { $0 + $1.pushes }
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                PersonAvatar(person: person, size: 22)
+                Text(person.displayName).font(.system(size: 13, weight: .semibold))
+                Text([merged > 0 ? "\(merged) merged" : nil, pushes > 0 ? ShippedDay.count(pushes, "push") : nil].compactMap { $0 }.joined(separator: " · "))
+                    .font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.tertiary).lineLimit(1)
+                if !areas.isEmpty { AreaBar(areas: areas).frame(width: 90) }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(themes.enumerated()), id: \.offset) { _, theme in BriefBullet(theme: theme) }
+            }
+            .opacity(dimmed ? 0.55 : 1)
+        }
+    }
+}
+
+/// "• [Area] what changed", wrapping under itself.
+struct BriefBullet: View {
+    var theme: ShippedBrief.Theme
+    var tag = true
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Circle().fill(AppAppearance.tertiary).frame(width: 3.5, height: 3.5).alignmentGuide(.firstTextBaseline) { $0[.bottom] + 3 }
+            if tag, let area = theme.area { AreaTag(text: area) }
+            Text(theme.text).font(.system(size: 13)).foregroundStyle(AppAppearance.text.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// One recap column: label and count, its theme bar, three short bullets. Opens that day, or the Timeline.
+private struct RecapColumn: View {
+    var row: RecapRow
+    var open: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 6) {
+                    Text(row.title.uppercased()).font(.system(size: 10.5, weight: .semibold)).tracking(0.6).foregroundStyle(AppAppearance.tertiary)
+                    if let count = row.count, count > 0 { Text("· \(count)").font(.system(size: 10.5, weight: .semibold)).monospacedDigit().foregroundStyle(AppAppearance.tertiary) }
+                    Spacer(minLength: 0)
+                    if row.productionDays > 0 {
+                        Image(systemName: "flag").font(.system(size: 9.5)).foregroundStyle(AppAppearance.tertiary)
+                            .help(row.productionDays == 1 ? "Something went to production" : "Production on \(row.productionDays) days")
+                    }
+                }
+                AreaBar(areas: row.areas, height: 5)
+                Group {
+                    if let text = row.text {
+                        if let brief = ShippedBrief(json: text) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                ForEach(Array(brief.bullets(3).enumerated()), id: \.offset) { _, theme in
+                                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                        Circle().fill(AppAppearance.tertiary).frame(width: 3, height: 3).alignmentGuide(.firstTextBaseline) { $0[.bottom] + 3 }
+                                        Text(theme.text).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                            }
+                        } else {
+                            Text(ShippedSummary.lines(text).map(\.text).joined(separator: " ")).lineLimit(4)
+                        }
+                    } else if row.writing {
+                        HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Writing…") }.foregroundStyle(AppAppearance.tertiary)
+                    } else {
+                        Text(row.empty ?? "Not read yet").foregroundStyle(AppAppearance.tertiary)
+                    }
+                }
+                .font(.system(size: 12.5)).foregroundStyle(AppAppearance.secondary)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(hovering ? AppAppearance.hover : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).onHover { hovering = $0 }
+        .help(row.target == .timeline ? "Open the Timeline" : "Open that day")
+    }
+}
+
+/// The written summary: one line per person, the name in the text colour and the rest a step
+/// quieter, so it reads as part of the header card. Dimmed while a newer one is being written.
+struct ShippedSummaryText: View {
+    var summary: ShippedStore.Summary
+    var body: some View {
+        if let text = summary.text {
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(Array(ShippedSummary.lines(text).enumerated()), id: \.offset) { _, line in
+                    (line.label.map { Text("\($0)  ").fontWeight(.semibold).foregroundStyle(AppAppearance.text) } ?? Text(""))
+                        + Text(line.text).foregroundStyle(AppAppearance.secondary)
+                }
+            }
+            .font(.system(size: 13.5)).lineSpacing(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .opacity(summary.current ? 1 : 0.55)
+            .animation(.easeOut(duration: 0.2), value: summary)
+        } else if summary.writing {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.mini)
+                Text("Writing a summary of the day…")
+            }
+            .font(.system(size: 12.5)).foregroundStyle(AppAppearance.tertiary)
+        }
     }
 }
 
@@ -450,7 +737,7 @@ private struct MoreButton: View {
     }
 }
 
-private struct AreaTag: View {
+struct AreaTag: View {
     var text: String
     var body: some View {
         Text(text).font(.system(size: 11, weight: .medium)).lineLimit(1).fixedSize()
