@@ -6,7 +6,8 @@ final class ActivityTimelineTests: XCTestCase {
     private let t0 = Date(timeIntervalSince1970: 1_794_150_000)
     private let xcode = "com.apple.dt.Xcode", arc = "company.thebrowser.Browser", slack = "com.tinyspeck.slackmacgap"
     private let mail = "com.apple.mail", spotify = "com.spotify.client", notes = "com.apple.Notes"
-    private let names = ["com.apple.dt.Xcode": "Xcode", "company.thebrowser.Browser": "Arc", "com.tinyspeck.slackmacgap": "Slack",
+    private let claude = "com.anthropic.claudefordesktop"
+    private let names = ["com.anthropic.claudefordesktop": "Claude", "com.apple.loginwindow": "loginwindow", "com.apple.dt.Xcode": "Xcode", "company.thebrowser.Browser": "Arc", "com.tinyspeck.slackmacgap": "Slack",
                          "com.apple.mail": "Mail", "com.spotify.client": "Spotify", "com.apple.Notes": "Notes", "com.apple.MobileSMS": "Messages"]
 
     /// (bundle, from minute, to minute, title, address)
@@ -128,5 +129,103 @@ final class ActivityTimelineTests: XCTestCase {
         let day = ActivityDay.build(spans: spans, rules: ActivityRules(), day: t0, calendar: calendar)
         XCTAssertEqual(day.blocks.map(\.category), [.build, .break])
         XCTAssertEqual(day.focus.longest?.duration, 3600)
+    }
+
+    // MARK: Readability
+
+    func testShortAlternatingRunsReadAsOneSwitchingBlock() {
+        // Claude and Arc, 3 to 6 minutes each, for half an hour: one block, not eight.
+        var items: [Item] = [], minute = 0.0
+        for (index, length) in [4.0, 3, 6, 5, 3, 4, 6, 3].enumerated() {
+            items.append(index % 2 == 0 ? (claude, minute, minute + length, "Claude", nil)
+                                        : (arc, minute, minute + length, "Overview - Focus town", "https://example.org/pomodoro"))
+            minute += length
+        }
+        let result = blocks(items)
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].title, "Switching between Claude and Arc")
+        XCTAssertEqual(minutes(result[0]), [0, 34])
+        // A long run of one app stays its own block beside it.
+        let withWork = blocks(items + [(xcode, 34, 80, "A.swift", nil)])
+        XCTAssertEqual(withWork.map(\.title), ["Switching between Claude and Arc", "Xcode · A.swift"])
+        // Two short runs aren't a switching stretch; the shorter one folds into the other.
+        let pair = blocks([(claude, 0, 7, nil, nil), (arc, 7, 11, nil, "https://example.org")])
+        XCTAssertEqual(pair.count, 1)
+        XCTAssertEqual(pair[0].title, "Claude")
+    }
+
+    func testRunsUnderFiveMinutesFold() {
+        let result = blocks([(xcode, 0, 20, "A.swift", nil), (slack, 20, 24.5, nil, nil), (xcode, 24.5, 50, "A.swift", nil)])
+        XCTAssertEqual(result.map(minutes), [[0, 50]])
+        XCTAssertEqual(result[0].title, "Xcode · A.swift")
+    }
+
+    func testTitlesNeverRepeatTheApp() {
+        XCTAssertEqual(blocks([(claude, 0, 20, "Claude", nil)])[0].title, "Claude")
+        XCTAssertEqual(blocks([(slack, 0, 20, "burro - Slack", nil)])[0].title, "Slack · burro")
+        XCTAssertEqual(blocks([(slack, 0, 20, "burro — Slack", nil)])[0].title, "Slack · burro")
+        XCTAssertEqual(blocks([(xcode, 0, 20, "Slack - notes.swift", nil)])[0].title, "Xcode · Slack - notes.swift", "only the app's own name")
+        XCTAssertEqual(ActivityTimeline.displayTitle("Claude - Claude", app: "Claude"), nil)
+        XCTAssertEqual(ActivityTimeline.displayTitle("  ", app: "Claude"), nil)
+    }
+
+    func testSubMinuteBlocksAndRowsAreHidden() throws {
+        // A 40-second Private blip between idle gaps is no block, but its time still counts.
+        let result = blocks([(xcode, 0, 20, nil, nil), (arc, 30, 30 + 40 / 60, nil, "https://chase.com"), (xcode, 40, 60, nil, nil)])
+        XCTAssertEqual(result.map(\.category), [.build, .build])
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"))
+        let spans = categorized([(xcode, 60, 120, nil, nil), (arc, 125, 125.5, nil, "https://usecharming.com"),
+                                 (spotify, 130, 130.4, nil, nil)]).map(\.span)
+        let day = ActivityDay.build(spans: spans, rules: ActivityRules(), day: t0, calendar: calendar)
+        XCTAssertEqual(day.apps.map(\.name), ["Xcode"], "apps under a minute aren't listed")
+        XCTAssertEqual(day.sites, [], "no 0m site rows")
+        XCTAssertEqual(day.total, 3600 + 30 + 24, "but their time counts")
+        let legend = day.legend(limit: 6)
+        XCTAssertEqual(legend.shown.map(\.category), [.build])
+        XCTAssertNil(legend.more, "no N more line for under a minute")
+        XCTAssertEqual(day.legend(limit: 0).more?.count, 3)
+    }
+
+    func testLockScreenIsNotActivity() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"))
+        let loginwindow = "com.apple.loginwindow"
+        let spans = categorized([(loginwindow, 0, 0, nil, nil), (loginwindow, 10, 12, nil, nil), (xcode, 60, 120, "A.swift", nil),
+                                 ("com.apple.ScreenSaver.Engine", 120, 150, nil, nil)]).map(\.span)
+        let day = ActivityDay.build(spans: spans, rules: ActivityRules(), day: t0, calendar: calendar)
+        XCTAssertEqual(day.blocks.map(\.title), ["Xcode · A.swift"])
+        XCTAssertEqual(day.total, 3600)
+        XCTAssertEqual(day.apps.map(\.name), ["Xcode"])
+        XCTAssertFalse(day.categories.contains { $0.category == .private })
+        XCTAssertTrue(ActivityPrivacy.isSystemScreen(loginwindow))
+        XCTAssertFalse(ActivityPrivacy.isSystemScreen(xcode))
+    }
+
+    func testLayoutStartsAtTheFirstHourAndCollapsesLongIdle() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        // The first block starts at :58, like a day that begins at 10:58.
+        let hour = calendar.dateInterval(of: .hour, for: t0)!.start
+        let base = hour.addingTimeInterval(3600 * 2)            // a whole hour
+        let rel = { (minute: Double) in base.timeIntervalSince(self.t0) / 60 + minute }
+        let day = blocks([(xcode, rel(58), rel(118), nil, nil), (xcode, rel(130), rel(160), nil, nil),     // 12-minute gap: drawn to scale
+                          (slack, rel(290), rel(320), nil, nil)])                                       // 2h10m idle: collapsed
+        XCTAssertEqual(day.count, 3)
+        let now = base.addingTimeInterval(330 * 60)
+        let layout = ActivityTimelineLayout(blocks: day, now: now, hourHeight: 60, minHeight: 20, idleHeight: 30, calendar: calendar)
+        XCTAssertEqual(layout.marks.first?.date, base, "starts at the first block's hour, not earlier")
+        XCTAssertEqual(layout.placed[0].y, 58, accuracy: 0.01)
+        XCTAssertEqual(layout.placed[1].y - (layout.placed[0].y + layout.placed[0].height), 12, accuracy: 0.01, "short gaps keep their length")
+        XCTAssertEqual(layout.idle.count, 1)
+        XCTAssertEqual(layout.idle[0].duration, 130 * 60)
+        XCTAssertEqual(layout.placed[2].y, layout.idle[0].y + 30, accuracy: 0.01, "the idle gap is one thin divider")
+        XCTAssertFalse(layout.marks.contains { $0.date > layout.idle[0].start && $0.date < layout.idle[0].end }, "no hour lines inside it")
+        XCTAssertEqual(layout.height, layout.placed[2].y + layout.placed[2].height + 10, accuracy: 0.01, "ends at now, not the next hour")
+        XCTAssertEqual(try XCTUnwrap(layout.nowY), layout.height, accuracy: 0.01)
+        // An hour idle since the last block collapses too.
+        let late = ActivityTimelineLayout(blocks: day, now: base.addingTimeInterval(420 * 60), hourHeight: 60, minHeight: 20, calendar: calendar)
+        XCTAssertEqual(late.idle.count, 2)
+        XCTAssertEqual(late.height, late.placed[2].y + late.placed[2].height + 30, accuracy: 0.01)
     }
 }

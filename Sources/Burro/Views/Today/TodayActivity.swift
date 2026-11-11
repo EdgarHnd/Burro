@@ -1,6 +1,6 @@
 // Burro's own on-device tracker on the Today page (frontmost app, window title, a browser's host;
-// never the screen). Off, it is a small card in the side column that explains it and turns it on.
-// On, the day view (TodayDayView.swift) takes its place in the main column. The pieces both share
+// never the screen). Off, it is a small full-width card that explains it and turns it on. On, the
+// day view (TodayDayView.swift) takes its place. The pieces both share
 // live here: the controls (Pause, Turn off, Delete this day…, Delete everything…, each delete
 // behind a confirmation), the Accessibility prompt, app/site rows whose right-click changes the
 // category or marks a site private, app icons and category colours.
@@ -12,14 +12,17 @@ struct TodayActivityCard: View {
     var today: TodayStore
 
     var body: some View {
-        TodayCard(title: "Activity", symbol: "waveform.path.ecg", color: AppAppearance.secondary) {
-            ActivityControls(today: today)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Notes the app you're in, its window title and a browser's site (host only).")
-                Text("Never the screen. Stays on this Mac for a year.")
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Label("Activity tracking is off", systemImage: "waveform.path.ecg").font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppAppearance.secondary).fixedSize()
+                ActivityControls(today: today)
             }
-            .font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("Turn it on to see focused time, a timeline of your day and where it went. Notes the app you're in, its window title and a browser's site (host only). Never the screen. Stays on this Mac for a year.")
+                .font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
         }
+        .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
     }
 }
 

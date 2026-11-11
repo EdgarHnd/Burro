@@ -1,9 +1,12 @@
 // The Today page's day timeline and focus stretches, worked out from a day's categorised spans.
 // Pure and deterministic, no AI: a block's title comes only from the app names, sanitised window
 // titles and hosts already in the spans. Blocks: consecutive time in one category with gaps under
-// 5 minutes; runs under 2 minutes fold into their longer neighbour (Private never folds either
-// way); a block names its app when one app has more than 60% of the time, otherwise the apps it
-// switched between, and takes the category with the most time in it. Imported spans (from another
+// 5 minutes; three or more touching runs under 10 minutes each (Claude, Arc, Claude, Arc…) become
+// one "Switching between" block that never joins a neighbour; runs under 5 minutes fold into their longer neighbour (Private never folds or joins
+// either way); blocks with under a minute of recorded time are left out. A block names its app
+// when one app has more than 60% of the time, otherwise the apps it switched between, and takes
+// the category with the most time in it. A window title never repeats the app ("Claude · Claude"
+// reads "Claude"; a trailing " - Slack" naming the app is dropped). Imported spans (from another
 // tracker, already one per activity) are one block each: never joined or folded either way, titled
 // by their own title (else the site or app) with the site or app as detail; Private ones read only
 // "Private". Focus stretches: non-Break time, joined across gaps or breaks under 2 minutes.
@@ -24,7 +27,7 @@ public struct ActivityBlock: Sendable, Equatable, Identifiable {
     public var detail: String?
     /// The block's apps by time, longest first (at most three).
     public var apps: [App]
-    /// The app with more than 60% of the block's time, if any.
+    /// The app with more than 60% of the block's time, if any; never set for a switching block.
     public var main: App?
     /// The main app's most-seen site, as stored (the title drops a leading "www."). Never set for Private.
     public var host: String?
@@ -52,7 +55,12 @@ public enum ActivityTimeline {
     /// Spans of one category closer than this join one block; a longer gap is idle and stays empty.
     public static let joinGap: TimeInterval = 300
     /// Runs shorter than this fold into a neighbour so the timeline isn't confetti.
-    public static let foldBelow: TimeInterval = 120
+    public static let foldBelow: TimeInterval = 300
+    /// This many touching runs in a row, each shorter than `switchBelow`, are one block of switching.
+    public static let switchRuns = 3
+    public static let switchBelow: TimeInterval = 600
+    /// Blocks with less recorded time than this aren't shown (their time still counts in the totals).
+    public static let minimumShown: TimeInterval = 60
     /// An app above this share of a block's time names the block.
     public static let mainShare = 0.6
     /// A focus stretch survives gaps (idle, Break or nothing recorded) shorter than this.
@@ -63,6 +71,8 @@ public enum ActivityTimeline {
         var spans: [ActivitySpan]
         /// Time per category, which folded runs can mix.
         var times: [ActivityCategory: TimeInterval]
+        /// Short alternating runs merged into one: titled "Switching between…", never joined with a neighbour.
+        var switching = false
         /// An imported span, which stays a block of its own.
         var imported: Bool { spans.first?.source != nil }
         var start: Date { spans.first?.start ?? .distantPast }
@@ -82,33 +92,71 @@ public enum ActivityTimeline {
             }
         }
 
-        // Fold the shortest short run into its longer touching neighbour until none is left.
+        func live(_ index: Int) -> Bool { runs.indices.contains(index) && runs[index].category != .private && !runs[index].imported }
         func touching(_ a: Int, _ b: Int) -> Bool {
-            guard runs.indices.contains(a), runs.indices.contains(b), runs[a].category != .private, runs[b].category != .private,
-                  !runs[a].imported, !runs[b].imported else { return false }
+            guard live(a), live(b) else { return false }
             let (first, second) = a < b ? (runs[a], runs[b]) : (runs[b], runs[a])
             return second.start.timeIntervalSince(first.end) < joinGap
         }
+        func merge(_ range: ClosedRange<Int>) {
+            var merged = runs[range.lowerBound]
+            for index in range.dropFirst() {
+                merged.spans += runs[index].spans
+                merged.times.merge(runs[index].times, uniquingKeysWith: +)
+            }
+            merged.spans.sort { $0.start < $1.start }
+            merged.category = merged.times.max { $0.value != $1.value ? $0.value < $1.value : $0.key.order > $1.key.order }?.key ?? merged.category
+            runs.replaceSubrange(range, with: [merged])
+        }
+        // Neighbours of one category side by side (after a merge or a fold) join; switching blocks stay apart.
+        func joinNeighbours() {
+            var i = 1
+            while i < runs.count {
+                if touching(i - 1, i), runs[i].category == runs[i - 1].category, !runs[i].switching, !runs[i - 1].switching {
+                    merge(i - 1...i)
+                } else { i += 1 }
+            }
+        }
+
+        // A stretch of short alternating runs is one block of switching.
+        var i = 0
+        while i < runs.count {
+            var j = i
+            while live(j), runs[j].duration < switchBelow, j == i || touching(j - 1, j) { j += 1 }
+            if j - i >= switchRuns { merge(i...j - 1); runs[i].switching = true }
+            i = j - i >= switchRuns ? i + 1 : max(i + 1, j)
+        }
+        joinNeighbours()
+
+        // Fold the shortest short run into its longer touching neighbour until none is left.
         while true {
             let candidates = runs.indices.filter { runs[$0].duration < foldBelow && (touching($0, $0 - 1) || touching($0, $0 + 1)) }
             guard let index = candidates.min(by: { runs[$0].duration < runs[$1].duration }) else { break }
             let previous = touching(index, index - 1) ? index - 1 : nil, next = touching(index, index + 1) ? index + 1 : nil
             let target: Int
             if let previous, let next { target = runs[next].duration > runs[previous].duration ? next : previous } else { target = previous ?? next! }
-            runs[target].spans = (runs[target].spans + runs[index].spans).sorted { $0.start < $1.start }
-            runs[target].times.merge(runs[index].times, uniquingKeysWith: +)
-            runs.remove(at: index)
-            // The fold can leave two neighbours of one category side by side: join them.
-            var i = 1
-            while i < runs.count {
-                if !runs[i].imported, !runs[i - 1].imported, runs[i].category == runs[i - 1].category, runs[i].start.timeIntervalSince(runs[i - 1].end) < joinGap {
-                    runs[i - 1].spans += runs[i].spans
-                    runs[i - 1].times.merge(runs[i].times, uniquingKeysWith: +)
-                    runs.remove(at: i)
-                } else { i += 1 }
+            let category = runs[target].category, switching = runs[target].switching
+            merge(min(index, target)...max(index, target))
+            runs[min(index, target)].category = category
+            runs[min(index, target)].switching = switching
+            joinNeighbours()
+        }
+        return runs.map(block).filter { $0.seconds.rounded() >= minimumShown }
+    }
+
+    /// A window title as a block shows it: without a trailing " - App" / " — App" naming the app, and
+    /// nil when all that's left is the app's own name.
+    public static func displayTitle(_ title: String?, app: String) -> String? {
+        guard var text = title?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return nil }
+        if !app.isEmpty {
+            for separator in [" - ", " — ", " – "] {
+                if let range = text.range(of: separator + app, options: [.caseInsensitive, .anchored, .backwards]) {
+                    text = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    break
+                }
             }
         }
-        return runs.map(block)
+        return text.isEmpty || text.caseInsensitiveCompare(app) == .orderedSame ? nil : text
     }
 
     private static func block(_ run: Run) -> ActivityBlock {
@@ -120,7 +168,7 @@ public enum ActivityTimeline {
         }
         let total = run.spans.reduce(0) { $0 + $1.duration }
         let apps = ranked(appTimes).map { ActivityBlock.App(bundleID: $0.key, name: names[$0.key] ?? $0.key, seconds: $0.value) }
-        let main = apps.first.flatMap { total > 0 && $0.seconds > mainShare * total ? $0 : nil }
+        let main = run.switching ? nil : apps.first.flatMap { total > 0 && $0.seconds > mainShare * total ? $0 : nil }
         let category = run.times.max { $0.value != $1.value ? $0.value < $1.value : $0.key.order > $1.key.order }?.key ?? run.category
         var block = ActivityBlock(start: run.start, end: run.end, category: category, title: "", detail: nil,
                                   apps: Array(apps.prefix(3)), main: main, host: nil, seconds: total)
@@ -144,7 +192,7 @@ public enum ActivityTimeline {
         var hosts: [String: TimeInterval] = [:], titles: [String: TimeInterval] = [:]
         for span in run.spans where span.bundleID == main.bundleID {
             if let host = span.host, host != ActivityPrivacy.privateHost { hosts[host, default: 0] += span.duration }
-            if let title = span.title { titles[title, default: 0] += span.duration }
+            if let title = displayTitle(span.title, app: main.name) { titles[title, default: 0] += span.duration }
         }
         let host = ranked(hosts).first?.key, title = ranked(titles).first?.key
         block.host = host

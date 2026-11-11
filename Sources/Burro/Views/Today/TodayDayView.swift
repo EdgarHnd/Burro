@@ -1,10 +1,11 @@
 // The Today page's day view while activity tracking is on: the controls, a timeline of the day's
-// blocks (ActivityTimeline in BurroCore groups the spans; idle time stays empty) and three cards:
-// Your day so far (a donut of categories and the apps and sites with the most time), Your focus
-// (focused time and the longest focus stretch on a strip of the day's stretches) and Break so far.
-// The cards sit beside the timeline on wide windows and below it on narrow ones. Right-click a
-// block or an app/site row to change its category or treat a site as private. Everything shown
-// came through ActivityPrivacy; this file stores nothing and sends nothing anywhere.
+// blocks (ActivityTimeline in BurroCore groups the spans; ActivityTimelineLayout places them, from
+// the first block's hour to the last block or now, with long idle gaps as thin dividers) and Your
+// day so far beside it at a matching height (a donut of categories, the apps and sites with the
+// most time, the day's focus stretches and what Break went to); below it on narrow windows. The
+// headline numbers (focused, tracked, Break, longest focus) are in the page's summary row.
+// Right-click a block or an app/site row to change its category or treat a site as private.
+// Everything shown came through ActivityPrivacy; this file stores nothing and sends nothing anywhere.
 import SwiftUI
 import BurroCore
 
@@ -33,7 +34,7 @@ struct TodayDaySection: View {
     }
 }
 
-/// The timeline with the three cards beside it (wide) or under it (narrow).
+/// The timeline with Your day so far beside it (wide, matching heights) or under it (narrow).
 struct TodayDayContent: View {
     var day: ActivityDay
     var isToday: Bool
@@ -44,33 +45,19 @@ struct TodayDayContent: View {
     static let sideBySide: CGFloat = 700
 
     var body: some View {
-        let wide = width >= Self.sideBySide
         Group {
-            if wide {
+            if width >= Self.sideBySide {
                 HStack(alignment: .top, spacing: 14) {
-                    // On wide windows the timeline grows to the side column's height before it scrolls.
+                    // The timeline fills the side card's height, then scrolls.
                     ActivityTimelineCard(day: day, isToday: isToday, now: now, tracker: tracker, available: sideHeight)
-                    VStack(spacing: 14) {
-                        ActivitySoFarCard(day: day, isToday: isToday, tracker: tracker, compact: true)
-                        ActivityFocusCard(day: day, isToday: isToday, now: now)
-                        ActivityBreakCard(day: day, isToday: isToday, tracker: tracker)
-                    }
-                    .frame(width: 272)
-                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { sideHeight = $0 }
+                    ActivityDayCard(day: day, isToday: isToday, now: now, tracker: tracker, compact: true)
+                        .frame(width: 300)
+                        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { sideHeight = $0 }
                 }
             } else {
                 VStack(spacing: 14) {
                     ActivityTimelineCard(day: day, isToday: isToday, now: now, tracker: tracker, available: nil)
-                    ActivitySoFarCard(day: day, isToday: isToday, tracker: tracker, compact: false)
-                    if width >= 540 {
-                        HStack(alignment: .top, spacing: 14) {
-                            ActivityFocusCard(day: day, isToday: isToday, now: now).frame(maxHeight: .infinity, alignment: .top)
-                            ActivityBreakCard(day: day, isToday: isToday, tracker: tracker).frame(maxHeight: .infinity, alignment: .top)
-                        }.fixedSize(horizontal: false, vertical: true)
-                    } else {
-                        ActivityFocusCard(day: day, isToday: isToday, now: now)
-                        ActivityBreakCard(day: day, isToday: isToday, tracker: tracker)
-                    }
+                    ActivityDayCard(day: day, isToday: isToday, now: now, tracker: tracker, compact: false)
                 }
             }
         }
@@ -86,53 +73,69 @@ struct ActivityTimelineCard: View {
     var isToday: Bool
     var now: Date
     var tracker: ActivityTracker
-    /// The card's height to fill before scrolling (the side column's), or nil for the default cap.
+    /// The card's height to match (the side card's), or nil for the default cap.
     var available: CGFloat?
-    @State private var chrome: CGFloat = 80
+    @State private var chrome: CGFloat = 60
     static let hourHeight: CGFloat = 72
     static let minBlock: CGFloat = 28
+    static let idleHeight: CGFloat = 30
     static let maxHeight: CGFloat = 560
     private static let gutter: CGFloat = 50
 
     var body: some View {
-        let layout = TimelineLayout(blocks: day.blocks, now: isToday ? now : nil, hourHeight: Self.hourHeight, minHeight: Self.minBlock)
-        let cap = available.map { max(320, $0 - chrome - 36 - 12) } ?? Self.maxHeight
+        let cap = available.map { max(240, $0 - chrome - 36 - 12) } ?? Self.maxHeight
+        let layout = layout(cap: cap)
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Label("Timeline", systemImage: "calendar.day.timeline.left").font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(AppAppearance.secondary)
-                Spacer()
-                Text("\(day.blocks.count) block\(day.blocks.count == 1 ? "" : "s")").font(.system(size: 11)).monospacedDigit()
-                    .foregroundStyle(AppAppearance.tertiary)
-            }
-            FlowLayout(spacing: 6) {
-                ForEach(day.categories) { item in
-                    HStack(spacing: 5) {
-                        Circle().fill(ActivityStyle.color(item.category)).frame(width: 7, height: 7)
-                        Text(item.category.title).font(.system(size: 11, weight: .medium)).foregroundStyle(AppAppearance.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Label("Timeline", systemImage: "calendar.day.timeline.left").font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(AppAppearance.secondary)
+                    Spacer()
+                    Text("\(day.blocks.count) block\(day.blocks.count == 1 ? "" : "s")").font(.system(size: 11)).monospacedDigit()
+                        .foregroundStyle(AppAppearance.tertiary)
+                }
+                FlowLayout(spacing: 6) {
+                    ForEach(day.legend(limit: .max).shown) { item in
+                        HStack(spacing: 5) {
+                            Circle().fill(ActivityStyle.color(item.category)).frame(width: 7, height: 7)
+                            Text(item.category.title).font(.system(size: 11, weight: .medium)).foregroundStyle(AppAppearance.secondary)
+                        }
+                        .padding(.horizontal, 9).frame(height: 22)
+                        .background(AppAppearance.raised, in: Capsule())
+                        .help("\(item.category.title): \(TodaySummary.duration(item.seconds))")
                     }
-                    .padding(.horizontal, 9).frame(height: 22)
-                    .background(AppAppearance.raised, in: Capsule())
-                    .help("\(item.category.title): \(TodaySummary.duration(item.seconds))")
                 }
             }
-            }
             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { chrome = $0 }
-            // Today opens at the bottom, where "now" is; past days open at their first block.
-            ScrollView(.vertical) {
-                canvas(layout).padding(.vertical, 8)
+            if layout.placed.isEmpty {
+                Text("Only moments under a minute so far.").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
+            } else {
+                // Today opens at the bottom, where "now" is; past days open at their first block.
+                ScrollView(.vertical) {
+                    canvas(layout).padding(.vertical, 8)
+                }
+                .scrollIndicators(.automatic)
+                .defaultScrollAnchor(isToday ? .bottom : .top)
+                .id(day.day)
+                .frame(height: min(CGFloat(layout.height) + 16, cap))
             }
-            .scrollIndicators(.automatic)
-            .defaultScrollAnchor(isToday ? .bottom : .top)
-            .id(day.day)
-            .frame(height: min(layout.height + 16, cap))
         }
-        .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18).frame(maxWidth: .infinity, minHeight: available, alignment: .topLeading)
         .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
     }
 
-    private func canvas(_ layout: TimelineLayout) -> some View {
+    /// Beside a taller side card, hours stretch (up to 2.5×) so the timeline fills the card instead of leaving it empty.
+    private func layout(cap: CGFloat) -> ActivityTimelineLayout {
+        let make = { (hour: CGFloat) in
+            ActivityTimelineLayout(blocks: day.blocks, now: isToday ? now : nil, hourHeight: hour, minHeight: Self.minBlock, idleHeight: Self.idleHeight)
+        }
+        let base = make(Self.hourHeight)
+        guard available != nil, base.height > 0, base.height + 16 < cap else { return base }
+        let scale = min(2.5, (cap - 16) / base.height)
+        return scale > 1.05 ? make(Self.hourHeight * scale) : base
+    }
+
+    private func canvas(_ layout: ActivityTimelineLayout) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(layout.marks, id: \.date) { mark in
                 HStack(spacing: 8) {
@@ -140,81 +143,51 @@ struct ActivityTimelineCard: View {
                         .foregroundStyle(AppAppearance.tertiary).lineLimit(1).frame(width: Self.gutter - 8, alignment: .trailing)
                     Rectangle().fill(AppAppearance.separator).frame(height: 1)
                 }
-                .frame(height: 12).padding(.top, max(0, mark.y - 6))
+                .frame(height: 12).padding(.top, max(0, CGFloat(mark.y) - 6))
+            }
+            ForEach(layout.idle) { gap in
+                IdleDivider(gap: gap)
+                    .frame(height: CGFloat(gap.height))
+                    .padding(.leading, Self.gutter).padding(.top, CGFloat(gap.y))
             }
             ForEach(layout.placed) { placed in
-                ActivityBlockView(block: placed.block, height: placed.height - 3, tracker: tracker)
-                    .frame(height: placed.height - 3)
-                    .padding(.leading, Self.gutter).padding(.top, placed.y + 1.5)
+                ActivityBlockView(block: placed.block, height: CGFloat(placed.height) - 3, tracker: tracker)
+                    .frame(height: CGFloat(placed.height) - 3)
+                    .padding(.leading, Self.gutter).padding(.top, CGFloat(placed.y) + 1.5)
             }
             if let y = layout.nowY {
                 HStack(spacing: 0) {
                     Circle().fill(AppAppearance.amber).frame(width: 7, height: 7)
                     Rectangle().fill(AppAppearance.amber).frame(height: 1.5)
                 }
-                .padding(.leading, Self.gutter - 4).padding(.top, max(0, y - 3.5))
+                .padding(.leading, Self.gutter - 4).padding(.top, max(0, CGFloat(y) - 3.5))
                 .allowsHitTesting(false)
                 .accessibilityLabel("Now")
             }
         }
-        .frame(maxWidth: .infinity, minHeight: layout.height, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: CGFloat(layout.height), alignment: .topLeading)
     }
 }
 
-/// Where each block and hour line goes. Blocks get at least `minHeight`, so the axis stretches
-/// a little around short blocks instead of letting them overlap; hour lines follow the same
-/// stretched scale, so a label always sits at its true time relative to the blocks.
-struct TimelineLayout {
-    struct Placed: Identifiable {
-        var block: ActivityBlock
-        var y: CGFloat
-        var height: CGFloat
-        var id: TimeInterval { block.id }
-    }
-    struct Mark { var date: Date; var y: CGFloat }
-    private(set) var placed: [Placed] = []
-    private(set) var marks: [Mark] = []
-    private(set) var height: CGFloat = 0
-    private(set) var nowY: CGFloat?
-    private var anchors: [(date: Date, y: CGFloat)] = []
-
-    init(blocks: [ActivityBlock], now: Date?, hourHeight: CGFloat, minHeight: CGFloat, calendar: Calendar = .current) {
-        guard let first = blocks.first, let last = blocks.map(\.end).max() else { return }
-        let perSecond = hourHeight / 3600
-        let from = calendar.dateInterval(of: .hour, for: first.start)?.start ?? first.start
-        let latest = max(last, now ?? last)
-        let lastHour = calendar.dateInterval(of: .hour, for: latest)?.start ?? latest
-        let to = lastHour == latest ? latest : (calendar.date(byAdding: .hour, value: 1, to: lastHour) ?? latest)
-        var time = from, y: CGFloat = 0
-        anchors.append((from, 0))
-        for block in blocks {
-            y += max(0, block.start.timeIntervalSince(time)) * perSecond
-            let height = max(minHeight, block.duration * perSecond)
-            anchors.append((max(time, block.start), y))
-            placed.append(Placed(block: block, y: y, height: height))
-            y += height
-            time = max(time, block.end)
-            anchors.append((time, y))
+/// A long idle gap, collapsed: a dashed line with "Idle · 2h 10m" and its range on hover.
+private struct IdleDivider: View {
+    var gap: ActivityTimelineLayout.Idle
+    var body: some View {
+        HStack(spacing: 8) {
+            dash
+            Text("Idle · \(TodaySummary.duration(gap.duration))").font(.system(size: 10, weight: .medium)).monospacedDigit()
+                .foregroundStyle(AppAppearance.tertiary).fixedSize()
+            dash
         }
-        y += max(0, to.timeIntervalSince(time)) * perSecond
-        anchors.append((to, y))
-        height = y
-        var hour = from
-        while hour <= to {
-            marks.append(Mark(date: hour, y: map(hour)))
-            guard let next = calendar.date(byAdding: .hour, value: 1, to: hour) else { break }
-            hour = next
-        }
-        if let now, now >= from, now <= to { nowY = map(now) }
+        .frame(maxHeight: .infinity)
+        .help("Away \(ActivityStyle.range(gap.start, gap.end))")
+        .accessibilityElement(children: .combine)
     }
-
-    /// Time to height along the stretched scale.
-    func map(_ date: Date) -> CGFloat {
-        guard let after = anchors.firstIndex(where: { $0.date >= date }) else { return anchors.last?.y ?? 0 }
-        guard after > 0 else { return anchors[0].y }
-        let a = anchors[after - 1], b = anchors[after]
-        let span = b.date.timeIntervalSince(a.date)
-        return span > 0 ? a.y + (b.y - a.y) * date.timeIntervalSince(a.date) / span : b.y
+    private var dash: some View {
+        Line().stroke(AppAppearance.separator, style: StrokeStyle(lineWidth: 1, dash: [3, 3])).frame(height: 1)
+    }
+    private struct Line: Shape {
+        func path(in rect: CGRect) -> Path { Path { $0.move(to: CGPoint(x: 0, y: rect.midY)); $0.addLine(to: CGPoint(x: rect.maxX, y: rect.midY)) } }
     }
 }
 
@@ -306,12 +279,14 @@ struct FlowLayout: SwiftUI.Layout {
     }
 }
 
-// MARK: Cards
+// MARK: Your day so far
 
-/// The categories as a donut with the total in the middle, then the apps and sites with the most time.
-struct ActivitySoFarCard: View {
+/// The categories as a donut with the total in the middle, the apps and sites with the most time,
+/// the day's focus stretches on a strip, and what Break went to.
+struct ActivityDayCard: View {
     var day: ActivityDay
     var isToday: Bool
+    var now: Date
     var tracker: ActivityTracker
     var compact: Bool
 
@@ -319,15 +294,50 @@ struct ActivitySoFarCard: View {
         TodayCard(title: isToday ? "Your day so far" : "Your day", symbol: "chart.pie", color: AppAppearance.blue) {
             if compact {
                 VStack(spacing: 14) { donut.frame(maxWidth: .infinity); legend }
+                if hasItems {
+                    Divider().overlay(AppAppearance.separator)
+                    mostTime
+                }
             } else {
-                HStack(alignment: .center, spacing: 22) { donut; legend.frame(maxWidth: 280) }
+                // Under the timeline: the donut and its legend beside Most time, instead of a long single column.
+                HStack(alignment: .top, spacing: 24) {
+                    HStack(alignment: .center, spacing: 18) { donut; legend }.frame(maxWidth: .infinity)
+                    if hasItems { mostTime.frame(maxWidth: .infinity) }
+                }
             }
-            Divider().overlay(AppAppearance.separator)
-            VStack(alignment: .leading, spacing: 7) {
-                Text("MOST TIME").font(.system(size: 10, weight: .semibold)).tracking(0.6).foregroundStyle(AppAppearance.tertiary)
-                ForEach(day.apps.prefix(4)) { item in ActivityItemRow(tracker: tracker, item: item, site: false) }
-                ForEach(day.sites.prefix(3)) { item in ActivityItemRow(tracker: tracker, item: item, site: true) }
+            if let first = day.blocks.first?.start, let last = day.blocks.map(\.end).max(), !day.focus.stretches.isEmpty {
+                Divider().overlay(AppAppearance.separator)
+                section("FOCUS") {
+                    FocusStrip(stretches: day.focus.stretches, longest: day.focus.longest, from: first, to: isToday ? max(last, now) : last)
+                    Text("\(day.focus.stretches.count) stretch\(day.focus.stretches.count == 1 ? "" : "es"); the longest is highlighted")
+                        .font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
+                        .help("A stretch is time outside Break; idle time or a break under 2 minutes doesn't end it.")
+                }
             }
+            let breaks = (day.apps.map { ($0, false) } + day.sites.map { ($0, true) }).filter { $0.0.category == .break }
+                .sorted { $0.0.seconds > $1.0.seconds }.prefix(3)
+            if !breaks.isEmpty {
+                Divider().overlay(AppAppearance.separator)
+                section("BREAK WENT TO") {
+                    ForEach(Array(breaks), id: \.0.id) { item, site in ActivityItemRow(tracker: tracker, item: item, site: site) }
+                }
+            }
+        }
+    }
+
+    private var hasItems: Bool { !day.apps.isEmpty || !day.sites.isEmpty }
+
+    private var mostTime: some View {
+        section("MOST TIME") {
+            ForEach(day.apps.prefix(4)) { item in ActivityItemRow(tracker: tracker, item: item, site: false) }
+            ForEach(day.sites.prefix(3)) { item in ActivityItemRow(tracker: tracker, item: item, site: true) }
+        }
+    }
+
+    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title).font(.system(size: 10, weight: .semibold)).tracking(0.6).foregroundStyle(AppAppearance.tertiary)
+            content()
         }
     }
 
@@ -340,13 +350,14 @@ struct ActivitySoFarCard: View {
                 Text("tracked").font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
             }.padding(.horizontal, 20)
         }
-        .frame(width: 128, height: 128)
+        .frame(width: 120, height: 120)
         .accessibilityElement(children: .combine)
     }
 
     private var legend: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(day.categories.prefix(6)) { item in
+        let legend = day.legend(limit: 6)
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(legend.shown) { item in
                 HStack(spacing: 8) {
                     Circle().fill(ActivityStyle.color(item.category)).frame(width: 7, height: 7)
                     Text(item.category.title).font(.system(size: 12)).lineLimit(1)
@@ -355,13 +366,12 @@ struct ActivitySoFarCard: View {
                 }
                 .help("\(Int((item.seconds / max(day.total, 1) * 100).rounded()))% of tracked time")
             }
-            if day.categories.count > 6 {
-                let rest = day.categories.dropFirst(6).reduce(0) { $0 + $1.seconds }
+            if let more = legend.more {
                 HStack(spacing: 8) {
                     Circle().strokeBorder(AppAppearance.tertiary).frame(width: 7, height: 7)
-                    Text("\(day.categories.count - 6) more").font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
+                    Text("\(more.count) more").font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
                     Spacer(minLength: 6)
-                    Text(TodaySummary.duration(rest)).font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.secondary)
+                    Text(TodaySummary.duration(more.seconds)).font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.secondary)
                 }
             }
         }.frame(maxWidth: .infinity)
@@ -390,38 +400,6 @@ struct ActivityDonut: View {
             }
         }
         .background(Circle().stroke(AppAppearance.raised, lineWidth: lineWidth).padding(lineWidth / 2))
-    }
-}
-
-/// Focused time (everything except Break) and the longest stretch, on a strip of the day's stretches.
-struct ActivityFocusCard: View {
-    var day: ActivityDay
-    var isToday: Bool
-    var now: Date
-
-    var body: some View {
-        let longest = day.focus.longest
-        TodayCard(title: "Your focus", symbol: "scope", color: AppAppearance.amber) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(TodaySummary.duration(day.focused)).font(.system(size: 30, weight: .semibold, design: .rounded)).monospacedDigit()
-                        .lineLimit(1)
-                    Text("focused").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                }
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(longest.map { TodaySummary.duration($0.duration) } ?? "—").font(.system(size: 20, weight: .semibold, design: .rounded))
-                        .monospacedDigit().lineLimit(1).foregroundStyle(longest == nil ? AppAppearance.tertiary : AppAppearance.amber)
-                    Text("longest stretch").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                }
-            }
-            if let first = day.blocks.first?.start, let last = day.blocks.map(\.end).max(), !day.focus.stretches.isEmpty {
-                FocusStrip(stretches: day.focus.stretches, longest: longest, from: first, to: isToday ? max(last, now) : last)
-                Text("\(day.focus.stretches.count) focus stretch\(day.focus.stretches.count == 1 ? "" : "es")")
-                    .font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
-                    .help("A stretch is time outside Break; idle time or a break under 2 minutes doesn't end it.")
-            }
-        }
     }
 }
 
@@ -469,46 +447,5 @@ struct FocusStrip: View {
             Spacer(minLength: 0)
         }
         .font(.system(size: 10, weight: .medium)).monospacedDigit().foregroundStyle(AppAppearance.amber).lineLimit(1).fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-/// Time on Break against everything tracked, and what it went to.
-struct ActivityBreakCard: View {
-    var day: ActivityDay
-    var isToday: Bool
-    var tracker: ActivityTracker
-
-    var body: some View {
-        let breakTime = day.categories.first { $0.category == .break }?.seconds ?? 0
-        let share = day.total > 0 ? breakTime / day.total : 0
-        let items = (day.apps.map { ($0, false) } + day.sites.map { ($0, true) }).filter { $0.0.category == .break }
-            .sorted { $0.0.seconds > $1.0.seconds }.prefix(3)
-        TodayCard(title: isToday ? "Break so far" : "Break", symbol: "cup.and.saucer", color: ActivityStyle.color(.break)) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(TodaySummary.duration(breakTime)).font(.system(size: 30, weight: .semibold, design: .rounded)).monospacedDigit().lineLimit(1)
-                    Text("on Break").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                }
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(TodaySummary.duration(day.total)).font(.system(size: 20, weight: .semibold, design: .rounded)).monospacedDigit()
-                        .lineLimit(1).foregroundStyle(AppAppearance.secondary)
-                    Text("tracked").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                }
-            }
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(AppAppearance.raised)
-                    Capsule().fill(ActivityStyle.color(.break)).frame(width: share > 0 ? max(6, geometry.size.width * share) : 0)
-                }
-            }.frame(height: 6)
-            Text(breakTime > 0 ? "\(Int((share * 100).rounded()))% of tracked time" : "No Break time\(isToday ? " yet" : "")")
-                .font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
-            if !items.isEmpty {
-                VStack(alignment: .leading, spacing: 7) {
-                    ForEach(Array(items), id: \.0.id) { item, site in ActivityItemRow(tracker: tracker, item: item, site: site) }
-                }
-            }
-        }
     }
 }

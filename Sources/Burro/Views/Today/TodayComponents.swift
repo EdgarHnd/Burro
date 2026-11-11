@@ -1,5 +1,6 @@
-// Pieces of the Today page: the date header, chat groups and the stat cards. The tracked-activity
-// card is in TodayActivity.swift.
+// Pieces of the Today page: the date header, the summary row of stat tiles (one row that wraps,
+// sized to its content), the hours strip, and chat groups. The tracked-activity pieces are in
+// TodayActivity.swift and TodayDayView.swift.
 import SwiftUI
 import BurroCore
 
@@ -137,8 +138,9 @@ private struct TodayChatRow: View {
     }
 }
 
-// MARK: Stat cards
+// MARK: Summary
 
+/// A card titled by a coloured label; it sizes to its content.
 struct TodayCard<Content: View>: View {
     var title: String
     var symbol: String
@@ -149,50 +151,153 @@ struct TodayCard<Content: View>: View {
             Label(title, systemImage: symbol).font(.system(size: 13, weight: .semibold)).foregroundStyle(color)
             content()
         }
-        .padding(18).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(18).frame(maxWidth: .infinity, alignment: .topLeading)
         .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
     }
 }
 
-struct BigPair: View {
-    var left: String
-    var leftLabel: String
-    var right: String? = nil
-    var rightLabel: String? = nil
-    var leftColor: Color = AppAppearance.text
+/// The day's numbers in one row of compact tiles that wraps on narrow windows. With tracking on,
+/// tracked focus is the headline; the time from your first to your last message is a secondary fact
+/// in the hours card. With tracking off, that span leads instead ("With agents").
+struct TodaySummaryRow: View {
+    struct Todos { var done: Int; var open: Int; var added: Int }
+    var activity: DailyActivity?
+    var tracked: ActivityDay?
+    var tracking: Bool
+    var isToday: Bool
+    /// Today only.
+    var todos: Todos?
+    var waitingNow: Int
+
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(left).font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
-                    .foregroundStyle(left == "—" ? AppAppearance.tertiary : leftColor)
-                Text(leftLabel).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
+        TileGrid(minWidth: 120, spacing: 10) {
+            if tracking { trackedTiles } else { chatSpanTile }
+            TodayTile(title: "Messages", symbol: "bubble.left", color: AppAppearance.blue,
+                      value: activity.map { "\($0.turns)" } ?? "—",
+                      caption: activity.map { "sent · \($0.replies) replies" } ?? "sent · replies")
+                .help("Messages you sent and agent replies, across Codex and Claude on this Mac.")
+            if let todos {
+                TodayTile(title: "To-dos", symbol: "checklist", color: AppAppearance.green, value: "\(todos.done)",
+                          caption: "done · \(todos.open) open", valueColor: todos.done > 0 ? AppAppearance.green : nil)
+                    .help("Done today, still open, and \(todos.added) added today.")
             }
-            Spacer()
-            if let right, let rightLabel {
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(right).font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
-                        .foregroundStyle(right == "—" ? AppAppearance.tertiary : AppAppearance.secondary)
-                    Text(rightLabel).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                }
-            }
+            let decision = TodaySummary.decisions(asked: activity?.questions ?? 0, waitingNow: waitingNow)
+            TodayTile(title: "Questions", symbol: "questionmark.bubble", color: AppAppearance.amber,
+                      value: decision.asked > 0 ? "\(decision.answered)/\(decision.asked)" : "0",
+                      caption: waitingNow > 0 ? "answered · \(waitingNow) waiting" : "answered")
+                .help("Explicit questions agents asked (Codex request_user_input, Claude AskUserQuestion) and chats waiting on you now. Approval prompts aren't logged by the tools, so they aren't included.")
         }
+    }
+
+    @ViewBuilder private var trackedTiles: some View {
+        let day = tracked.flatMap { $0.total > 0 ? $0 : nil }
+        let breakTime = day?.categories.first { $0.category == .break }?.seconds ?? 0
+        let longest = day?.focus.longest
+        TodayTile(title: "Focused", symbol: "scope", color: AppAppearance.amber, value: day.map { TodaySummary.duration($0.focused) } ?? "—",
+                  caption: "outside Break")
+            .help("Tracked time outside Break on this Mac.")
+        TodayTile(title: "Tracked", symbol: "waveform.path.ecg", color: AppAppearance.secondary,
+                  value: day.map { TodaySummary.duration($0.total) } ?? "—", caption: "at this Mac")
+            .help("Everything Burro recorded; idle time and the lock screen don't count.")
+        TodayTile(title: "Break", symbol: "cup.and.saucer", color: ActivityStyle.color(.break),
+                  value: day.map { _ in TodaySummary.duration(breakTime) } ?? "—",
+                  caption: day.map { breakTime > 0 ? "\(Int((breakTime / $0.total * 100).rounded()))% of tracked" : "none\(isToday ? " yet" : "")" } ?? "of tracked")
+        TodayTile(title: "Longest focus", symbol: "timer", color: AppAppearance.amber,
+                  value: longest.map { TodaySummary.duration($0.duration) } ?? "—",
+                  caption: longest.map { ActivityStyle.range($0.start, $0.end) } ?? "no stretch yet")
+            .help("A focus stretch is time outside Break; idle time or a break under 2 minutes doesn't end it.")
+    }
+
+    @ViewBuilder private var chatSpanTile: some View {
+        TodayTile(title: "With agents", symbol: "clock", color: AppAppearance.amber,
+                  value: activity?.span.map(TodaySummary.duration) ?? "—",
+                  caption: activity?.firstTurn.flatMap { first in activity?.lastTurn.map { ActivityStyle.range(first, $0) } }
+                      ?? (activity == nil ? "reading your logs…" : "no messages yet"))
+            .help("From your first to your last message to an agent.")
     }
 }
 
-struct TodayWorkedCard: View {
-    var today: TodayStore
+/// One stat: a coloured label, a number and one line of context.
+struct TodayTile: View {
+    var title: String
+    var symbol: String
+    var color: Color
+    var value: String
+    var caption: String
+    var valueColor: Color? = nil
     var body: some View {
-        let activity = today.activity, tracked = today.tracked
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(color).lineLimit(1)
+            Text(value).font(.system(size: 24, weight: .semibold, design: .rounded)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+                .foregroundStyle(value == "—" ? AppAppearance.tertiary : valueColor ?? AppAppearance.text)
+            Text(caption).font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).lineLimit(1).truncationMode(.tail)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Equal-width tiles in as few rows as fit, balanced (7 tiles that need two rows go 4 + 3); each
+/// row is as tall as its tallest tile.
+struct TileGrid: SwiftUI.Layout {
+    var minWidth: CGFloat
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? minWidth * CGFloat(subviews.count)
+        let grid = arrange(width: width, subviews)
+        return CGSize(width: width, height: grid.heights.reduce(0, +) + spacing * CGFloat(max(0, grid.heights.count - 1)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let grid = arrange(width: bounds.width, subviews)
+        var y = bounds.minY
+        for (row, height) in grid.heights.enumerated() {
+            for column in 0..<grid.columns {
+                let index = row * grid.columns + column
+                guard index < subviews.count else { break }
+                subviews[index].place(at: CGPoint(x: bounds.minX + CGFloat(column) * (grid.width + spacing), y: y),
+                                      proposal: ProposedViewSize(width: grid.width, height: height))
+            }
+            y += height + spacing
+        }
+    }
+
+    private func arrange(width: CGFloat, _ subviews: Subviews) -> (columns: Int, width: CGFloat, heights: [CGFloat]) {
+        guard !subviews.isEmpty else { return (1, width, []) }
+        let fit = max(1, Int((width + spacing) / (minWidth + spacing)))
+        let rows = Int((Double(subviews.count) / Double(fit)).rounded(.up))
+        let columns = Int((Double(subviews.count) / Double(rows)).rounded(.up))
+        let tile = (width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
+        let heights = (0..<rows).map { row in
+            (row * columns..<min(subviews.count, (row + 1) * columns)).map {
+                subviews[$0].sizeThatFits(ProposedViewSize(width: tile, height: nil)).height
+            }.max() ?? 0
+        }
+        return (columns, tile, heights)
+    }
+}
+
+/// One cell per hour: shade = messages you sent; a thin line under each hour in the colour of
+/// that hour's main tracked category. The first-to-last-message span is named here as a fact.
+struct TodayHoursCard: View {
+    var activity: DailyActivity?
+    var tracked: ActivityDay?
+    var isToday: Bool
+    /// Fixed only for snapshots.
+    var now: Date? = nil
+
+    var body: some View {
         let hours = TodaySummary.hours(activity: activity, tracked: tracked)
         let peak = max(1, hours.map(\.turns).max() ?? 1)
-        let currentHour = today.isToday ? Calendar.current.component(.hour, from: Date()) : nil
-        TodayCard(title: "Worked so far", symbol: "clock", color: AppAppearance.amber) {
-            VStack(alignment: .leading, spacing: 4) {
-                let worked = activity?.span.map(TodaySummary.duration) ?? tracked.flatMap { $0.focused > 0 ? TodaySummary.duration($0.focused) : nil }
-                Text(worked ?? "—")
-                    .font(.system(size: 40, weight: .bold, design: .rounded)).monospacedDigit()
-                    .foregroundStyle(worked == nil ? AppAppearance.tertiary : AppAppearance.text)
-                Text(subtitle(activity, tracked)).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
+        let currentHour = isToday ? Calendar.current.component(.hour, from: now ?? Date()) : nil
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Label("Your hours", systemImage: "clock").font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.secondary)
+                Spacer(minLength: 8)
+                Text(span).font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.tertiary).lineLimit(1)
             }
             HStack(spacing: 3) {
                 ForEach(hours, id: \.hour) { hour in
@@ -201,7 +306,7 @@ struct TodayWorkedCard: View {
                             .fill(hour.turns > 0 ? AppAppearance.amber.opacity(0.25 + 0.75 * Double(hour.turns) / Double(peak)) : AppAppearance.raised)
                             .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous)
                                 .strokeBorder(hour.hour == currentHour ? AppAppearance.text.opacity(0.5) : .clear, lineWidth: 1.2))
-                            .frame(height: 26)
+                            .frame(height: 20)
                         RoundedRectangle(cornerRadius: 1.5).fill(hour.category.map(ActivityStyle.color) ?? .clear).frame(height: 3)
                     }
                     .help(help(hour))
@@ -214,16 +319,16 @@ struct TodayWorkedCard: View {
                 }
             }
         }
+        .padding(.horizontal, 18).padding(.vertical, 14).frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
     }
-    private func subtitle(_ activity: DailyActivity?, _ tracked: ActivityDay?) -> String {
-        var parts: [String] = []
-        if let first = activity?.firstTurn, let last = activity?.lastTurn {
-            parts.append("First message \(first.formatted(date: .omitted, time: .shortened)) · last \(last.formatted(date: .omitted, time: .shortened))")
-        } else if activity == nil { parts.append("Reading your agent logs…") }
-        else { parts.append("No messages from you yet") }
-        if let tracked, tracked.focused > 0 { parts.append("Tracked: \(TodaySummary.duration(tracked.focused)) focused") }
-        return parts.joined(separator: "\n")
+
+    private var span: String {
+        guard let activity else { return "Reading your agent logs…" }
+        guard let first = activity.firstTurn, let last = activity.lastTurn else { return "No messages from you yet" }
+        return "Chatting with agents \(ActivityStyle.range(first, last))"
     }
+
     private func help(_ hour: TodayHour) -> String {
         var text = "\(hour.hour):00 — \(hour.turns) message\(hour.turns == 1 ? "" : "s") from you, \(hour.replies) replies"
         if let category = hour.category { text += "\nMostly \(category.title)" }
@@ -231,72 +336,4 @@ struct TodayWorkedCard: View {
     }
 }
 
-struct TodayMessagesCard: View {
-    var activity: DailyActivity?
-    var body: some View {
-        TodayCard(title: "Messages", symbol: "bubble.left", color: AppAppearance.blue) {
-            BigPair(left: activity.map { "\($0.turns)" } ?? "—", leftLabel: "sent",
-                    right: activity.map { "\($0.replies)" } ?? "—", rightLabel: "replies")
-            GeometryReader { geometry in
-                let total = Double((activity?.turns ?? 0) + (activity?.replies ?? 0))
-                let share = total > 0 ? Double(activity?.turns ?? 0) / total : 0
-                ZStack(alignment: .leading) {
-                    Capsule().fill(AppAppearance.blue.opacity(0.15))
-                    Capsule().fill(AppAppearance.blue).frame(width: max(share > 0 ? 6 : 0, geometry.size.width * share))
-                }
-            }.frame(height: 6)
-        }
-    }
-}
-
-struct TodayTodosCard: View {
-    var todos: TodoStore
-    var body: some View {
-        let start = TodayDayStart.millis
-        let done = todos.items.filter { $0.done }.count
-        let open = todos.items.filter { !$0.done }.count
-        let added = todos.items.filter { $0.createdAt >= start }.count
-        TodayCard(title: "To-dos", symbol: "checklist", color: AppAppearance.green) {
-            BigPair(left: "\(done)", leftLabel: "done today", right: "\(open)", rightLabel: "open", leftColor: AppAppearance.green)
-            Divider().overlay(AppAppearance.separator)
-            HStack { Text("Added today").foregroundStyle(AppAppearance.secondary); Spacer(); Text("\(added)").monospacedDigit() }
-                .font(.system(size: 13))
-        }
-    }
-}
-
 enum TodayDayStart { static var millis: Double { BurroCore.TodoDay.startMillis() } }
-
-struct TodayQuestionsCard: View {
-    var asked: Int
-    var waitingNow: Int
-    var body: some View {
-        let decision = TodaySummary.decisions(asked: asked, waitingNow: waitingNow)
-        TodayCard(title: "Questions for you", symbol: "questionmark.bubble", color: AppAppearance.amber) {
-            HStack(spacing: 18) {
-                ZStack {
-                    Circle().stroke(AppAppearance.amber.opacity(0.15), lineWidth: 7)
-                    Circle().trim(from: 0, to: decision.share ?? 0).stroke(AppAppearance.amber, style: StrokeStyle(lineWidth: 7, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                    Text(decision.share.map { "\(Int(($0 * 100).rounded()))%" } ?? "—").font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                }.frame(width: 64, height: 64)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(decision.answered)").font(.system(size: 30, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(AppAppearance.amber)
-                    Text("answered").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                    Text("\(decision.asked) asked · \(waitingNow) waiting now").font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
-                }
-            }
-            .help("Counts explicit questions (Codex request_user_input, Claude AskUserQuestion) and chats waiting on you now. Approval prompts aren't logged by the tools, so they aren't included.")
-        }
-    }
-}
-
-struct TodayChatsCard: View {
-    var rows: [TodayRow]
-    var body: some View {
-        TodayCard(title: "Chats", symbol: "person.2", color: .indigo) {
-            BigPair(left: "\(rows.count)", leftLabel: "active", right: "\(Set(rows.map(\.project)).count)", rightLabel: "places",
-                    leftColor: .indigo)
-        }
-    }
-}

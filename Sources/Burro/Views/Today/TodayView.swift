@@ -1,6 +1,8 @@
-// The Today page: one day at a glance. The day Burro tracked on this Mac (when turned on: a timeline and the day so far,
-// right under the date), what shipped on GitHub, chats grouped by status or project, how long you've been at it, messages,
-// to-dos and questions agents asked. With tracking off, a small card in the side column explains it and turns it on.
+// The Today page: one day at a glance, top to bottom and full width. The date header; one row of
+// stat tiles (tracked focus, tracked time, Break, longest focus, messages, to-dos, questions;
+// with tracking off the first-to-last-message span leads instead); the hours strip; the day Burro
+// tracked on this Mac (timeline with Your day so far beside it), or a small card that explains
+// tracking and turns it on; what shipped on GitHub; chats grouped by status or project.
 import SwiftUI
 import BurroCore
 
@@ -13,22 +15,9 @@ struct TodayView: View {
     var body: some View {
         let rows = TodayRows.build(store: store)
         ScrollView {
-            HStack(alignment: .top, spacing: 28) {
-                VStack(alignment: .leading, spacing: 26) {
-                    TodayHeader(today: today)
-                    if today.tracker.enabled { TodayDaySection(today: today) }
-                    TodayShippedSection(store: store)
-                    chats(rows)
-                }.frame(maxWidth: .infinity, alignment: .leading)
-                VStack(spacing: 14) {
-                    TodayWorkedCard(today: today)
-                    TodayMessagesCard(activity: today.activity)
-                    if today.isToday { TodayTodosCard(todos: store.todos) }
-                    TodayQuestionsCard(asked: today.activity?.questions ?? 0,
-                                       waitingNow: today.isToday ? store.agentActivity.waitingCount : 0)
-                    TodayChatsCard(rows: rows)
-                    if !today.tracker.enabled { TodayActivityCard(today: today) }
-                }.frame(width: 320)
+            TodayPage(today: today, activity: today.activity, rows: rows, todos: todos, waitingNow: today.isToday ? store.agentActivity.waitingCount : 0,
+                      grouping: $grouping, open: { row in if let session = row.session { store.showChat(session) } }) {
+                TodayShippedSection(store: store)
             }
             .padding(.horizontal, 36).padding(.vertical, 28)
             .frame(maxWidth: 1240).frame(maxWidth: .infinity)
@@ -51,13 +40,60 @@ struct TodayView: View {
         .onChange(of: today.tracker.revision) { if onScreen { today.refreshTracked() } }
     }
 
-    @ViewBuilder private func chats(_ rows: [TodayRow]) -> some View {
+    private var todos: TodaySummaryRow.Todos? {
+        guard today.isToday else { return nil }
+        let items = store.todos.items, start = TodayDayStart.millis
+        return .init(done: items.filter(\.done).count, open: items.filter { !$0.done }.count, added: items.filter { $0.createdAt >= start }.count)
+    }
+}
+
+/// The page's sections in order. Takes its inputs explicitly so snapshots can render it with a synthetic day.
+struct TodayPage<Shipped: View>: View {
+    var today: TodayStore
+    var activity: DailyActivity?
+    var rows: [TodayRow]
+    var todos: TodaySummaryRow.Todos?
+    var waitingNow: Int
+    @Binding var grouping: String
+    /// Fixed only for snapshots; otherwise the time of this render.
+    var now: Date? = nil
+    var open: (TodayRow) -> Void
+    @ViewBuilder var shipped: () -> Shipped
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 12) {
+                TodayHeader(today: today)
+                TodaySummaryRow(activity: activity, tracked: today.tracked, tracking: today.tracker.enabled, isToday: today.isToday,
+                                todos: todos, waitingNow: waitingNow)
+                TodayHoursCard(activity: activity, tracked: today.tracker.enabled ? today.tracked : nil, isToday: today.isToday, now: now)
+            }
+            if today.tracker.enabled { TodayDaySection(today: today, now: now) } else { TodayActivityCard(today: today) }
+            shipped()
+            TodayChatsSection(today: today, rows: rows, grouping: $grouping, open: open)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct TodayChatsSection: View {
+    var today: TodayStore
+    var rows: [TodayRow]
+    @Binding var grouping: String
+    var open: (TodayRow) -> Void
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("CHATS").font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(AppAppearance.tertiary)
                 Text("\(rows.count)").font(.system(size: 11, weight: .semibold)).monospacedDigit()
                     .padding(.horizontal, 6).padding(.vertical, 1)
                     .background(AppAppearance.raised, in: Capsule()).foregroundStyle(AppAppearance.secondary)
+                if !rows.isEmpty {
+                    let places = Set(rows.map(\.project)).count
+                    Text("in \(places) place\(places == 1 ? "" : "s")").font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
+                        .help("Projects these chats touched")
+                }
                 Spacer()
                 CapsulePicker(options: TodayGrouping.allCases.map { ($0.rawValue, $0.title) }, selection: $grouping)
                 TogglePill(title: "Previews", symbol: "eye", isOn: Binding(get: { today.previews }, set: { today.previews = $0 }))
@@ -68,9 +104,7 @@ struct TodayView: View {
                               detail: today.scanning ? "Reading your agent logs…" : "Chats you start or continue show up here.") { EmptyView() }
             } else {
                 ForEach(TodayRows.groups(rows, by: TodayGrouping(rawValue: grouping) ?? .status), id: \.title) { group in
-                    TodayChatGroup(title: group.title, color: group.color, rows: group.rows) { row in
-                        if let session = row.session { store.showChat(session) }
-                    }
+                    TodayChatGroup(title: group.title, color: group.color, rows: group.rows, open: open)
                 }
             }
         }

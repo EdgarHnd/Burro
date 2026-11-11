@@ -59,6 +59,8 @@ import BurroCore
             sampler.onChange = { [weak self] observation, at in self?.observe(observation, at: at) }
             sampler.onTick = { [weak self] now in self?.tick(now) }
             sampler.onTrustChange = { [weak self] trusted in self?.accessibilityTrusted = trusted }
+            // Hidden preference (default on): ask Arc and other Chromium browsers for their page's address.
+            sampler.wakesBrowserTrees = defaults.object(forKey: "activity.browserPages") as? Bool ?? true
             self.sampler = sampler
             lastCheckpoint = Date()
             sampler.start()

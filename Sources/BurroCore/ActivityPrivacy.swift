@@ -35,10 +35,25 @@ public enum ActivityPrivacy {
     static let credentialFragments = ["password", "keychain", "1password", "bitwarden", "lastpass", "dashlane", "keepass",
                                       "enpass", "nordpass", "keeper", "roboform", "proton.pass"]
 
+    /// The lock screen, login window, screen saver and system authentication prompts. Not activity:
+    /// the sampler records nothing while one is in front, and a day drops spans already stored for one.
+    public static let systemScreens: Set<String> = [
+        "com.apple.loginwindow", "com.apple.ScreenSaver.Engine", "com.apple.ScreenSaver.Engine.legacyScreenSaver",
+        "com.apple.SecurityAgent", "com.apple.LocalAuthentication.UIAgent",
+    ]
+
+    public static func isSystemScreen(_ bundleID: String) -> Bool { systemScreens.contains(bundleID) }
+
     /// Browsers whose address bar the sampler may read (host only).
     public static let browsers: Set<String> = [
         "com.apple.Safari", "com.apple.SafariTechnologyPreview", "com.google.Chrome", "com.google.Chrome.canary",
         "company.thebrowser.Browser", "com.brave.Browser", "com.microsoft.edgemac", "org.mozilla.firefox",
+    ]
+    /// Chromium-family browsers. Arc builds its accessibility tree only when asked (`AXManualAccessibility`);
+    /// the others are asked too when their address field can't be found. The sampler then reads the page's
+    /// `AXURL` from the window's web area (never anything inside it), and only its host is kept.
+    public static let chromiumBrowsers: Set<String> = [
+        "company.thebrowser.Browser", "com.google.Chrome", "com.google.Chrome.canary", "com.brave.Browser", "com.microsoft.edgemac",
     ]
     static let privateWindowMarkers = ["private browsing", "incognito", "inprivate", "private window"]
 

@@ -3,7 +3,11 @@
 // is all that's kept, by ActivityPrivacy). No screenshots, no keystrokes. A 30-second timer
 // (10 s tolerance) checks for two minutes without input; sleep, lock and session switches stop it
 // outright. Title notifications are muted after the first one until a read 1–5 s later, so a
-// window that renames itself ten times a second costs one read every five seconds.
+// window that renames itself ten times a second costs one read every five seconds. The lock
+// screen, login window and screen saver count as away. Arc (and Chrome, Brave or Edge when their
+// address field can't be found) only builds its accessibility tree when asked: the sampler sets
+// `AXManualAccessibility` on it once per launch, then reads just the page's `AXURL` from the
+// window's web area, never anything inside it.
 import AppKit
 import ApplicationServices
 import BurroCore
@@ -28,6 +32,9 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
     var onTick: (Date) -> Void = { _ in }
     var onTrustChange: (Bool) -> Void = { _ in }
     private(set) var trusted = AXIsProcessTrusted()
+    /// Ask Chromium-family browsers to build their accessibility tree when no address field is found.
+    /// It costs the browser some CPU and memory; off, those browsers fall back to window titles.
+    var wakesBrowserTrees = true
 
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var timer: Timer?
@@ -42,8 +49,10 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
     private var readScheduled = false
     private var lastRead = Date.distantPast
     private var generation = 0
-    /// The focused window's address field and private-window flag, found once per window.
-    private var browserCache: (window: AXBox, field: AXBox?, isPrivate: Bool)?
+    /// The focused window's address field, private-window flag and web area's parent, found once per window.
+    private var browserCache: BrowserCache?
+    /// Browsers (by pid) already asked to build their accessibility tree: once per launch.
+    private var wokenBrowsers: Set<pid_t> = []
     private let reader = DispatchQueue(label: "local.burro.activity.ax", qos: .utility)
 
     func start() {
@@ -140,6 +149,13 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
     private func activate(_ running: NSRunningApplication?) {
         guard self.running, !suspended, let running, let bundleID = running.bundleIdentifier else { return }
         idle = false
+        // The lock screen, login window or screen saver in front: you're away, nothing to read.
+        if ActivityPrivacy.isSystemScreen(bundleID) {
+            detach()
+            app = nil; last = nil; browserCache = nil
+            onChange(nil, Date())
+            return
+        }
         let element = AXUIElementCreateApplication(running.processIdentifier)
         app = (bundleID, running.localizedName ?? bundleID, running.processIdentifier, element)
         browserCache = nil
@@ -208,9 +224,11 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
         generation += 1
         lastRead = Date()
         let id = generation, box = AXBox(element: app.element), browser = ActivityPrivacy.browsers.contains(app.bundleID)
+        let chromium = ActivityPrivacy.chromiumBrowsers.contains(app.bundleID)
+        let wake = chromium && wakesBrowserTrees && !wokenBrowsers.contains(app.pid)
         let cache = browserCache
         reader.async { [weak self] in
-            let result = Self.readWindow(box, browser: browser, cache: cache)
+            let result = Self.readWindow(box, browser: browser, chromium: chromium, wake: wake, cache: cache)
             Task { @MainActor [weak self] in self?.apply(result, id: id) }
         }
     }
@@ -222,7 +240,16 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
                 watchTitles(false)
                 watchedWindow = window.element
             }
-            if ActivityPrivacy.browsers.contains(app.bundleID) { browserCache = (window, result.field, result.isPrivate) }
+            // A Chromium window with nothing found yet is searched again next time (its tree may still be building).
+            let empty = ActivityPrivacy.chromiumBrowsers.contains(app.bundleID) && result.field == nil && result.webParent == nil
+            if ActivityPrivacy.browsers.contains(app.bundleID) {
+                browserCache = empty ? nil : BrowserCache(window: window, field: result.field, isPrivate: result.isPrivate, webParent: result.webParent)
+            }
+        }
+        if result.woke {
+            // The browser builds its tree now; one more read shortly picks up the page.
+            wokenBrowsers.insert(app.pid)
+            scheduleRead(after: 1.5)
         }
         watchTitles(true)
         let observation = ActivityObservation(bundleID: app.bundleID, app: app.name, title: result.title,
@@ -234,47 +261,93 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
 
     // MARK: Reading (off the main thread)
 
+    private struct BrowserCache: Sendable {
+        var window: AXBox
+        var field: AXBox?
+        var isPrivate: Bool
+        var webParent: AXBox?
+    }
+
     private struct WindowRead: Sendable {
         var window: AXBox?
         var title: String?
         var address: String?
         var field: AXBox?
         var isPrivate = false
+        var webParent: AXBox?
+        /// This read asked the browser to build its accessibility tree.
+        var woke = false
     }
 
-    private nonisolated static func readWindow(_ app: AXBox, browser: Bool, cache: (window: AXBox, field: AXBox?, isPrivate: Bool)?) -> WindowRead {
+    private nonisolated static func readWindow(_ app: AXBox, browser: Bool, chromium: Bool, wake: Bool, cache: BrowserCache?) -> WindowRead {
         guard let window: AXUIElement = attribute(app.element, kAXFocusedWindowAttribute) else { return WindowRead() }
         var read = WindowRead(window: AXBox(element: window), title: attribute(window, kAXTitleAttribute))
         guard browser else { return read }
-        if let cache, CFEqual(cache.window.element, window) {
-            read.field = cache.field; read.isPrivate = cache.isPrivate
+        let cached = cache.map { CFEqual($0.window.element, window) } ?? false
+        if cached, let cache {
+            read.field = cache.field; read.isPrivate = cache.isPrivate; read.webParent = cache.webParent
         } else {
-            (read.field, read.isPrivate) = searchToolbar(window)
+            (read.field, read.isPrivate, read.webParent) = searchToolbar(window, webAreas: chromium)
         }
         read.address = read.field.flatMap { attribute($0.element, kAXValueAttribute) }
+        // Chromium without an address field (Arc always): the page's URL from the window's web area.
+        guard chromium, read.field == nil else { return read }
+        var url = read.webParent.flatMap { pageURL(in: $0.element) }
+        if url == nil, cached {
+            // The layout changed under the cached parent (a new tab page, a split): look again.
+            let found = searchToolbar(window, webAreas: true)
+            read.webParent = found.2
+            read.isPrivate = read.isPrivate || found.1
+            url = read.webParent.flatMap { pageURL(in: $0.element) }
+        }
+        if url == nil, read.webParent == nil, wake {
+            // Arc exposes only an empty window until asked. Costs the browser some CPU and memory.
+            AXUIElementSetAttributeValue(app.element, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            read.woke = true
+        }
+        read.address = url
         return read
     }
 
     /// Breadth-first through the window's chrome (never into web content), at most 250 elements:
-    /// the address field, and any Incognito / InPrivate / Private marker.
-    private nonisolated static func searchToolbar(_ window: AXUIElement) -> (AXBox?, Bool) {
-        var queue = [window], visited = 0, field: AXUIElement?, isPrivate = false
+    /// the address field, any Incognito / InPrivate / Private marker and, for Chromium browsers, the
+    /// parent of the first web area. Chromium's scroll areas are entered only to find the web area;
+    /// labels inside them (tab titles) aren't read. A web area's own attributes are never read here.
+    private nonisolated static func searchToolbar(_ window: AXUIElement, webAreas: Bool) -> (AXBox?, Bool, AXBox?) {
+        var queue: [(element: AXUIElement, parent: AXUIElement?, scrolled: Bool)] = [(window, nil, false)]
+        var visited = 0, field: AXUIElement?, isPrivate = false, webParent: AXUIElement?
         while !queue.isEmpty && visited < 250 {
-            let element = queue.removeFirst()
+            let (element, parent, inScroll) = queue.removeFirst()
             visited += 1
             let role: String = attribute(element, kAXRoleAttribute) ?? ""
-            if role == "AXWebArea" || role == "AXScrollArea" { continue }
-            let labels = [kAXIdentifierAttribute, kAXDescriptionAttribute, kAXTitleAttribute, kAXPlaceholderValueAttribute]
-                .compactMap { (name: String) -> String? in attribute(element, name) }.map { $0.lowercased() }
-            if field == nil, role == kAXTextFieldRole || role == kAXComboBoxRole,
-               labels.contains(where: { $0.contains("address") || $0.contains("url") || $0.contains("search or enter") }) {
-                field = element
+            if role == "AXWebArea" {
+                if webParent == nil { webParent = parent }
+                continue
             }
-            if labels.contains(where: { ["incognito", "inprivate", "private browsing", "private"].contains($0) }) { isPrivate = true }
-            if field != nil && visited > 60 { break }
-            queue += (attribute(element, kAXChildrenAttribute) as [AXUIElement]?) ?? []
+            if role == "AXScrollArea" && !webAreas { continue }
+            let scrolled = inScroll || role == "AXScrollArea"
+            if !scrolled {
+                let labels = [kAXIdentifierAttribute, kAXDescriptionAttribute, kAXTitleAttribute, kAXPlaceholderValueAttribute]
+                    .compactMap { (name: String) -> String? in attribute(element, name) }.map { $0.lowercased() }
+                if field == nil, role == kAXTextFieldRole || role == kAXComboBoxRole,
+                   labels.contains(where: { $0.contains("address") || $0.contains("url") || $0.contains("search or enter") }) {
+                    field = element
+                }
+                if labels.contains(where: { ["incognito", "inprivate", "private browsing", "private"].contains($0) }) { isPrivate = true }
+            }
+            if (field != nil || (webAreas && webParent != nil)) && visited > 60 { break }
+            queue += ((attribute(element, kAXChildrenAttribute) as [AXUIElement]?) ?? []).map { ($0, element, scrolled) }
         }
-        return (field.map(AXBox.init), isPrivate)
+        return (field.map(AXBox.init), isPrivate, webParent.map(AXBox.init))
+    }
+
+    /// The `AXURL` of the web area under `parent`, as text for `ActivityPrivacy.key` (which keeps only
+    /// the host). Reads the parent's children's roles and that one attribute, nothing else.
+    private nonisolated static func pageURL(in parent: AXUIElement) -> String? {
+        let children: [AXUIElement] = attribute(parent, kAXChildrenAttribute) ?? []
+        guard let area = children.first(where: { (attribute($0, kAXRoleAttribute) as String?) == "AXWebArea" }),
+              let url: URL = attribute(area, "AXURL") else { return nil }
+        return url.absoluteString
     }
 
     private nonisolated static func attribute<T>(_ element: AXUIElement, _ name: String) -> T? {

@@ -1,7 +1,9 @@
 // One day of tracked activity rolled up for the Today page and Home: focused time, time per
 // category, top apps and sites, the latest activities, each hour's main category, and the
 // timeline's blocks and focus stretches (ActivityTimeline.swift). Categories come from the
-// current rules, so a rule you change applies to past days as well.
+// current rules, so a rule you change applies to past days as well. Lock-screen and login-window
+// spans (ActivityPrivacy.systemScreens) aren't activity and are dropped first; apps and sites with
+// under a minute aren't listed, though their time still counts.
 import Foundation
 
 public struct ActivityDay: Sendable, Equatable {
@@ -43,12 +45,21 @@ public struct ActivityDay: Sendable, Equatable {
     /// Everything except Break.
     public var focused: TimeInterval { categories.filter { $0.category != .break }.reduce(0) { $0 + $1.seconds } }
 
+    /// The categories a legend lists: at most `limit` with a minute or more, then the rest as one
+    /// "N more" line only when that adds up to a minute or more.
+    public func legend(limit: Int) -> (shown: [CategoryTime], more: (count: Int, seconds: TimeInterval)?) {
+        let listed = categories.filter { $0.seconds.rounded() >= ActivityTimeline.minimumShown }
+        let shown = Array(listed.prefix(limit)), rest = categories.dropFirst(shown.count)
+        let seconds = rest.reduce(0) { $0 + $1.seconds }
+        return (shown, seconds.rounded() >= ActivityTimeline.minimumShown ? (rest.count, seconds) : nil)
+    }
+
     public static func build(spans input: [ActivitySpan], rules: ActivityRules, day: Date, calendar: Calendar = .current) -> ActivityDay {
         let start = calendar.startOfDay(for: day)
         let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
         // Clip to the day and trim overlaps (a live span can repeat one just written).
         var spans: [ActivitySpan] = []
-        for var span in input.sorted(by: { $0.start < $1.start }) {
+        for var span in input.filter({ !ActivityPrivacy.isSystemScreen($0.bundleID) }).sorted(by: { $0.start < $1.start }) {
             span.start = max(span.start, start, spans.last?.end ?? start)
             span.end = min(span.end, end)
             if span.end > span.start { spans.append(span) }
@@ -68,6 +79,7 @@ public struct ActivityDay: Sendable, Equatable {
             }
         }
         let main = { (times: [ActivityCategory: TimeInterval]) in times.max { $0.value < $1.value }?.key ?? .other }
+        let listed = { (item: Item) in item.seconds.rounded() >= ActivityTimeline.minimumShown }
 
         let hours = Int((end.timeIntervalSince(start) / 3600).rounded(.up))
         let hourly: [ActivityCategory?] = (0..<hours).map { index in
@@ -90,7 +102,7 @@ public struct ActivityDay: Sendable, Equatable {
                 entries.append(Entry(start: span.start, end: span.end, bundleID: span.bundleID, app: span.app, label: "",
                                      host: span.host, category: category))
             }
-            if let title = span.title { titles[title, default: 0] += span.duration }
+            if let title = ActivityTimeline.displayTitle(span.title, app: span.app) { titles[title, default: 0] += span.duration }
             let index = entries.count - 1
             entries[index].label = titles.max { $0.value < $1.value }?.key ?? entries[index].host ?? entries[index].app
         }
@@ -99,9 +111,9 @@ public struct ActivityDay: Sendable, Equatable {
             day: start, total: spans.reduce(0) { $0 + $1.duration },
             categories: perCategory.map { CategoryTime(category: $0.key, seconds: $0.value) }.sorted { $0.seconds > $1.seconds },
             apps: apps.map { Item(id: $0.key, name: $0.value.name, category: main($0.value.categories), seconds: $0.value.seconds) }
-                .sorted { $0.seconds > $1.seconds },
+                .filter(listed).sorted { $0.seconds > $1.seconds },
             sites: sites.map { Item(id: $0.key, name: $0.key, category: main($0.value.categories), seconds: $0.value.seconds) }
-                .sorted { $0.seconds > $1.seconds },
+                .filter(listed).sorted { $0.seconds > $1.seconds },
             entries: entries, hourly: hourly,
             blocks: ActivityTimeline.blocks(categorized), focus: ActivityTimeline.focus(categorized))
     }

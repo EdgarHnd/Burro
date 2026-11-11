@@ -307,7 +307,7 @@ final class ActivityTrackingTests: XCTestCase {
             XCTAssertTrue(child.value is Int || child.value is [ActivityCategory: TimeInterval], "Report.\(child.label ?? "?") isn't a count")
         }
         let tracking = try ["ActivityPrivacy", "ActivityLog", "ActivityRecorder", "ActivitySummary", "ActivityCategories", "ActivityTimeline",
-                            "ActivityImport"].map {
+                            "ActivityTimelineLayout", "ActivityImport"].map {
             try String(contentsOf: root.appendingPathComponent("Sources/BurroCore/\($0).swift"), encoding: .utf8)
         } + ["Stores/ActivityTracker", "Support/ActivitySampler", "Views/Today/TodayActivity", "Views/Today/TodayDayView", "Views/Home/HomeActivity"].map {
             try String(contentsOf: root.appendingPathComponent("Sources/Burro/\($0).swift"), encoding: .utf8)
