@@ -77,6 +77,10 @@ import BurroCore
             try await backfill(Array(paths.dropFirst()))
             return
         }
+        if paths.first == "--activity-import-dayflow" {
+            DayflowImportCommand.run(Array(paths.dropFirst()))
+            return
+        }
         if paths == ["--agents"] {
             let activity = AgentMonitor().sample()
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601

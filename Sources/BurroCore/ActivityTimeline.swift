@@ -3,7 +3,10 @@
 // titles and hosts already in the spans. Blocks: consecutive time in one category with gaps under
 // 5 minutes; runs under 2 minutes fold into their longer neighbour (Private never folds either
 // way); a block names its app when one app has more than 60% of the time, otherwise the apps it
-// switched between, and takes the category with the most time in it. Focus stretches: non-Break time, joined across gaps or breaks under 2 minutes.
+// switched between, and takes the category with the most time in it. Imported spans (from another
+// tracker, already one per activity) are one block each: never joined or folded either way, titled
+// by their own title (else the site or app) with the site or app as detail; Private ones read only
+// "Private". Focus stretches: non-Break time, joined across gaps or breaks under 2 minutes.
 import Foundation
 
 public struct ActivityBlock: Sendable, Equatable, Identifiable {
@@ -60,6 +63,8 @@ public enum ActivityTimeline {
         var spans: [ActivitySpan]
         /// Time per category, which folded runs can mix.
         var times: [ActivityCategory: TimeInterval]
+        /// An imported span, which stays a block of its own.
+        var imported: Bool { spans.first?.source != nil }
         var start: Date { spans.first?.start ?? .distantPast }
         var end: Date { spans.map(\.end).max() ?? .distantPast }
         var duration: TimeInterval { end.timeIntervalSince(start) }
@@ -69,7 +74,7 @@ public enum ActivityTimeline {
     public static func blocks(_ spans: [(span: ActivitySpan, category: ActivityCategory)]) -> [ActivityBlock] {
         var runs: [Run] = []
         for (span, category) in spans {
-            if let last = runs.last, last.category == category, span.start.timeIntervalSince(last.end) < joinGap {
+            if let last = runs.last, !last.imported, span.source == nil, last.category == category, span.start.timeIntervalSince(last.end) < joinGap {
                 runs[runs.count - 1].spans.append(span)
                 runs[runs.count - 1].times[category, default: 0] += span.duration
             } else {
@@ -79,7 +84,8 @@ public enum ActivityTimeline {
 
         // Fold the shortest short run into its longer touching neighbour until none is left.
         func touching(_ a: Int, _ b: Int) -> Bool {
-            guard runs.indices.contains(a), runs.indices.contains(b), runs[a].category != .private, runs[b].category != .private else { return false }
+            guard runs.indices.contains(a), runs.indices.contains(b), runs[a].category != .private, runs[b].category != .private,
+                  !runs[a].imported, !runs[b].imported else { return false }
             let (first, second) = a < b ? (runs[a], runs[b]) : (runs[b], runs[a])
             return second.start.timeIntervalSince(first.end) < joinGap
         }
@@ -95,7 +101,7 @@ public enum ActivityTimeline {
             // The fold can leave two neighbours of one category side by side: join them.
             var i = 1
             while i < runs.count {
-                if runs[i].category == runs[i - 1].category, runs[i].start.timeIntervalSince(runs[i - 1].end) < joinGap {
+                if !runs[i].imported, !runs[i - 1].imported, runs[i].category == runs[i - 1].category, runs[i].start.timeIntervalSince(runs[i - 1].end) < joinGap {
                     runs[i - 1].spans += runs[i].spans
                     runs[i - 1].times.merge(runs[i].times, uniquingKeysWith: +)
                     runs.remove(at: i)
@@ -118,6 +124,14 @@ public enum ActivityTimeline {
         let category = run.times.max { $0.value != $1.value ? $0.value < $1.value : $0.key.order > $1.key.order }?.key ?? run.category
         var block = ActivityBlock(start: run.start, end: run.end, category: category, title: "", detail: nil,
                                   apps: Array(apps.prefix(3)), main: main, host: nil, seconds: total)
+        if run.imported, let span = run.spans.first {
+            if run.category == .private { block.title = ActivityPrivacy.privateHost; return block }
+            let site = span.host.map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 }
+            block.title = span.title ?? site ?? span.app
+            block.detail = span.title == nil ? nil : site ?? span.app
+            block.host = span.host
+            return block
+        }
         if run.category == .private {
             block.title = "Private · " + (apps.first?.name ?? "")
             return block

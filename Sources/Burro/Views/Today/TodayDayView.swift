@@ -252,7 +252,9 @@ struct ActivityBlockView: View {
         .contextMenu {
             if block.category != .private {
                 if let main = block.main {
-                    ActivityCategoryMenu(tracker: tracker, id: main.bundleID, name: main.name, site: false)
+                    if !DayflowImport.isGroup(bundleID: main.bundleID) {
+                        ActivityCategoryMenu(tracker: tracker, id: main.bundleID, name: main.name, site: false)
+                    }
                     if let host = block.host { ActivityCategoryMenu(tracker: tracker, id: host, name: host, site: true) }
                 } else {
                     ForEach(block.apps, id: \.bundleID) { app in

@@ -16,7 +16,7 @@ struct TodayActivityCard: View {
             ActivityControls(today: today)
             VStack(alignment: .leading, spacing: 3) {
                 Text("Notes the app you're in, its window title and a browser's site (host only).")
-                Text("Never the screen. Stays on this Mac for 30 days.")
+                Text("Never the screen. Stays on this Mac for a year.")
             }
             .font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
         }
@@ -141,7 +141,10 @@ struct ActivityItemRow: View {
         .contentShape(Rectangle())
         .help("\(item.category.title) · right-click to change")
         .contextMenu {
-            if item.category != .private { ActivityCategoryMenu(tracker: tracker, id: item.id, name: item.name, site: site) }
+            // Imported "Web" and "Dayflow" stand for many apps, so an app rule on them would mean nothing.
+            if item.category != .private, site || !DayflowImport.isGroup(bundleID: item.id) {
+                ActivityCategoryMenu(tracker: tracker, id: item.id, name: item.name, site: site)
+            }
         }
     }
 }
@@ -154,18 +157,29 @@ struct ActivityAppIcon: View {
         if let bundleID, let image = ActivityAppIcons.image(bundleID) {
             Image(nsImage: image).resizable().interpolation(.high).frame(width: size, height: size)
         } else {
-            Image(systemName: bundleID == nil ? "square.stack" : "app.dashed").font(.system(size: size * 0.75))
+            Image(systemName: symbol).font(.system(size: size * 0.75))
                 .foregroundStyle(AppAppearance.tertiary).frame(width: size, height: size)
+        }
+    }
+
+    private var symbol: String {
+        switch bundleID {
+        case nil: "square.stack"
+        case DayflowImport.webBundle: "globe"
+        case DayflowImport.privateBundle: "lock"
+        default: "app.dashed"
         }
     }
 }
 
 @MainActor enum ActivityAppIcons {
     private static var cache: [String: NSImage?] = [:]
+    /// Imported spans' synthetic ids borrow a well-known app's icon, or get none (never a Launch Services lookup).
     static func image(_ bundleID: String) -> NSImage? {
         if let hit = cache[bundleID] { return hit }
         if cache.count > 300 { cache.removeAll() }
-        let image = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID).map { url -> NSImage in
+        let lookup = DayflowImport.isImported(bundleID: bundleID) ? DayflowImport.iconBundleID(for: bundleID) : bundleID
+        let image = lookup.flatMap(NSWorkspace.shared.urlForApplication(withBundleIdentifier:)).map { url -> NSImage in
             let icon = NSWorkspace.shared.icon(forFile: url.path)
             icon.size = NSSize(width: 32, height: 32)
             return icon

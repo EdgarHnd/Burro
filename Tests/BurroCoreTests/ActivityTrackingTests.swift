@@ -221,14 +221,15 @@ final class ActivityTrackingTests: XCTestCase {
         let log = try temporaryLog()
         let calendar = Calendar.current
         let now = Date()
-        for back in [0, 1, 29, 30, 45] {
+        for back in [0, 1, 364, 365, 400] {
             let day = calendar.date(byAdding: .day, value: -back, to: calendar.startOfDay(for: now))!.addingTimeInterval(3600)
             try log.append([ActivitySpan(key("com.apple.Safari", "Pay", address: "https://pay.acme.dev/x"), start: day, end: day.addingTimeInterval(60))])
         }
         try ActivityRules(apps: ["a": .build]).save(to: log.rulesURL)
         try Data("keep".utf8).write(to: log.folder.appendingPathComponent("notes.txt"))
         log.prune(now: now)
-        XCTAssertEqual(log.dayFiles().count, 3, "today plus 29 earlier days are kept")
+        XCTAssertEqual(ActivityLog.retentionDays, 365)
+        XCTAssertEqual(log.dayFiles().count, 3, "today plus 364 earlier days are kept")
         log.scrub(host: "acme.dev")
         XCTAssertNil(log.read(day: now).first?.title)
         XCTAssertEqual(log.read(day: now).first?.host, ActivityPrivacy.privateHost)
@@ -271,21 +272,42 @@ final class ActivityTrackingTests: XCTestCase {
     // MARK: Boundaries
 
     /// Activity data must never reach the orchestrator snapshot, burro-mcp, remote probes or the network.
+    ///
+    /// One deliberate exception: burro-inspect's `--activity-import-dayflow` (DayflowImportCommand.swift)
+    /// writes Dayflow's history into the local activity log through `DayflowImport`. It may name
+    /// `DayflowImport` and its counts-only `Report`, but it is held to the rest: it must not touch spans,
+    /// titles, hosts or app names (so it can't print them), the activity types themselves, the
+    /// network, processes, logging, the orchestrator or MCP. Every other BurroInspect file, and every
+    /// shared surface, still may not mention activity at all, including `DayflowImport`.
     func testActivityDataStaysOutOfSharedSurfaces() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let importer = "Sources/BurroInspect/DayflowImportCommand.swift"
         var files = ["Sources/BurroCore/Orchestrator.swift", "Sources/BurroCore/OrchestratorTools.swift",
                      "Sources/Burro/Stores/AppStore+Orchestrator.swift", "Sources/Burro/Stores/OrchestratorStore.swift",
                      "Sources/BurroCore/RemoteAgentMonitor.swift", "Sources/BurroCore/UsageHTTP.swift", "Sources/BurroCore/ConvexClient.swift"]
         for folder in ["Sources/BurroMCP", "Sources/BurroInspect", "Sources/BurroCore/Resources"] {
             files += try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(folder).path).map { "\(folder)/\($0)" }
         }
-        for file in files {
+        XCTAssertTrue(files.contains(importer))
+        let markers = ["ActivityLog", "ActivitySpan", "ActivityDay", "ActivityKey", "ActivityTracker", "activityTracker", "Burro/Activity"]
+        for file in files where file != importer {
             let text = try String(contentsOf: root.appendingPathComponent(file), encoding: .utf8)
-            for marker in ["ActivityLog", "ActivitySpan", "ActivityDay", "ActivityKey", "ActivityTracker", "activityTracker", "Burro/Activity"] {
+            for marker in markers + ["DayflowImport.", "DayflowImport(", "readCards"] {
                 XCTAssertFalse(text.contains(marker), "\(file) mentions \(marker)")
             }
         }
-        let tracking = try ["ActivityPrivacy", "ActivityLog", "ActivityRecorder", "ActivitySummary", "ActivityCategories", "ActivityTimeline"].map {
+        let command = try String(contentsOf: root.appendingPathComponent(importer), encoding: .utf8)
+        for marker in markers + ["ActivityRules", "ActivityBlock", "readCards", "DayflowImport.Card", ".title", ".host", ".app", "span(",
+                                 "URLSession", "URLRequest", "Process(", "CommandRunner", "NSLog", "os_log", "Logger(",
+                                 "Orchestrator", "state.json", "BurroMCP", "Remote"] {
+            XCTAssertFalse(command.contains(marker), "\(importer) must not use \(marker)")
+        }
+        // The report it prints can only hold numbers (and categories, which name no app, site or title).
+        for child in Mirror(reflecting: DayflowImport.Report()).children {
+            XCTAssertTrue(child.value is Int || child.value is [ActivityCategory: TimeInterval], "Report.\(child.label ?? "?") isn't a count")
+        }
+        let tracking = try ["ActivityPrivacy", "ActivityLog", "ActivityRecorder", "ActivitySummary", "ActivityCategories", "ActivityTimeline",
+                            "ActivityImport"].map {
             try String(contentsOf: root.appendingPathComponent("Sources/BurroCore/\($0).swift"), encoding: .utf8)
         } + ["Stores/ActivityTracker", "Support/ActivitySampler", "Views/Today/TodayActivity", "Views/Today/TodayDayView", "Views/Home/HomeActivity"].map {
             try String(contentsOf: root.appendingPathComponent("Sources/Burro/\($0).swift"), encoding: .utf8)

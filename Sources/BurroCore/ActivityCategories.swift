@@ -1,6 +1,7 @@
 // Rule-based categories for tracked activity, no AI. First match wins: Private (set by the
 // privacy rules), your host rule, a built-in host, your app rule, a built-in app, a title word,
-// any other browser page (Browsing), then Other. Host rules match subdomains and the most
+// any other browser page (Browsing), then Other. An imported span's stored category comes after
+// your host and app rules and before every built-in one. Host rules match subdomains and the most
 // specific domain wins. Your rules live in Activity/rules.json (owner-only) and apply to past
 // days too, since categories are worked out when a day is read, not stored.
 import Foundation
@@ -35,8 +36,12 @@ public struct ActivityRules: Codable, Sendable, Equatable {
         privateHosts = Array((try c.decodeIfPresent([String].self, forKey: .privateHosts) ?? []).prefix(500))
     }
 
-    public func category(bundleID: String, host: String?, title: String?, isPrivate: Bool) -> ActivityCategory {
+    public func category(bundleID: String, host: String?, title: String?, isPrivate: Bool, stored: ActivityCategory? = nil) -> ActivityCategory {
         if isPrivate || host == ActivityPrivacy.privateHost { return .private }
+        if let stored {
+            if let host, let match = Self.match(host, hosts) { return match }
+            return apps[bundleID] ?? stored
+        }
         if let host {
             if let match = Self.match(host, hosts) ?? Self.match(host, ActivityDefaults.hosts) { return match }
         }

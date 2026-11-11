@@ -53,7 +53,7 @@ public struct ActivityDay: Sendable, Equatable {
             span.end = min(span.end, end)
             if span.end > span.start { spans.append(span) }
         }
-        let categorized = spans.map { ($0, rules.category(bundleID: $0.bundleID, host: $0.host, title: $0.title, isPrivate: $0.isPrivate)) }
+        let categorized = spans.map { ($0, rules.category(bundleID: $0.bundleID, host: $0.host, title: $0.title, isPrivate: $0.isPrivate, stored: $0.category)) }
 
         var perCategory: [ActivityCategory: TimeInterval] = [:]
         var apps: [String: (name: String, seconds: TimeInterval, categories: [ActivityCategory: TimeInterval])] = [:]

@@ -1,7 +1,9 @@
 // On-disk activity: one JSON-lines file per local day in ~/Library/Application Support/Burro/
 // Activity (folder 0700, files 0600), appended a few lines at a time. Reads skip symlinks,
-// non-regular files and bad or truncated lines; files are capped at 4 MiB and kept 30 days.
-// Nothing here touches the network, logs, or the orchestrator's snapshot.
+// non-regular files and bad or truncated lines; files are capped at 4 MiB and kept 365 days.
+// Spans imported from another tracker (ActivityImport.swift) also carry a `source` and may carry
+// their own `category`; live spans never do. Nothing here touches the network, logs, or the
+// orchestrator's snapshot.
 import Foundation
 
 /// One stretch of time in one app/window. Only built from an `ActivityKey`, so it has already
@@ -14,17 +16,29 @@ public struct ActivitySpan: Codable, Sendable, Equatable {
     public var title: String?
     public var host: String?
     public var isPrivate: Bool
+    /// An imported span's own category, used after your rules and before the built-in ones. Never Private.
+    public var category: ActivityCategory?
+    /// Where an imported span came from (`ActivitySpan.sources`); nil for time Burro tracked itself.
+    public var source: String?
     public var duration: TimeInterval { end.timeIntervalSince(start) }
+    /// The only sources a stored span may name.
+    public static let sources: Set<String> = ["dayflow"]
 
     public init(_ key: ActivityKey, start: Date, end: Date) {
         self.start = start; self.end = end
         bundleID = key.bundleID; app = key.app; title = key.title; host = key.host; isPrivate = key.isPrivate
     }
     var key: ActivityKey { ActivityKey(bundleID: bundleID, app: app, title: title, host: host, isPrivate: isPrivate) }
-    /// This span as if `host` had been private when it was recorded.
-    public func redacted(host: String) -> ActivitySpan { ActivitySpan(ActivityPrivacy.redacted(key, host: host), start: start, end: end) }
+    /// This span as if `host` had been private when it was recorded. An imported span keeps its source.
+    public func redacted(host: String) -> ActivitySpan {
+        let redacted = ActivityPrivacy.redacted(key, host: host)
+        guard redacted != key else { return self }
+        var span = ActivitySpan(redacted, start: start, end: end)
+        span.source = source
+        return span
+    }
 
-    enum CodingKeys: String, CodingKey { case start, end, bundle, app, title, host, `private` }
+    enum CodingKeys: String, CodingKey { case start, end, bundle, app, title, host, `private`, category, source }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode((start.timeIntervalSince1970 * 10).rounded() / 10, forKey: .start)
@@ -34,6 +48,8 @@ public struct ActivitySpan: Codable, Sendable, Equatable {
         try c.encodeIfPresent(title, forKey: .title)
         try c.encodeIfPresent(host, forKey: .host)
         if isPrivate { try c.encode(true, forKey: .private) }
+        try c.encodeIfPresent(category?.rawValue, forKey: .category)
+        try c.encodeIfPresent(source, forKey: .source)
     }
     /// Rejects anything the writer could not have produced.
     public init(from decoder: Decoder) throws {
@@ -45,7 +61,11 @@ public struct ActivitySpan: Codable, Sendable, Equatable {
         title = try c.decodeIfPresent(String.self, forKey: .title)
         host = try c.decodeIfPresent(String.self, forKey: .host)
         isPrivate = try c.decodeIfPresent(Bool.self, forKey: .private) ?? false
-        guard end >= start, duration <= 86_400, bundleID.count <= 200, app.count <= 80,
+        let rawCategory = try c.decodeIfPresent(String.self, forKey: .category)
+        category = rawCategory.flatMap(ActivityCategory.init(rawValue:))
+        source = try c.decodeIfPresent(String.self, forKey: .source)
+        guard rawCategory == nil || (category != nil && category != .private), source.map(Self.sources.contains) ?? (category == nil),
+              end >= start, duration <= 86_400, bundleID.count <= 200, app.count <= 80,
               (title?.count ?? 0) <= ActivityPrivacy.titleLimit, (host?.count ?? 0) <= 253,
               !isPrivate || title == nil else { throw DecodingError.dataCorruptedError(forKey: .start, in: c, debugDescription: "invalid span") }
     }
@@ -53,7 +73,7 @@ public struct ActivitySpan: Codable, Sendable, Equatable {
 
 public struct ActivityLog: Sendable {
     public static let fileLimit = 4 * 1024 * 1024
-    public static let retentionDays = 30
+    public static let retentionDays = 365
     public let folder: URL
 
     public init(folder: URL = ActivityLog.defaultFolder) { self.folder = folder }

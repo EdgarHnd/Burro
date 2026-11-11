@@ -62,6 +62,30 @@ import XCTest
 
     private var now: Date { at(18, 42) }
 
+    /// A day imported from Dayflow: one block per card, a Private card, then live tracking from 17:30.
+    private func importedDay() -> [ActivitySpan] {
+        let day = TodoDay.key(dayStart, calendar: calendar)
+        let cards: [(Double, Double, String, String?, String?)] = [
+            (9, 10.5, "Engineering / Product", "Wiring the importer into burro-inspect", "Xcode"),
+            (10.5, 10.6, "Communication", "Replied to the team thread", "Slack"),
+            (10.6, 11.5, "Research & Strategy", "Reading about SQLite immutable mode", "sqlite.org"),
+            (11.5, 12, "Distraction", "Watching a talk", "youtube.com"),
+            (13, 13.5, "Personal", "Hidden", "Messages"),
+            (13.5, 15, "Data & Insights", "Retention by cohort", "mixpanel.com"),
+            (15, 16, "Engineering / Product", "Fixing timeline blocks", "Claude"),
+            (16, 17.5, "Engineering / Product", "Snapshot tests", "Ghostty"),
+        ]
+        var spans: [ActivitySpan] = cards.enumerated().compactMap { index, card in
+            let item = DayflowImport.Card(id: Int64(index), start: Int64(at(0, card.0 * 60).timeIntervalSince1970),
+                                          end: Int64(at(0, card.1 * 60).timeIntervalSince1970), day: day, title: card.3, category: card.2,
+                                          metadata: card.4.map { #"{"appSites":{"primary":"\#($0)"}}"# }, deleted: false)
+            if case .span(let span) = DayflowImport.span(for: item, calendar: calendar) { return span }
+            return nil
+        }
+        spans += [span("com.apple.dt.Xcode", at(17, 30), at(18, 41.5), "ActivityImport.swift")]
+        return spans
+    }
+
     func testRenderActivitySnapshots() async throws {
         guard ProcessInfo.processInfo.environment["BURRO_ACTIVITY_SNAPSHOTS"] == "1" else { throw XCTSkip("set BURRO_ACTIVITY_SNAPSHOTS=1") }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -73,6 +97,10 @@ import XCTest
         let empty = try await store(spans: [])
         let day = try XCTUnwrap(full.tracked)
         XCTAssertGreaterThan(day.blocks.count, 8)
+
+        let imported = try await store(spans: importedDay())
+        XCTAssertEqual(try XCTUnwrap(imported.tracked).blocks.count, 9)
+        try render(TodayDaySection(today: imported, now: now), width: 868, dark: true, to: out.appendingPathComponent("today-imported-dark.png"))
 
         for dark in [true, false] {
             let suffix = dark ? "dark" : "light"
