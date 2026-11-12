@@ -319,6 +319,7 @@ import BurroCore
         if !panel.isVisible || !animate { panel.orderFrontRegardless() }
     }
     private func select(_ session: AgentSession) {
+        store?.recordChatInteraction(session.id)
         // Collapse before handing focus to another app; opening a chat never sends input.
         collapse()
         if let url = session.chatURL, NSWorkspace.shared.open(url) { return }
