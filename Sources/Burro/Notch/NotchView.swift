@@ -59,6 +59,7 @@ struct NotchView: View {
         .transaction { $0.animation = nil }
         .onAppear { reconcile() }
         .onChange(of: chatSessions) { _, _ in reconcile() }
+        .onChange(of: store.chatInteractions) { _, _ in reconcile() }
         .onChange(of: Calendar.current.startOfDay(for: activity.sampledAt)) { _, _ in reconcile() }
         .onChange(of: presentation.holdingList) { _, _ in reconcile() }
         .onChange(of: presentation.expanded) { _, expanded in
@@ -79,7 +80,12 @@ struct NotchView: View {
     private func reconcile(force: Bool = false) {
         guard !compact else { return }
         let holding = !force && presentation.expanded && presentation.holdingList
-        list.reconcile(NotchFeed(sessions: chatSessions, includeIdle: presentation.includeIdle, scope: presentation.chatScope), holding: holding)
+        var feed = NotchFeed(sessions: chatSessions, includeIdle: presentation.includeIdle, scope: presentation.chatScope)
+        if presentation.chatScope == .activity {
+            feed.groups = NotchWorkspace.prioritized(feed.groups, interactions: store.chatInteractions,
+                path: { store.workspacePath(for: $0) }).flatMap(\.groups)
+        }
+        list.reconcile(feed, holding: holding)
         if !holding || workspacePaths.isEmpty {
             workspacePaths = Dictionary(list.groups.flatMap(\.members).map { ($0.id, store.workspacePath(for: $0)) }, uniquingKeysWith: { first, _ in first })
         }

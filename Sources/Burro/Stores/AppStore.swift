@@ -88,7 +88,10 @@ import BurroCore
     var remoteHosts: [RemoteHost] { didSet { save(); rebuildAgentActivity() } }
     var remoteSnapshots: [UUID: RemoteHostSnapshot] = [:]
     var checkingRemotes = false
-    var remoteSelection: String?
+    var remoteSelection: String? {
+        didSet { if let remoteSelection { recordChatInteraction(remoteSelection) } }
+    }
+    private(set) var chatInteractions: [String: Date] = [:]
     private var localActivity = AgentActivitySnapshot.empty
     var checkingAgents = false
     var didCheckAgents = false
@@ -144,6 +147,8 @@ import BurroCore
     init(defaults: UserDefaults = .standard, cleanupBatch: CleanupBatchStore? = nil, todos: TodoStore? = nil,
          notes: NotesStore? = nil, scan: @escaping Scan = { await Scanner().scan($0) }) {
         self.defaults = defaults
+        chatInteractions = (defaults.dictionary(forKey: "chats.interactions") as? [String: Double] ?? [:])
+            .mapValues { Date(timeIntervalSince1970: $0) }
         self.scan = scan
         self.todos = todos ?? TodoStore(cacheURL: FileManager.default.temporaryDirectory
             .appendingPathComponent("burro-todos-\(UUID().uuidString).json"), config: nil)
@@ -317,6 +322,17 @@ import BurroCore
         remoteSelection = session.id
     }
     func showChat(_ session: AgentSession) { selectAgent(session) }
+    func recordChatInteraction(_ id: String, at date: Date = Date()) {
+        chatInteractions[id] = date
+        // Keep local navigation history bounded; provider activity remains the fallback.
+        if chatInteractions.count > 512 {
+            chatInteractions = Dictionary(uniqueKeysWithValues: chatInteractions.sorted {
+                if $0.value != $1.value { return $0.value > $1.value }
+                return $0.key < $1.key
+            }.prefix(512).map { ($0.key, $0.value) })
+        }
+        defaults.set(chatInteractions.mapValues(\.timeIntervalSince1970), forKey: "chats.interactions")
+    }
     var mainProject: (path: String, name: String)? {
         let repos = repositoriesFound
         if let path = mainProjectPath, let match = repos.first(where: { $0.path == path }) { return match }
@@ -337,6 +353,7 @@ import BurroCore
     func startChat(in folder: String) { newChatFolder = folder; newChatPresented = true }
     /// Opens the chat in its provider when a link exists; otherwise shows its details in Burro.
     func open(_ session: AgentSession) {
+        recordChatInteraction(session.id)
         if let url = session.chatURL, NSWorkspace.shared.open(url) { return }
         selectAgent(session)
     }
