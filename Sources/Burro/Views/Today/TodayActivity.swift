@@ -1,7 +1,7 @@
 // Burro's own on-device tracker on the Today page (frontmost app, window title, a browser's host;
 // never the screen). Off, it is a small full-width card that explains it and turns it on. On, the
 // day view (TodayDayView.swift) takes its place. The pieces both share
-// live here: the controls (Pause, Turn off, Delete this day…, Delete everything…, each delete
+// live here: the controls (Pause, Turn off, Open Burro at login, Delete this day…, Delete everything…, each delete
 // behind a confirmation), the Accessibility prompt, app/site rows whose right-click changes the
 // category or marks a site private, app icons and category colours.
 import AppKit
@@ -26,10 +26,13 @@ struct TodayActivityCard: View {
     }
 }
 
-/// Recording/Paused, Pause or Turn on, and a menu with Turn off and the deletes.
+/// Recording/Paused, Pause or Turn on, and a menu with Turn off, Open Burro at login and the deletes.
 struct ActivityControls: View {
     var today: TodayStore
+    /// Given by the Today page; without it the menu has no login item.
+    @Environment(LoginItemStore.self) private var loginItem: LoginItemStore?
     @State private var confirm: Confirm?
+    @State private var loginFailure: String?
     private enum Confirm { case day, all }
     private var tracker: ActivityTracker { today.tracker }
 
@@ -51,14 +54,28 @@ struct ActivityControls: View {
                     Button("Turn off") { tracker.enabled = false }
                     Divider()
                 }
+                if let loginItem {
+                    // Tracking only records while Burro runs, so starting with the Mac belongs here.
+                    if loginItem.state == .requiresApproval {
+                        Button("Approve Burro in Login Items…") { loginItem.openSystemSettings() }
+                    } else {
+                        Toggle("Open Burro at login", isOn: Binding(get: { loginItem.presentation.isOn },
+                                                                    set: { loginFailure = loginItem.setEnabled($0) }))
+                    }
+                    Divider()
+                }
                 Button("Delete this day…", role: .destructive) { confirm = .day }
                 Button("Delete everything…", role: .destructive) { confirm = .all }
             } label: {
                 Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).frame(width: 26, height: 26)
                     .background(AppAppearance.raised, in: Circle())
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Pause, turn off or delete")
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Pause, turn off, open at login or delete")
         }
+        .onAppear { loginItem?.refresh() }
+        .alert("Open at login", isPresented: Binding(get: { loginFailure != nil }, set: { if !$0 { loginFailure = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(loginFailure ?? "") }
         .confirmationDialog(confirm == .all ? "Delete all recorded activity?" : "Delete this day's activity?",
                             isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
                             titleVisibility: .visible, presenting: confirm) { which in

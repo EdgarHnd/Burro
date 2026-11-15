@@ -1,5 +1,6 @@
 // Explicit repository and comparison-branch preferences persist only in Burro's defaults.
 import SwiftUI
+import BurroCore
 
 struct SettingsView: View {
     @Bindable var store: AppStore
@@ -12,6 +13,7 @@ struct SettingsView: View {
                 Text("Applies to the Burro window and Settings. The agent notch stays dark so it blends with the camera housing.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            LoginItemSettingsSection(loginItem: store.loginItem)
             TodoSyncSection(todos: store.todos)
             Section("Notes") {
                 Toggle("Open Notes with ⌥P from any app", isOn: $store.notesShortcut)
@@ -29,6 +31,7 @@ struct SettingsView: View {
                 Text("Hover to expand and move away to collapse. Use the pin button to keep it open. Agent status refreshes about every 3 seconds. Automatic placement prefers a display with a camera notch.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            KeepAwakeSettingsSection(keepAwake: store.keepAwake)
             Section("Usage limits") {
                 Toggle("Show usage limits", isOn: $store.usageEnabled)
                 Text("Connects directly to Codex, Claude, and Grok. Open Usage from Home or the toolbar for accounts, refresh settings, history and display controls.")
@@ -65,5 +68,25 @@ struct SettingsView: View {
                 Button("Apply & refresh") { Task { await store.refresh() } }.disabled(store.scanning)
             }
         }.formStyle(.grouped).scrollContentBackground(.hidden).frame(width: 560, height: 680)
+    }
+}
+
+/// Open at login: the toggle follows macOS's status, with a note and an approval button when needed.
+private struct LoginItemSettingsSection: View {
+    var loginItem: LoginItemStore
+    var body: some View {
+        let shown = loginItem.presentation
+        Section("Startup") {
+            Toggle("Open at login", isOn: Binding(get: { shown.isOn }, set: { loginItem.setEnabled($0) }))
+            if let note = shown.note {
+                Text(note).font(.caption).foregroundStyle(shown.isProblem ? .orange : .secondary)
+            }
+            if shown.needsApproval {
+                Button("Open Login Items…") { loginItem.openSystemSettings() }
+            }
+            Text("Activity tracking and the agent notch start with your Mac. Tracking only records while Burro is open. Also in System Settings › General › Login Items.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .onAppear { loginItem.refresh() }
     }
 }

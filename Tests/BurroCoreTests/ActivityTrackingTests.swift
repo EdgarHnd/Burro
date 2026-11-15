@@ -164,6 +164,142 @@ final class ActivityTrackingTests: XCTestCase {
         XCTAssertNil(recorder.live(at: at(510)).first?.title)
     }
 
+    func testIdleNoticedLateCutsPendingTimeAtTheLastInput() {
+        // Pending span straddling the idle start: cut there, and the open span after it is dropped.
+        var recorder = ActivityRecorder()
+        var written = recorder.observe(key("com.apple.dt.Xcode", "Burro"), at: at(0))
+        written += recorder.observe(key("com.apple.Terminal", "zsh"), at: at(100))
+        written += recorder.observe(key("com.apple.Safari", "Docs"), at: at(200))
+        XCTAssertEqual(written.map(\.bundleID), ["com.apple.dt.Xcode"])
+        written += recorder.observe(nil, at: at(150))                 // idle since 150, noticed later
+        XCTAssertEqual(written.map(\.bundleID), ["com.apple.dt.Xcode", "com.apple.Terminal"])
+        XCTAssertEqual(written.last?.start, at(100))
+        XCTAssertEqual(written.last?.end, at(150), "nothing runs past the last input")
+        XCTAssertTrue(recorder.live(at: at(300)).isEmpty)
+
+        // A pending span with a flick folded into it, cut inside the flick.
+        recorder = ActivityRecorder()
+        written = recorder.observe(key("com.apple.Terminal", "zsh"), at: at(0))
+        written += recorder.observe(key("com.apple.Safari", "Docs"), at: at(100))   // 3 s flick folds into Terminal
+        written += recorder.observe(key("com.apple.Notes", "Notes"), at: at(103))
+        XCTAssertTrue(written.isEmpty)
+        written += recorder.observe(nil, at: at(101))
+        XCTAssertEqual(written.map(\.bundleID), ["com.apple.Terminal"], "Notes started after the idle start")
+        XCTAssertEqual(written.first?.start, at(0))
+        XCTAssertEqual(written.first?.end, at(101))
+    }
+
+    func testIdleBeforeAPendingSpanDropsIt() {
+        var recorder = ActivityRecorder()
+        var written = recorder.observe(key("com.apple.dt.Xcode", "Burro"), at: at(0))
+        written += recorder.observe(nil, at: at(60))
+        XCTAssertEqual(written.map(\.duration), [60])
+        // Back, then an agent switches apps while you're away again; the check notices late.
+        written = recorder.observe(key("com.apple.Terminal", "zsh"), at: at(1000))
+        written += recorder.observe(key("com.apple.Safari", "Docs"), at: at(1030))
+        XCTAssertTrue(written.isEmpty)
+        XCTAssertEqual(recorder.pending?.bundleID, "com.apple.Terminal")
+        written = recorder.observe(nil, at: at(990))
+        XCTAssertTrue(written.isEmpty, "the pending and open spans both started after the idle start: \(written)")
+        XCTAssertTrue(recorder.live(at: at(1100)).isEmpty)
+    }
+
+    func testIdleNowEndsSpansAsBefore() {
+        var recorder = ActivityRecorder()
+        var written = recorder.observe(key("com.apple.dt.Xcode", "Burro"), at: at(0))
+        written += recorder.observe(key("com.apple.Terminal", "zsh"), at: at(100))
+        written += recorder.observe(nil, at: at(200))
+        XCTAssertEqual(written.map(\.bundleID), ["com.apple.dt.Xcode", "com.apple.Terminal"])
+        XCTAssertEqual(written.map(\.duration), [100, 100])
+        XCTAssertEqual(written.last?.end, at(200))
+        written = recorder.observe(nil, at: at(300))
+        XCTAssertTrue(written.isEmpty, "a second idle has nothing to end")
+    }
+
+    func testSpansThatRoundToNothingAreNeverHandedOutOrWritten() throws {
+        var recorder = ActivityRecorder()
+        // A prompt that flashes up on unlock and is gone at once.
+        var written = recorder.observe(key("com.example.Prompt"), at: at(0))
+        written += recorder.observe(nil, at: at(0.04))
+        XCTAssertTrue(written.isEmpty)
+        let span = ActivitySpan(key("com.apple.Notes", "One"), start: at(0.01), end: at(0.04))
+        XCTAssertFalse(span.isRecordable)
+        XCTAssertTrue(ActivitySpan(key("com.apple.Notes", "One"), start: at(0), end: at(0.1)).isRecordable)
+        let log = try temporaryLog()
+        try log.append([span, ActivitySpan(key("com.apple.Notes", "Two"), start: at(1), end: at(61))])
+        XCTAssertEqual(log.read(day: t0).map(\.title), ["Two"])
+    }
+
+    func testSystemPromptHelperIsASystemScreen() throws {
+        for id in ["com.apple.SecurityAgent", "com.apple.SecurityAgentHelper", "com.apple.SecurityAgentHelper.arm64",
+                   "com.apple.SecurityAgentHelper.x86_64", "com.apple.loginwindow"] {
+            XCTAssertTrue(ActivityPrivacy.isSystemScreen(id), id)
+        }
+        for id in ["com.apple.SecurityAgentHelperX", "com.example.com.apple.SecurityAgentHelper.arm64", "com.apple.Safari"] {
+            XCTAssertFalse(ActivityPrivacy.isSystemScreen(id), id)
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"))
+        let helper = ActivityPrivacy.key(bundleID: "com.apple.SecurityAgentHelper.arm64", app: "SecurityAgentHelper", title: nil)
+        let spans = [ActivitySpan(helper, start: at(3600), end: at(3660)),
+                     ActivitySpan(key("com.apple.dt.Xcode", "Burro"), start: at(3660), end: at(3720))]
+        let day = ActivityDay.build(spans: spans, rules: ActivityRules(), day: t0, calendar: calendar)
+        XCTAssertEqual(day.total, 60, "a stored helper span isn't shown")
+        XCTAssertEqual(day.apps.map(\.name), ["Xcode"])
+    }
+
+    // MARK: Presence
+
+    func testOnlyInputEndsIdleness() {
+        var presence = ActivityPresence(idleAfter: 120)
+        presence.reset(quiet: 3)
+        XCTAssertFalse(presence.idle)
+        XCTAssertNil(presence.update(quiet: 60, at: at(60)))
+        XCTAssertEqual(presence.update(quiet: 140, at: at(140)), .away(since: at(0)), "dated from the last input")
+        // An agent brings apps to the front every few seconds: no input, still away.
+        for t in stride(from: 148.0, through: 1400, by: 8) { XCTAssertNil(presence.update(quiet: t, at: at(t))) }
+        XCTAssertTrue(presence.idle)
+        XCTAssertEqual(presence.update(quiet: 2, at: at(1500)), .back(since: at(1498)))
+        XCTAssertFalse(presence.idle)
+        XCTAssertNil(presence.update(quiet: 1, at: at(1505)), "a switch right after a click is just a switch")
+        presence.reset(quiet: 600)
+        XCTAssertTrue(presence.idle, "waking up with no input starts away")
+        XCTAssertNil(presence.update(quiet: 605, at: at(2000)))
+    }
+
+    // MARK: Day shown
+
+    func testShownDayFollowsTodayAcrossMidnightAndStaysOnAPickedDay() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"))
+        let midnight = t0 // 2026-11-09 00:00 in Seoul
+        let friday = midnight.addingTimeInterval(-3600) // 23:00 the day before
+        var shown = ShownDay(now: friday, calendar: calendar)
+        XCTAssertEqual(shown.day, midnight.addingTimeInterval(-86_400))
+        XCTAssertFalse(shown.update(now: friday.addingTimeInterval(1800), calendar: calendar))
+        XCTAssertTrue(shown.update(now: midnight.addingTimeInterval(60), calendar: calendar), "left on today, it moves on")
+        XCTAssertEqual(shown.day, midnight)
+        XCTAssertTrue(shown.following)
+
+        // A past day you picked stays shown across midnight.
+        XCTAssertTrue(shown.show(midnight.addingTimeInterval(-3 * 86_400), now: midnight.addingTimeInterval(60), calendar: calendar))
+        XCTAssertFalse(shown.following)
+        XCTAssertFalse(shown.update(now: midnight.addingTimeInterval(86_400 + 60), calendar: calendar))
+        XCTAssertEqual(shown.day, midnight.addingTimeInterval(-3 * 86_400))
+
+        // Back to today follows again; a future day is clamped to today.
+        let nextDay = midnight.addingTimeInterval(86_400 + 60)
+        XCTAssertTrue(shown.show(nextDay.addingTimeInterval(5 * 86_400), now: nextDay, calendar: calendar))
+        XCTAssertEqual(shown.day, midnight.addingTimeInterval(86_400))
+        XCTAssertTrue(shown.following)
+        XCTAssertTrue(shown.update(now: nextDay.addingTimeInterval(86_400), calendar: calendar))
+        XCTAssertEqual(shown.day, midnight.addingTimeInterval(2 * 86_400))
+
+        // The clock going back never leaves a day later than today.
+        XCTAssertTrue(shown.update(now: midnight.addingTimeInterval(60), calendar: calendar))
+        XCTAssertEqual(shown.day, midnight)
+    }
+
     // MARK: Storage
 
     private func temporaryLog() throws -> ActivityLog {
@@ -306,7 +442,7 @@ final class ActivityTrackingTests: XCTestCase {
         for child in Mirror(reflecting: DayflowImport.Report()).children {
             XCTAssertTrue(child.value is Int || child.value is [ActivityCategory: TimeInterval], "Report.\(child.label ?? "?") isn't a count")
         }
-        let tracking = try ["ActivityPrivacy", "ActivityLog", "ActivityRecorder", "ActivitySummary", "ActivityCategories", "ActivityTimeline",
+        let tracking = try ["ActivityPrivacy", "ActivityLog", "ActivityRecorder", "ActivityPresence", "ActivitySummary", "ActivityCategories", "ActivityTimeline",
                             "ActivityTimelineLayout", "ActivityImport"].map {
             try String(contentsOf: root.appendingPathComponent("Sources/BurroCore/\($0).swift"), encoding: .utf8)
         } + ["Stores/ActivityTracker", "Support/ActivitySampler", "Views/Today/TodayActivity", "Views/Today/TodayDayView", "Views/Home/HomeActivity"].map {

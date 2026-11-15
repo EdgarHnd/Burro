@@ -88,10 +88,11 @@ struct WindowOcclusionReader: NSViewRepresentable {
 
 struct MacHealthView: View {
     @Bindable var health: MacHealthStore
+    var keepAwake: KeepAwakeStore
     @State private var onScreen = false
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "Mac Health", subtitle: "CPU, memory and storage, plus anything still running after its work ended.") {
+            PageHeader(title: "Mac Health", subtitle: "CPU, memory and storage, anything still running after its work ended, and keeping the Mac awake.") {
                 if health.refreshing { ProgressView().controlSize(.small).accessibilityLabel("Refreshing") }
                 PillButton(title: "Refresh", symbol: "arrow.clockwise") { Task { await health.refresh(force: true) } }
                     .disabled(health.refreshing)
@@ -102,6 +103,7 @@ struct MacHealthView: View {
                         HStack { Label(message, systemImage: "info.circle"); Spacer(); Button { health.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }
                             .font(.callout).padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
                     }
+                    KeepAwakeCard(keepAwake: keepAwake)
                     if let snapshot = health.snapshot {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
                             metrics(snapshot)

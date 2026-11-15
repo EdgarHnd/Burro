@@ -1,5 +1,7 @@
 // On-disk activity: one JSON-lines file per local day in ~/Library/Application Support/Burro/
-// Activity (folder 0700, files 0600), appended a few lines at a time. Reads skip symlinks,
+// Activity (folder 0700, files 0600), appended a few lines at a time. Times are kept to a tenth of
+// a second, and a span (or a piece of one split at midnight) that would round to no time at all
+// isn't written. Reads skip symlinks,
 // non-regular files and bad or truncated lines; files are capped at 4 MiB and kept 365 days.
 // Spans imported from another tracker (ActivityImport.swift) also carry a `source` and may carry
 // their own `category`; live spans never do. Nothing here touches the network, logs, or the
@@ -21,6 +23,9 @@ public struct ActivitySpan: Codable, Sendable, Equatable {
     /// Where an imported span came from (`ActivitySpan.sources`); nil for time Burro tracked itself.
     public var source: String?
     public var duration: TimeInterval { end.timeIntervalSince(start) }
+    /// Lasts at least a tenth of a second once both ends are rounded the way the log stores them.
+    public var isRecordable: Bool { Self.stored(end) > Self.stored(start) }
+    static func stored(_ date: Date) -> Double { (date.timeIntervalSince1970 * 10).rounded() / 10 }
     /// The only sources a stored span may name.
     public static let sources: Set<String> = ["dayflow"]
 
@@ -41,8 +46,8 @@ public struct ActivitySpan: Codable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey { case start, end, bundle, app, title, host, `private`, category, source }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode((start.timeIntervalSince1970 * 10).rounded() / 10, forKey: .start)
-        try c.encode((end.timeIntervalSince1970 * 10).rounded() / 10, forKey: .end)
+        try c.encode(Self.stored(start), forKey: .start)
+        try c.encode(Self.stored(end), forKey: .end)
         try c.encode(bundleID, forKey: .bundle)
         try c.encode(app, forKey: .app)
         try c.encodeIfPresent(title, forKey: .title)
@@ -87,7 +92,7 @@ public struct ActivityLog: Sendable {
         folder.appendingPathComponent(TodoDay.key(day, calendar: calendar) + ".jsonl")
     }
 
-    /// Appends spans to their days' files, splitting any that cross midnight.
+    /// Appends spans to their days' files, splitting any that cross midnight. Pieces that would round to no time are skipped.
     public func append(_ spans: [ActivitySpan], calendar: Calendar = .current) throws {
         var byDay: [URL: Data] = [:]
         let encoder = JSONEncoder()
@@ -98,7 +103,9 @@ public struct ActivityLog: Sendable {
                 let next = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? piece.end
                 var part = piece
                 part.end = min(piece.end, next)
-                byDay[url(for: dayStart, calendar: calendar), default: Data()].append(try encoder.encode(part) + Data("\n".utf8))
+                if part.isRecordable {
+                    byDay[url(for: dayStart, calendar: calendar), default: Data()].append(try encoder.encode(part) + Data("\n".utf8))
+                }
                 piece.start = part.end
             }
         }

@@ -220,6 +220,8 @@ public enum LeftoverPolicy {
             guard !isApp(process.executable), !isSystem(process.executable), !process.executable.contains("/CoreSimulator/") else { continue }
             // Open agent CLIs are in use, not disposable; they are summarized separately.
             guard !services.contains(baseName(process.executable)), !isAgentCLI(process.executable) else { continue }
+            // Keep Awake's watchdog outlives Burro on purpose: it turns sleep back on.
+            guard !process.arguments.contains(KeepAwakeScript.processName) else { continue }
             let age = now.timeIntervalSince(process.started), percent = cpu[process.id]
             let kind: LeftoverKind, reason: String
             if let used = process.cpuTime, used >= 3600, let percent, percent >= 25 {

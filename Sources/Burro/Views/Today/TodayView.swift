@@ -23,6 +23,8 @@ struct TodayView: View {
             .frame(maxWidth: 1240).frame(maxWidth: .infinity)
         }
         .background(AppAppearance.background)
+        // The activity controls' "Open Burro at login" item.
+        .environment(store.loginItem)
         .background(WindowOcclusionReader { onScreen = $0 })
         .task(id: onScreen) {
             today.profiles = { [weak store] in store?.usage.preferences.profiles ?? [:] }

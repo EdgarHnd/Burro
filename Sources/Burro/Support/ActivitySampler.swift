@@ -1,8 +1,11 @@
 // Watches what you're doing, event-driven and on this Mac only: the frontmost app from NSWorkspace
 // and, with Accessibility, the focused window's title and a browser's address-bar text (its host
-// is all that's kept, by ActivityPrivacy). No screenshots, no keystrokes. A 30-second timer
-// (10 s tolerance) checks for two minutes without input; sleep, lock and session switches stop it
-// outright. Title notifications are muted after the first one until a read 1–5 s later, so a
+// is all that's kept, by ActivityPrivacy). No screenshots, no keystrokes. Only input decides
+// whether you're here (ActivityPresence): two minutes without it is away, and an app switch while
+// you're away (an agent driving apps) records nothing, though the window is still followed so it's
+// known when you return. A 30-second timer (10 s tolerance) checks for those two minutes; while
+// you're away it checks every 5 seconds (1 s tolerance) so a return is noticed quickly. Sleep, lock
+// and session switches stop it outright. Title notifications are muted after the first one until a read 1–5 s later, so a
 // window that renames itself ten times a second costs one read every five seconds. The lock
 // screen, login window and screen saver count as away. Arc (and Chrome, Brave or Edge when their
 // address field can't be found) only builds its accessibility tree when asked: the sampler sets
@@ -38,7 +41,8 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
 
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var timer: Timer?
-    private var idle = false
+    private var timerInterval: TimeInterval = 0
+    private var presence = ActivityPresence(idleAfter: ActivitySampler.idleAfter)
     private var suspended = false
     private var running = false
     private var app: (bundleID: String, name: String, pid: pid_t, element: AXUIElement)?
@@ -80,8 +84,9 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
         on(distributed, Notification.Name("com.apple.screenIsUnlocked")) { sampler, _ in sampler.resume() }
         // A hung app must not stall reads for AX's default six seconds per call.
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25)
-        suspended = false; idle = false
-        startTimer()
+        suspended = false
+        presence.reset(quiet: Self.quietSeconds())
+        syncTimer()
         activate(NSWorkspace.shared.frontmostApplication)
     }
 
@@ -90,7 +95,7 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
         running = false
         for (center, token) in observers { center.removeObserver(token) }
         observers = []
-        timer?.invalidate(); timer = nil
+        syncTimer()
         detach()
         app = nil; last = nil
         onChange(nil, Date())
@@ -98,41 +103,53 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
 
     // MARK: Presence
 
-    private func startTimer() {
+    /// Every 30 seconds while you're here, every 5 while you're away, and off while stopped or suspended.
+    private func syncTimer() {
+        guard running, !suspended else { timer?.invalidate(); timer = nil; return }
+        let interval: TimeInterval = presence.idle ? 5 : 30
+        guard timer == nil || timerInterval != interval else { return }
         timer?.invalidate()
-        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.check() } }
-        timer.tolerance = 10
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.check() } }
+        timer.tolerance = presence.idle ? 1 : 10
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+        timerInterval = interval
+    }
+
+    /// Seconds since the last key press, click, scroll or mouse move in this session.
+    private static func quietSeconds() -> TimeInterval {
+        let types: [CGEventType] = [.mouseMoved, .keyDown, .leftMouseDown, .rightMouseDown, .scrollWheel, .flagsChanged, .leftMouseDragged]
+        return types.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
     }
 
     private func check() {
         let now = Date()
         refreshTrust()
-        let types: [CGEventType] = [.mouseMoved, .keyDown, .leftMouseDown, .rightMouseDown, .scrollWheel, .flagsChanged, .leftMouseDragged]
-        let quiet = types.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
-        if !idle && quiet >= Self.idleAfter {
-            idle = true
-            onChange(nil, now.addingTimeInterval(-quiet))
-        } else if idle && quiet < Self.idleAfter {
-            idle = false
-            if let last { onChange(last, now.addingTimeInterval(-quiet)) }
+        switch presence.update(quiet: Self.quietSeconds(), at: now) {
+        case .away(let since):
+            onChange(nil, since)
+        case .back(let since):
+            if let last { onChange(last, since) }
             scheduleRead(after: 0.2)
+        case nil:
+            break
         }
-        if !idle { onTick(now) }
+        syncTimer()
+        if !presence.idle { onTick(now) }
     }
 
     private func suspend() {
         guard running, !suspended else { return }
         suspended = true
-        timer?.invalidate(); timer = nil
+        syncTimer()
         onChange(nil, Date())
     }
 
     private func resume() {
         guard running, suspended else { return }
-        suspended = false; idle = false
-        startTimer()
+        suspended = false
+        presence.reset(quiet: Self.quietSeconds())
+        syncTimer()
         activate(NSWorkspace.shared.frontmostApplication)
     }
 
@@ -146,21 +163,30 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
 
     // MARK: Frontmost app and window
 
+    /// An app came to the front. It counts as you only if input came recently (a human switch follows a
+    /// click or key press); otherwise you're away and the window is followed without recording it.
     private func activate(_ running: NSRunningApplication?) {
         guard self.running, !suspended, let running, let bundleID = running.bundleIdentifier else { return }
-        idle = false
+        let now = Date()
+        var since = now
+        switch presence.update(quiet: Self.quietSeconds(), at: now) {
+        case .away(let at): onChange(nil, at)
+        case .back(let at): since = at
+        case nil: break
+        }
+        syncTimer()
         // The lock screen, login window or screen saver in front: you're away, nothing to read.
         if ActivityPrivacy.isSystemScreen(bundleID) {
             detach()
             app = nil; last = nil; browserCache = nil
-            onChange(nil, Date())
+            if !presence.idle { onChange(nil, now) }
             return
         }
         let element = AXUIElementCreateApplication(running.processIdentifier)
         app = (bundleID, running.localizedName ?? bundleID, running.processIdentifier, element)
         browserCache = nil
         last = ActivityObservation(bundleID: bundleID, app: running.localizedName ?? bundleID)
-        onChange(last, Date())
+        if !presence.idle { onChange(last, since) }
         refreshTrust()
         attach(pid: running.processIdentifier, element: element)
         lastRead = .distantPast
@@ -256,7 +282,7 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
                                               address: result.address, privateWindow: result.isPrivate)
         guard observation != last else { return }
         last = observation
-        if !idle { onChange(observation, Date()) }
+        if !presence.idle { onChange(observation, Date()) }
     }
 
     // MARK: Reading (off the main thread)

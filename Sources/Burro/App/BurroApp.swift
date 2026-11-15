@@ -87,6 +87,7 @@ struct MonitorMenu: View {
         Button("Show Agent Notch") { notch.show() }
         Button(store.notesShortcut ? "Notes  ⌥P" : "Notes") { store.showNotes?(.last) }
         Toggle("Enable Notch", isOn: $store.notchEnabled)
+        KeepAwakeMenu(keepAwake: store.keepAwake)
         Button("Open Burro") { store.page = .home; notch.openDashboardWindow() }
         Button("Open Usage") { store.page = .usage; notch.openDashboardWindow() }
         Button("Open Mac Health") { store.page = .health; notch.openDashboardWindow() }

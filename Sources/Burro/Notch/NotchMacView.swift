@@ -4,6 +4,7 @@ import BurroCore
 
 struct NotchMacView: View {
     var health: MacHealthStore
+    var keepAwake: KeepAwakeStore
     /// Samples only while the panel is expanded on this page and actually on screen.
     var active: Bool
     var onOpen: () -> Void
@@ -15,6 +16,7 @@ struct NotchMacView: View {
                     VStack(spacing: 6) { rows(snapshot) }
                         .padding(.horizontal, 12).padding(.vertical, 9).modifier(AppCardSurface(translucent: true))
                     leftoverSummary
+                    if keepAwake.awake { KeepAwakeNotchRow(keepAwake: keepAwake, onOpen: onOpen) }
                     if snapshot.restartSuggested(now: snapshot.sampledAt), let booted = snapshot.bootedAt {
                         Label("Up \(LeftoverPolicy.duration(snapshot.sampledAt.timeIntervalSince(booted))) · a restart clears swap",
                               systemImage: "arrow.clockwise.circle").font(.system(size: 10)).foregroundStyle(.secondary).padding(.horizontal, 4)

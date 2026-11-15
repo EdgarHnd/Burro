@@ -29,8 +29,9 @@ struct TopBar: View {
             TopBarIcon(symbol: "arrow.triangle.branch", help: AppPage.worktrees.help, selected: store.page == .worktrees) { store.page = .worktrees }
             TopBarIcon(symbol: "server.rack", help: AppPage.machines.help, selected: store.page == .machines) { store.page = .machines }
             TopBarIcon(symbol: "gauge.with.dots.needle.33percent", help: AppPage.usage.help, selected: store.page == .usage) { store.page = .usage }
-            TopBarIcon(symbol: "heart.text.square", help: AppPage.health.help, badge: store.health.report.leftovers.count,
-                       badgeColor: AppAppearance.amber, selected: store.page == .health) { store.page = .health }
+            TopBarIcon(symbol: "heart.text.square", help: AppPage.health.help + (store.keepAwake.awake ? ": keeping this Mac awake" : ""),
+                       badge: store.health.report.leftovers.count, badgeColor: AppAppearance.amber,
+                       dot: store.keepAwake.awake ? AppAppearance.green : nil, selected: store.page == .health) { store.page = .health }
             TopBarIcon(symbol: "square.and.pencil", help: "New chat (⌘N)", selected: false) { store.newChatPresented = true }
         }
         .padding(.horizontal, 14)
@@ -76,6 +77,8 @@ struct TopBarIcon: View {
     var badgeColor: Color = .red
     /// A small pulsing dot while something runs behind this page.
     var working = false
+    /// A small steady dot for a state that stays on (Keep Awake).
+    var dot: Color? = nil
     var selected: Bool
     var action: () -> Void
     @State private var hovering = false
@@ -97,6 +100,10 @@ struct TopBarIcon: View {
                         .overlay(Circle().strokeBorder(AppAppearance.background, lineWidth: 1.5))
                         .offset(x: -3, y: 4)
                         .symbolEffect(.pulse, isActive: true)
+                } else if let dot {
+                    Circle().fill(dot).frame(width: 7, height: 7)
+                        .overlay(Circle().strokeBorder(AppAppearance.background, lineWidth: 1.5))
+                        .offset(x: -3, y: 4)
                 }
             }
             .contentShape(Circle())

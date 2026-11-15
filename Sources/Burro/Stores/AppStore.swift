@@ -85,6 +85,8 @@ import BurroCore
     var checkingUsage: Bool { usage.checking }
     var usageEnabled: Bool { get { usage.enabled } set { usage.enabled = newValue } }
     let health: MacHealthStore
+    /// Keeps this Mac awake while you ask or while agents work on it.
+    let keepAwake: KeepAwakeStore
     var remoteHosts: [RemoteHost] { didSet { save(); rebuildAgentActivity() } }
     var remoteSnapshots: [UUID: RemoteHostSnapshot] = [:]
     var checkingRemotes = false
@@ -111,6 +113,8 @@ import BurroCore
     let today: TodayStore
     /// Burro's own on-device activity tracker (off by default).
     let activityTracker: ActivityTracker
+    /// Open at login; macOS's login-item status, read live and never saved here.
+    let loginItem = LoginItemStore()
     let shipped = ShippedStore()
     let machines = MachinesStore()
     let notes: NotesStore
@@ -158,6 +162,7 @@ import BurroCore
         self.cleanupBatch = cleanupBatch ?? CleanupBatchStore()
         usage = UsageStore(defaults: defaults)
         health = MacHealthStore(defaults: defaults)
+        keepAwake = KeepAwakeStore(defaults: defaults)
         remoteHosts = defaults.data(forKey: "remoteHosts").flatMap { try? JSONDecoder().decode([RemoteHost].self, from: $0) } ?? []
         PreferencesMigration.migrate(into: defaults, legacy: defaults.persistentDomain(forName: "local.grove.worktrees") ?? [:])
         notchEnabled = defaults.object(forKey: "notchEnabled") as? Bool ?? true
@@ -218,6 +223,12 @@ import BurroCore
     }
     var selected: Worktree? { selectedWorktrees.count == 1 ? selectedWorktrees.first : nil }
     var activeAgents: [AgentSession] { agentActivity.sessions.filter { $0.state == .working } }
+    /// Chats working on this Mac, the Orchestrator included; subagents only count when nothing above them does.
+    var localWorkingAgents: Int {
+        let working = localActivity.sessions.filter { $0.state == .working }
+        let top = working.filter { $0.isSubagent != true }.count
+        return max(top, working.isEmpty && !orchestrator.running ? 0 : 1)
+    }
     var repositoriesFound: [(path: String, name: String)] {
         Dictionary(grouping: snapshot.worktrees, by: \.repositoryPath).map { (path: $0.key, name: $0.value.first?.repository ?? $0.key) }.sorted { $0.name < $1.name }
     }
@@ -228,6 +239,7 @@ import BurroCore
         // Owned by the app store so closing the window keeps the menu-bar monitor alive.
         usage.start()
         activityTracker.start()
+        keepAwake.start()
         let coordinator = AgentRefreshCoordinator { [weak self] in
             guard let self else { return 15 }
             await self.refreshAgents()
@@ -273,6 +285,7 @@ import BurroCore
     func stop() {
         usage.stop()
         activityTracker.stop()
+        keepAwake.stop()
         agentWatcher?.stop(); agentWatcher = nil
         agentRefresh?.stop(); agentRefresh = nil
         monitorTask?.cancel(); monitorTask = nil
@@ -288,6 +301,7 @@ import BurroCore
         let result = await Task.detached(priority: .utility) { AgentMonitor().sample() }.value
         localActivity = result; checkingAgents = false; didCheckAgents = true
         rebuildAgentActivity()
+        keepAwake.agentsChanged(working: localWorkingAgents)
     }
     func workspaceLabel(for session: AgentSession) -> String {
         if let tree = worktree(for: session) {

@@ -41,8 +41,13 @@ public enum ActivityPrivacy {
         "com.apple.loginwindow", "com.apple.ScreenSaver.Engine", "com.apple.ScreenSaver.Engine.legacyScreenSaver",
         "com.apple.SecurityAgent", "com.apple.LocalAuthentication.UIAgent",
     ]
+    /// The authentication prompt's helper, which comes to the front on unlock under an id per
+    /// architecture (`com.apple.SecurityAgentHelper.arm64`).
+    static let systemScreenFamilies = ["com.apple.SecurityAgentHelper"]
 
-    public static func isSystemScreen(_ bundleID: String) -> Bool { systemScreens.contains(bundleID) }
+    public static func isSystemScreen(_ bundleID: String) -> Bool {
+        systemScreens.contains(bundleID) || systemScreenFamilies.contains { bundleID == $0 || bundleID.hasPrefix($0 + ".") }
+    }
 
     /// Browsers whose address bar the sampler may read (host only).
     public static let browsers: Set<String> = [

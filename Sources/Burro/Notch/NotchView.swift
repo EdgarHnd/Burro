@@ -175,7 +175,7 @@ struct NotchView: View {
                     onEnable: { store.usageEnabled = true }, onConnectClaude: store.connectClaudeUsage, checking: store.checkingUsage)
             }
             else if showingMac {
-                NotchMacView(health: store.health, active: presentation.expanded) { store.page = .health; onOpenDashboard() }
+                NotchMacView(health: store.health, keepAwake: store.keepAwake, active: presentation.expanded) { store.page = .health; onOpenDashboard() }
             }
             else if showingHealth && !presentation.navigation.isPreviewing { NotchHealthView(store: store) }
             else if !store.didCheckAgents { loading }

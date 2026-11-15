@@ -17,7 +17,7 @@ struct ContentView: View {
                 case .worktrees: worktrees
                 case .machines: MachinesView(store: store)
                 case .usage: UsageDashboardView(usage: store.usage)
-                case .health: MacHealthView(health: store.health)
+                case .health: MacHealthView(health: store.health, keepAwake: store.keepAwake)
                 case .remote: remote
                 case .timeline: ShippedTimelineView(store: store)
                 }
