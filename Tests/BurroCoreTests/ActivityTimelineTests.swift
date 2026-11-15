@@ -171,7 +171,7 @@ final class ActivityTimelineTests: XCTestCase {
 
     func testSubMinuteBlocksAndRowsAreHidden() throws {
         // A 40-second Private blip between idle gaps is no block, but its time still counts.
-        let result = blocks([(xcode, 0, 20, nil, nil), (arc, 30, 30 + 40 / 60, nil, "https://chase.com"), (xcode, 40, 60, nil, nil)])
+        let result = blocks([(xcode, 0, 20, nil, nil), (arc, 30, 30 + 40.0 / 60.0, nil, "https://chase.com"), (xcode, 40, 60, nil, nil)])
         XCTAssertEqual(result.map(\.category), [.build, .build])
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"))
