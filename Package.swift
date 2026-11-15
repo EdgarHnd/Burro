@@ -10,7 +10,9 @@ let package = Package(
     targets: [
         .target(name: "CSystem", linkerSettings: [.linkedLibrary("proc"), .linkedLibrary("sqlite3")]),
         .target(name: "BurroCore", dependencies: ["CSystem"], resources: [.copy("Resources/remote_probe.py"), .copy("Resources/remote_transcript.py"),
-                                                                   .copy("Resources/remote_media.py"), .copy("Resources/remote_reply.py")]),
+                                                                   .copy("Resources/remote_media.py"), .copy("Resources/remote_reply.py"),
+                                                                   .copy("Resources/remote_folders.py"), .copy("Resources/remote_launch.py"),
+                                                                   .copy("Resources/remote_tail.py")]),
         .executableTarget(name: "Burro", dependencies: ["BurroCore"], resources: [.copy("Resources/Brand")],
                           linkerSettings: [.linkedFramework("AVKit")]),
         .executableTarget(name: "BurroInspect", dependencies: ["BurroCore"]),

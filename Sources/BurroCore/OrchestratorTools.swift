@@ -1,8 +1,9 @@
 // Burro's tools for the orchestrator, served over MCP (stdio, newline-delimited JSON-RPC) by
 // `burro-mcp`. Everything reads Burro's latest snapshot, except `read_chat` (reads one
-// transcript on demand, this Mac or over SSH). `reply_chat` and `start_chat` never send or
-// launch anything: they record a proposal in the actions file next to the snapshot, which the
-// user sends (or discards) from Burro.
+// transcript on demand, this Mac or over SSH). `reply_chat` and `start_chat` (on this Mac or, with
+// `machine`, another one) never send or launch anything: they record a proposal in the actions file next to the snapshot, which the
+// user sends (or discards) from Burro. The briefing, file, memory and to-do tools are in
+// OrchestratorToolsMore.swift.
 import Foundation
 
 public struct OrchestratorTools {
@@ -50,6 +51,8 @@ public struct OrchestratorTools {
     }
 
     public func call(_ name: String, _ arguments: [String: Any]) -> (String, Bool) {
+        if name == "brief" { return brief() }
+        if let handled = callMore(name, arguments) { return handled }
         if name == "start_chat" { return startChat(arguments) }
         if name == "reply_chat" { return replyChat(arguments) }
         guard let state = Orchestrator.readState(from: stateURL) else {
@@ -65,7 +68,8 @@ public struct OrchestratorTools {
     }
 
     static var definitions: [[String: Any]] { [
-        tool("overview", "Everything Burro sees right now: machines and their agent versions, the main project, every project, chats that need the user, are working or are ready to read (with subagents), and today's to-dos.", [:]),
+        briefDefinition,
+        tool("overview", "Everything Burro sees right now: machines and their agent versions, folders on other machines, the main project, every project, chats that need the user, are working or are ready to read (with subagents; chats already in the brief are only counted), and today's to-dos.", [:]),
         tool("list_chats", "List chats across all machines, newest first, with ids for read_chat.", [
             "status": ["type": "string", "enum": ["needs_you", "working", "unread", "recent", "all"], "description": "Default all."],
             "machine": ["type": "string", "description": "Machine name, e.g. \"This Mac\"."],
@@ -74,9 +78,10 @@ public struct OrchestratorTools {
             "include_subagents": ["type": "boolean"],
             "limit": ["type": "integer", "minimum": 1, "maximum": 200],
         ]),
-        tool("read_chat", "Read a chat's latest messages (user, assistant and tool calls) on any machine.", [
+        tool("read_chat", "Read a chat's latest messages (user, assistant and tool calls) on any machine. Ends with a cursor to pass as since next time.", [
             "id": ["type": "string", "description": "A chat id from overview or list_chats."],
             "limit": ["type": "integer", "minimum": 1, "maximum": 300, "description": "Messages to show, default 60."],
+            "since": ["type": "string", "description": "The cursor from your last read of this chat (or an ISO 8601 time): only newer messages."],
         ], required: ["id"]),
         tool("list_worktrees", "A project's git worktrees: branch, uncommitted and unpushed work, activity, and whether Burro considers it safe to clean.", [
             "project": ["type": "string", "description": "Project name or path. Default: the main project."],
@@ -85,15 +90,16 @@ public struct OrchestratorTools {
             "id": ["type": "string", "description": "A chat id from overview or list_chats."],
             "message": ["type": "string", "description": "The reply, written as the user would send it."],
         ], required: ["id", "message"]),
-        tool("start_chat", "Propose a new chat on this Mac in a project folder. This does not start it: the user reviews, edits and sends it (or discards it) in Burro.", [
+        tool("start_chat", "Propose a new chat in a project folder, on this Mac or another machine. This does not start it: the user reviews, edits and sends it (or discards it) in Burro.", [
             "agent": ["type": "string", "enum": ["claude", "codex"]],
-            "folder": ["type": "string", "description": "Project name or absolute folder path."],
+            "folder": ["type": "string", "description": "Project name or absolute folder path (on another machine: a folder from overview, by name or path)."],
+            "machine": ["type": "string", "description": "Optional machine name from overview; default This Mac."],
             "prompt": ["type": "string", "description": "A self-contained task: goal, context, what done looks like."],
             "model": ["type": "string", "description": "Optional model id."],
             "effort": ["type": "string", "enum": ["low", "medium", "high", "xhigh", "max"], "description": "Optional reasoning effort."],
             "access": ["type": "string", "enum": ["ask", "edit", "readOnly"], "description": "Default ask: the agent asks before acting."],
         ], required: ["agent", "folder", "prompt"]),
-    ] }
+    ] + moreDefinitions }
 
     private static func tool(_ name: String, _ description: String, _ properties: [String: Any], required: [String] = []) -> [String: Any] {
         var schema: [String: Any] = ["type": "object", "properties": properties, "additionalProperties": false]
@@ -121,16 +127,29 @@ public struct OrchestratorTools {
             lines.append("- \(machine.name): " + parts.joined(separator: " · "))
         }
         let chats = sorted(state.chats.filter { $0.isSubagent != true })
+        // Chats with an open brief item are only counted here: `brief` already says what they need.
+        let briefed = Set(briefFile.open.compactMap { $0.chatID?.lowercased() })
         for (title, group) in [("Needs you", chats.filter(needsYou)), ("Working", chats.filter { $0.state == .working || $0.state == .scheduled }),
                                ("Ready to read", chats.filter(\.isDone))] where !group.isEmpty {
+            let shown = group.filter { !briefed.contains($0.id.lowercased()) }
+            let inBrief = group.count - shown.count
             lines.append("\n## \(title) (\(group.count))")
-            lines += group.prefix(25).map { row($0, state) }
+            lines += shown.prefix(25).map { row($0, state) }
+            if inBrief > 0 { lines.append("- \(inBrief) more in the brief") }
         }
         let recent = chats.filter { !needsYou($0) && $0.state != .working && $0.state != .scheduled && !$0.isDone }
             .filter { now().timeIntervalSince($0.updatedAt) < 86_400 }
         if !recent.isEmpty {
             lines.append("\n## Other chats in the last 24 hours (\(recent.count))")
             lines += recent.prefix(15).map { row($0, state) }
+        }
+        let folders = state.machines.filter { !($0.folders ?? []).isEmpty }
+        if !folders.isEmpty {
+            lines.append("\n## Folders on other machines (for start_chat with machine)")
+            for machine in folders {
+                let list = machine.folders ?? []
+                lines.append("- \(machine.name): " + list.prefix(15).joined(separator: ", ") + (list.count > 15 ? " (\(list.count - 15) more)" : ""))
+            }
         }
         lines.append("\n## Projects")
         for project in state.projects.sorted(by: { ($0.lastActive ?? .distantPast) > ($1.lastActive ?? .distantPast) }).prefix(20) {
@@ -184,8 +203,16 @@ public struct OrchestratorTools {
             let title = transcript.title ?? chat?.title ?? "Chat"
             lines.append("# \(title)")
             if let chat { lines.append("\(agent(chat)) on \(machineName(chat)), \(folderName(chat)) · \(stateText(chat)) · updated \(ago(chat.updatedAt))") }
-            if transcript.truncated { lines.append("(Older messages not shown; this is the latest \(transcript.messages.count).)") }
-            for message in transcript.messages {
+            var shown = transcript.messages
+            if let since = (arguments["since"] as? String)?.trimmingCharacters(in: .whitespaces), !since.isEmpty {
+                let newer = Self.messages(shown, since: since)
+                shown = newer.messages
+                if !newer.found { lines.append("(That cursor isn't among the latest \(transcript.messages.count) messages; showing them all.)") }
+                else if shown.isEmpty { lines.append("Nothing new since then.") }
+            } else if transcript.truncated {
+                lines.append("(Older messages not shown; this is the latest \(transcript.messages.count).)")
+            }
+            for message in shown {
                 let time = message.at.map { " " + $0.formatted(date: .omitted, time: .shortened) } ?? ""
                 switch message.kind {
                 case .user: lines.append("\n[user\(time)]\n" + OrchestratorEvent.clip(message.text, 6000))
@@ -196,6 +223,7 @@ public struct OrchestratorTools {
                 }
             }
             if transcript.messages.isEmpty { lines.append("No messages yet.") }
+            if let last = transcript.messages.last { lines.append("\ncursor: \(Self.cursor(last))") }
             return (lines.joined(separator: "\n"), false)
         } catch {
             return ((error as? LocalizedError)?.errorDescription ?? "Couldn't read that chat.", true)
@@ -226,20 +254,37 @@ public struct OrchestratorTools {
         guard !prompt.isEmpty else { return ("Write a prompt for the chat.", true) }
         let requested = (arguments["folder"] as? String ?? "").trimmingCharacters(in: .whitespaces)
         let state = Orchestrator.readState(from: stateURL)
-        var folder = requested.hasPrefix("/") ? requested : (state.flatMap { resolveProject(requested, $0) } ?? "")
-        folder = (folder as NSString).standardizingPath
-        var isDirectory: ObjCBool = false
-        guard !folder.isEmpty, FileManager.default.fileExists(atPath: folder, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return ("Couldn't find the folder \"\(requested)\". Use a project name from overview or an absolute path.", true)
+        let host: RemoteHost?
+        switch OrchestratorMachines.resolve(arguments["machine"] as? String, hosts: state?.hosts ?? []) {
+        case .success(let found): host = found
+        case .failure(let refusal): return (refusal.message, true)
         }
-        guard !Orchestrator.owns(folder: folder) else { return ("Start chats in a project folder, not the orchestrator's own.", true) }
+        let folder: String
+        if let host {
+            // Another machine: nothing is checked there now; Send validates the folder on it.
+            let known = state?.machines.first { $0.id == host.id.uuidString || $0.name == host.name }?.folders ?? []
+            guard let found = OrchestratorMachines.folder(requested, known: known) else {
+                return ("Couldn't find the folder \"\(requested)\" on \(host.name). Use a folder listed for it in overview or an absolute path there.", true)
+            }
+            folder = found
+        } else {
+            var local = requested.hasPrefix("/") ? requested : (state.flatMap { resolveProject(requested, $0) } ?? "")
+            local = (local as NSString).standardizingPath
+            var isDirectory: ObjCBool = false
+            guard !local.isEmpty, FileManager.default.fileExists(atPath: local, isDirectory: &isDirectory), isDirectory.boolValue else {
+                return ("Couldn't find the folder \"\(requested)\". Use a project name from overview or an absolute path.", true)
+            }
+            guard !Orchestrator.owns(folder: local) else { return ("Start chats in a project folder, not the orchestrator's own.", true) }
+            folder = local
+        }
         let access = (arguments["access"] as? String).flatMap(LaunchAccess.init(rawValue:)) ?? .ask
         let model = (arguments["model"] as? String)?.trimmingCharacters(in: .whitespaces)
         let effort = (arguments["effort"] as? String)?.trimmingCharacters(in: .whitespaces).lowercased()
-        let action = OrchestratorAction(kind: .start, createdAt: now(), text: prompt, agent: agent.rawValue, folder: folder,
+        var action = OrchestratorAction(kind: .start, createdAt: now(), text: prompt, machine: host?.name, agent: agent.rawValue, folder: folder,
                                         model: model?.isEmpty == false ? model : nil, effort: effort?.isEmpty == false ? effort : nil,
                                         access: access.rawValue, conversation: conversation)
-        return propose(action, summary: "Start \(agent.title) in \(folder) (\(access.title.lowercased()))")
+        action.hostID = host?.id.uuidString
+        return propose(action, summary: "Start \(agent.title) in \(folder) on \(host?.name ?? OrchestratorMachines.thisMac) (\(access.title.lowercased()))")
     }
 
     func replyChat(_ arguments: [String: Any]) -> (String, Bool) {

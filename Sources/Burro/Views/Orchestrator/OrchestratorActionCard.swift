@@ -2,7 +2,11 @@
 // happen in one line, the full text to edit in place, and Send / Discard. Nothing goes out until
 // Send is clicked; the card then shows Burro's confirmation or the error. A waiting proposal is
 // outlined in amber (it needs you); one older than a day shows as expired and can only be
-// discarded. A reply to a chat that is no longer waiting says so above the buttons.
+// discarded. A reply to a chat that is no longer waiting says so above the buttons. A new chat on
+// another machine names it ("… on devbox"); its folder is checked there when Send is clicked, and
+// the card then shows the result or why it didn't start. Send on a reply to a Claude chat whose
+// idle background session is still open stops that session and continues it with the reply, as
+// the Chats composer does; the button's help says so for Claude chats.
 import SwiftUI
 import BurroCore
 
@@ -78,7 +82,7 @@ struct OrchestratorActionCard: View {
                         .opacity(canSend(check: check, sending: sending) ? 1 : 0.4)
                     }
                     .buttonStyle(.plain).disabled(!canSend(check: check, sending: sending))
-                    .help(action.kind == .reply ? "Send this reply to the chat" : "Start this chat on this Mac")
+                    .help(action.kind == .reply ? ChatReply.cardSendHelp(provider: store.orchestratorTarget(action)?.session.provider) :"Start this chat on \(action.isRemoteStart ? action.machine ?? "that machine" : "this Mac")")
                 }
             }
         }
@@ -109,7 +113,7 @@ struct OrchestratorActionCard: View {
         if let model = action.model { parts.append(Orchestrator.modelTitle(model)) }
         if let effort = action.effort { parts.append(Orchestrator.effortTitle(effort) + " effort") }
         parts.append(action.launchAccess.title)
-        if let folder = action.folder { parts.append((folder as NSString).abbreviatingWithTildeInPath) }
+        if let folder = action.folder { parts.append(action.isRemoteStart ? folder : (folder as NSString).abbreviatingWithTildeInPath) }
         return parts.joined(separator: " · ")
     }
 
@@ -122,6 +126,12 @@ struct OrchestratorActionCard: View {
     /// What Burro knows right now about where this would go.
     private var check: Check {
         switch action.kind {
+        case .start where action.isRemoteStart:
+            // Checked on that machine when Send is clicked.
+            guard let id = action.host, store.remoteHosts.contains(where: { $0.id == id && $0.enabled }) else {
+                return Check(notice: "\(action.machine ?? "That machine") isn't set up in Burro any more.", blocked: true)
+            }
+            return Check(notice: "Burro checks the folder on \(action.machine ?? "that machine") when you send.")
         case .start:
             var isDirectory: ObjCBool = false
             guard let folder = action.folder, FileManager.default.fileExists(atPath: folder, isDirectory: &isDirectory), isDirectory.boolValue else {
@@ -136,6 +146,8 @@ struct OrchestratorActionCard: View {
             if session.state == .waiting { return Check() }
             let now = session.state == .working ? "working" : session.isDone ? "done, with a result to read" : "idle"
             return Check(notice: "This chat is no longer waiting for you: it's \(now).", stale: true)
+        case .addTodo, .completeTodo:
+            return Check(blocked: true)
         }
     }
 }

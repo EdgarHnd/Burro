@@ -187,6 +187,23 @@ final class CodexAppServer {
 }
 
 /// Runs a tool through your login shell so agents get your normal PATH and environment.
+/// Lets another thread stop a process `LaunchShell.run` is waiting on (the triage Off switch).
+public final class ProcessCancel: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+    public init() {}
+    public var isCancelled: Bool { lock.withLock { cancelled } }
+    /// Marks it cancelled and terminates the process running now, if any.
+    public func cancel() {
+        let running = lock.withLock { () -> Process? in cancelled = true; return process }
+        running?.terminate()
+    }
+    /// False when it was already cancelled (the caller terminates the process).
+    func attach(_ process: Process) -> Bool { lock.withLock { self.process = process; return !cancelled } }
+    func detach() { lock.withLock { process = nil } }
+}
+
 enum LaunchShell {
     static func environment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
@@ -199,7 +216,8 @@ enum LaunchShell {
     /// `zsh -lc 'cd -- "$1" && exec "${@:2}"' burro <folder> <tool> <args…>`: arguments stay
     /// positional, so nothing (prompts included) is ever parsed by the shell.
     @discardableResult
-    static func run(_ executable: String, _ arguments: [String], folder: String = "/", timeout: TimeInterval) throws -> Output {
+    static func run(_ executable: String, _ arguments: [String], folder: String = "/", timeout: TimeInterval,
+                    cancel: ProcessCancel? = nil) throws -> Output {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-lc", #"cd -- "$1" || exit 70; shift; exec "$@""#, "burro", folder, executable] + arguments
@@ -218,10 +236,13 @@ enum LaunchShell {
         let done = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in done.signal() }
         try process.run()
+        if let cancel, !cancel.attach(process) { process.terminate() }
+        defer { cancel?.detach() }
         if done.wait(timeout: .now() + timeout) == .timedOut {
             process.terminate()
             throw LaunchError.failed("\(URL(fileURLWithPath: executable).lastPathComponent) didn't finish starting in time.")
         }
+        if cancel?.isCancelled == true { throw CancellationError() }
         let data = (try? FileHandle(forReadingFrom: outputURL).readToEnd()) ?? nil
         if process.terminationStatus == 70 { throw LaunchError.missingFolder }
         return Output(code: process.terminationStatus, text: String(decoding: (data ?? Data()).prefix(1024 * 1024), as: UTF8.self))

@@ -58,7 +58,8 @@ final class ChatReplyTests: XCTestCase {
          {"id":"$(rm -rf)","sessionId":"44444444-5555-4666-8777-888888888888","kind":"background","status":"idle"}]
         """.utf8)
         func plan(_ session: String) -> ChatReply.ClaudeCheck { ChatReply.claudePlan(ChatReply.claudeLive(session, rows: rows)) }
-        XCTAssertNotNil(plan(id).problem, "An open background session would fork; Burro never stops it")
+        XCTAssertNil(plan(id).problem, "An idle background session takes a reply: Send stops it first")
+        XCTAssertTrue(plan(id).continues)
         XCTAssertEqual(plan(id).attach, "c0d2240d")
         XCTAssertNotNil(plan("22222222-3333-4444-8555-666666666666").problem)
         XCTAssertNil(plan("22222222-3333-4444-8555-666666666666").attach)

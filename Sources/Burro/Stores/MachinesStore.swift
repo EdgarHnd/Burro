@@ -1,6 +1,7 @@
 // State for the Machines page: Tailscale peers, each machine's OS and tool versions, and the
 // latest releases. Work runs only while the page is on screen: Tailscale every refresh,
-// versions at most every ten minutes per machine, npm at most every six hours.
+// versions at most every ten minutes per machine, npm at most every six hours. Another machine's
+// versions are also kept in Burro's remote cache for when it is asleep.
 import Foundation
 import Observation
 import BurroCore
@@ -41,6 +42,8 @@ import BurroCore
         Task {
             let result = await Task.detached(priority: .utility) { host.map(MachineProbe.remote) ?? MachineProbe.local() }.value
             if let result { facts[id] = result }
+            // Remembered in that machine's host.json so the Machines page knows it while it sleeps.
+            if let result, let host { Task.detached(priority: .utility) { try? RemoteCache.shared.update(host) { $0.facts = RemoteMachineFacts(result) } } }
             probing.remove(id)
         }
     }

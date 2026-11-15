@@ -1,10 +1,14 @@
 // Native SSH host setup reuses the user's existing keys/configuration without storing credentials.
+// Each machine shows a status line ("Connected · checked 12 s ago", "Unreachable since 14:02 ·
+// retrying in 30 s") and how much Burro has cached for it, with Clear cache per machine and for all.
 import SwiftUI
 import BurroCore
 
 struct RemoteHostsSection: View {
     var store: AppStore
     @State private var editing: RemoteHost?
+    @State private var usage: [UUID: Int64] = [:]
+    @State private var usageVersion = 0
     var body: some View {
         Section("Remote laptops & servers") {
             ForEach(store.remoteHosts) { host in
@@ -16,12 +20,28 @@ struct RemoteHostsSection: View {
                             Text(host.destination).font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    Text(store.connection(for: host).state.rawValue).font(.caption).foregroundStyle(.secondary)
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(store.remoteStatusLine(for: host, now: context.date)).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(2).multilineTextAlignment(.trailing)
+                    }
                     Button { editing = host } label: { Image(systemName: "pencil") }.help("Edit remote machine")
                     Button { store.removeRemoteHost(host.id) } label: { Image(systemName: "minus.circle") }.help("Remove remote machine")
                 }.buttonStyle(.borderless)
                 if let error = store.connection(for: host).error, host.enabled {
                     Text(error).font(.caption).foregroundStyle(AppAppearance.amber).textSelection(.enabled)
+                }
+                if let bytes = usage[host.id], bytes > 0 {
+                    HStack(spacing: 6) {
+                        Text("Cache: \(Self.size(bytes)) ·").font(.caption).foregroundStyle(.secondary)
+                        Button("Clear cache") { clear(host.id) }.buttonStyle(.link).font(.caption)
+                            .help("Removes what Burro copied from \(host.name): last-seen chats, transcript copies, images and videos")
+                    }
+                }
+            }
+            if usage.values.filter({ $0 > 0 }).count > 1 {
+                HStack(spacing: 6) {
+                    Text("All machines: \(Self.size(usage.values.reduce(0, +))) ·").font(.caption).foregroundStyle(.secondary)
+                    Button("Clear all caches") { clear(nil) }.buttonStyle(.link).font(.caption)
                 }
             }
             Button("Add remote machine…") { editing = RemoteHost(name: "", destination: "") }
@@ -29,7 +49,12 @@ struct RemoteHostsSection: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .sheet(item: $editing) { host in RemoteHostEditor(host: host) { store.saveRemoteHost($0) } }
+        .task(id: "\(usageVersion)-\(store.remoteHosts.map(\.id))") { usage = await store.remoteCacheUsage() }
     }
+    private func clear(_ id: UUID?) {
+        Task { await store.clearRemoteCache(id); usageVersion += 1 }
+    }
+    static func size(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 }
 struct RemoteHostEditor: View {
     @Environment(\.dismiss) private var dismiss

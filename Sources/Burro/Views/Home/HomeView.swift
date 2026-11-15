@@ -1,5 +1,5 @@
 // Burro's landing page: a cover with a greeting, live chips and a plain-language summary, then what
-// needs you, the Orchestrator, the main project, your projects and machines as benches, and to-dos,
+// needs you, the Brief (the Orchestrator's card), the main project, your projects and machines as benches, and to-dos,
 // today so far (when activity tracking is on), notes and a scratchpad on the side.
 // Read-only like the rest of monitoring. While on screen it keeps Mac Health sampling, syncs
 // to-dos, rescans today's activity at most every 90 seconds and re-reads today's tracked activity
@@ -30,20 +30,20 @@ struct HomeView: View {
                     HomeAttention(store: store, summary: summary)
                     HStack(alignment: .top, spacing: 28) {
                         VStack(alignment: .leading, spacing: 30) {
-                            HomeOrchestrator(store: store)
+                            HomeBrief(store: store)
                             HomeMainProject(store: store, summary: summary)
                             benches(summary)
                             projects(summary)
                             machines(summary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         VStack(spacing: 16) {
-                            HomeTodayCard(todos: store.todos)
+                            HomeTodayCard(todos: store.todos, startChat: { store.startChat(from: $0) })
                             if store.activityTracker.enabled {
                                 HomeActivityCard(tracker: store.activityTracker, active: onScreen) {
                                     store.today.show(Date()); store.page = .today
                                 }
                             }
-                            HomeNotesCard(notes: store.notes) { store.showNotes?($0) }
+                            HomeNotesCard(notes: store.notes, startChat: { store.startChat(withText: $0.content) }) { store.showNotes?($0) }
                             HomeScratchpadCard(notes: store.notes)
                         }.frame(width: 320)
                     }

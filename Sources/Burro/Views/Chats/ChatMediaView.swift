@@ -1,5 +1,6 @@
 // An image or video from a chat reply, shown inline like the Codex and Claude apps do. Local
-// files load in place; remote images copy over SSH automatically and remote videos on request.
+// files load in place. Remote files come from Burro's remote cache: a current copy shows at once;
+// otherwise images up to about 8 MB copy over SSH automatically, larger images and videos on a click.
 import AVKit
 import ImageIO
 import SwiftUI
@@ -40,7 +41,7 @@ struct ChatMediaView: View {
     @State private var player: AVPlayer?
     @State private var aspect: CGFloat = 16 / 9
 
-    enum Load: Equatable { case idle, loading, image(NSImage, URL), video(URL), failed(String) }
+    enum Load: Equatable { case idle, loading, image(NSImage, URL), video(URL), failed(String), needsClick(Int) }
 
     private var kind: ChatMedia.Kind? { ChatMedia.kind(of: path) }
     private var name: String { URL(fileURLWithPath: path).lastPathComponent }
@@ -54,9 +55,8 @@ struct ChatMediaView: View {
         }
         .task(id: path) {
             guard state == .idle, let source else { return }
-            // Remote videos can be large: wait for a click. Everything else loads now.
-            if kind == .video, case .remote = source { return }
-            await load(source)
+            // Remote files load now only when cached or small; anything else waits for a click.
+            await load(source, automatic: true)
         }
     }
 
@@ -79,6 +79,13 @@ struct ChatMediaView: View {
             placeholder(symbol: nil, text: "Loading \(name)…")
         case .failed(let reason):
             placeholder(symbol: "exclamationmark.triangle", text: "\(name): \(reason)")
+        case .needsClick(let size):
+            if let source, case .remote(let host) = source {
+                Button { Task { await load(source) } } label: {
+                    placeholder(symbol: kind == .video ? "play.circle.fill" : "arrow.down.circle",
+                                text: "\(kind == .video ? "Play" : "Show") \(name) from \(host.name) · \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))")
+                }.buttonStyle(.plain)
+            }
         case .idle:
             if let source, kind == .video, case .remote(let host) = source {
                 Button { Task { await load(source) } } label: {
@@ -105,18 +112,20 @@ struct ChatMediaView: View {
         .contentShape(Rectangle())
     }
 
-    private func load(_ source: ChatMediaSource) async {
+    private func load(_ source: ChatMediaSource, automatic: Bool = false) async {
         state = .loading
         let path = path, kind = kind
         let result = await Task.detached(priority: .userInitiated) { () -> Result<URL, Error> in
             Result {
                 switch source {
                 case .local: try ChatMedia.local(path)
-                case .remote(let host): try ChatMedia.remote(path, host: host)
+                case .remote(let host): try ChatMedia.remote(path, host: host, automatic: automatic)
                 }
             }
         }.value
         switch result {
+        case .failure(let error as ChatMedia.NeedsClick):
+            state = .needsClick(error.size)
         case .failure(let error):
             state = .failed((error as? LocalizedError)?.errorDescription ?? "Couldn't load it.")
         case .success(let url):

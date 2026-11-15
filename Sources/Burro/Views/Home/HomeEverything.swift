@@ -319,9 +319,11 @@ private struct NoteCardShell<Content: View>: View {
     }
 }
 
-/// Notes open in the floating Notes window (⌥P from anywhere).
+/// Notes open in the floating Notes window (⌥P from anywhere); a note's context menu can open the
+/// New chat sheet prefilled with it.
 struct HomeNotesCard: View {
     var notes: NotesStore
+    var startChat: ((HomeNote) -> Void)? = nil
     var open: (NotesTarget) -> Void
     var body: some View {
         NoteCardShell(title: "Notes", symbol: "square.and.pencil", count: notes.sorted.count, add: { open(.new) }) {
@@ -347,6 +349,10 @@ struct HomeNotesCard: View {
                                 Text(HomeFormat.ago(note.updatedAt)).font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
                             }.padding(.horizontal, 16).padding(.vertical, 11).contentShape(Rectangle())
                         }.buttonStyle(.plain)
+                        .contextMenu {
+                            Button("Open") { open(.note(note.id)) }
+                            if let startChat { Button("Start chat from this…") { startChat(note) } }
+                        }
                     }
                 }
             }

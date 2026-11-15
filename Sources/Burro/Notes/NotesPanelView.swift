@@ -154,7 +154,8 @@ private struct NotesBrowser: View {
                 NoteRow(note: note, current: note.id == model.currentID, selected: index == model.selection,
                         open: { model.open(note.id) },
                         pin: { model.notes.togglePin(note.id) },
-                        delete: { model.delete(note.id) })
+                        delete: { model.delete(note.id) },
+                        startChat: { model.startChat(note.content) })
                     .id(index)
                     .onHover { if $0 { model.selection = index } }
             }
@@ -169,6 +170,7 @@ private struct NoteRow: View {
     var open: () -> Void
     var pin: () -> Void
     var delete: () -> Void
+    var startChat: () -> Void
     @State private var confirming = false
 
     var body: some View {
@@ -199,6 +201,7 @@ private struct NoteRow: View {
         .background(selected ? Color.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture(perform: open)
+        .contextMenu { Button("Start chat from this…", action: startChat) }
         .onChange(of: selected) { _, value in if !value { confirming = false } }
     }
 

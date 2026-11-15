@@ -4,7 +4,9 @@
 // allows Burro to notify, and it is withdrawn when the chat stops waiting (or the finish is read).
 // A chat on a machine that went stale keeps its banner until it is seen again. Banners left over
 // from an earlier run are removed at launch (only this feature's, and only with a setting on).
-// Clicking a banner opens that chat on the Chats page. Turning a setting on asks macOS for
+// Clicking a banner opens that chat on the Chats page. A needs-you banner goes out at once; when
+// the Orchestrator's triage later writes a headline for that chat, the banner still on screen is
+// replaced in place with it, quietly (the first text stays if it was already withdrawn). Turning a setting on asks macOS for
 // permission. The banner text includes the chat's title: it is shown by macOS only and never
 // logged. This only reads chat state; it never messages an agent. Nothing touches the
 // notification centre until a setting is on, and never outside the app bundle (tests, `swift run`).
@@ -27,6 +29,8 @@ import BurroCore
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var tracker = ChatAlertTracker()
     @ObservationIgnored private var delivered: Set<String> = []
+    /// Needs-you banners on screen, by chat: what they say, so triage's headline can replace the body.
+    @ObservationIgnored private var needsYouBanners: [String: (title: String, chatTitle: String)] = [:]
     @ObservationIgnored private var activeObserver: NSObjectProtocol?
 
     /// Notifications need a real app bundle; a bare executable (tests, `swift run`) has none.
@@ -55,6 +59,7 @@ import BurroCore
                 post(kind, session)
             case .withdraw(let kind, let chat):
                 let id = Self.identifier(kind, chat)
+                if kind == .needsYou { needsYouBanners[chat] = nil }
                 guard delivered.remove(id) != nil else { continue }
                 UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
                 UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
@@ -134,6 +139,24 @@ import BurroCore
         content.threadIdentifier = session.id
         let id = Self.identifier(kind, session.id)
         delivered.insert(id)
+        if kind == .needsYou { needsYouBanners[session.id] = (content.title, session.title) }
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil), withCompletionHandler: nil)
+    }
+
+    /// Triage's headline for a chat whose needs-you banner is still on screen: the banner is
+    /// replaced in place (same identifier, so macOS swaps it rather than adding another), quietly.
+    /// The first banner never waits for this.
+    func updateHeadline(chatID: String, headline: String) {
+        guard needsYou, permission == .allowed, let banner = needsYouBanners[chatID] else { return }
+        let id = Self.identifier(.needsYou, chatID)
+        guard delivered.contains(id) else { return }
+        let content = UNMutableNotificationContent()
+        content.title = banner.title
+        content.body = ChatAlertText.body(needsYou: true, title: banner.chatTitle, headline: headline)
+        content.userInfo = [Self.chatKey: chatID]
+        content.threadIdentifier = chatID
+        content.interruptionLevel = .passive
+        needsYouBanners[chatID] = nil
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil), withCompletionHandler: nil)
     }
 
@@ -147,9 +170,7 @@ import BurroCore
     }
 
     static func body(_ kind: ChatAlertKind, _ session: AgentSession) -> String {
-        let title = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lead = kind == .needsYou ? "Needs you" : "Finished"
-        return title.isEmpty ? lead : "\(lead): \(title)"
+        ChatAlertText.body(needsYou: kind == .needsYou, title: session.title)
     }
 }
 

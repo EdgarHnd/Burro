@@ -1,7 +1,10 @@
-// The Orchestrator's own page: one focused conversation in the middle (each question, the steps
-// it took, its answer, and any reply or chat it proposed as a card to send or discard) and, on the
-// right, the agents it oversees across your machines with their subagents, live. The header picks
-// its model and effort for the next message.
+// The Orchestrator's own page: today's conversation in the middle (each question, the steps it
+// took, its answer, any reply or chat it proposed as a card to send or discard, and any to-do it
+// changed as a line with Undo; replies triage drafted wait below under their own heading, the same
+// cards the Brief on Home shows inline) and, on the right, the agents it oversees across your machines with
+// their subagents, live. The header picks its model and effort for the next message, switches to
+// the Memory and Runs tabs, reads back an earlier day's conversation, and holds its settings
+// (whether it may read your notes).
 import SwiftUI
 import BurroCore
 
@@ -29,12 +32,14 @@ struct ConversationTurn: Identifiable, Equatable {
     /// Its final reply (or the reply being written).
     var answer: ChatMessage?
 
-    /// Proposals its reply_chat and start_chat steps recorded, by the id their results lead with.
+    /// Proposals its reply_chat and start_chat steps recorded, and to-do changes its add_todo and
+    /// complete_todo steps asked for, by the id their results lead with.
     var proposalIDs: [String] {
-        steps.filter { $0.kind == .tool && ($0.tool == "reply_chat" || $0.tool == "start_chat") }.compactMap { step in
-            step.output?.firstMatch(of: /^Proposal ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/).map { String($0.1) }
+        steps.filter { $0.kind == .tool && Self.recordingTools.contains($0.tool ?? "") }.compactMap { step in
+            step.output?.firstMatch(of: /^(?:Proposal|To-do action) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/).map { String($0.1) }
         }
     }
+    static let recordingTools: Set<String> = ["reply_chat", "start_chat", "add_todo", "complete_todo"]
 
     static func turns(_ messages: [ChatMessage]) -> [ConversationTurn] {
         var turns: [ConversationTurn] = []
@@ -53,18 +58,47 @@ struct ConversationTurn: Identifiable, Equatable {
     }
 }
 
+enum OrchestratorTab: String, CaseIterable, Identifiable {
+    case conversation = "Conversation", memory = "Memory", runs = "Runs"
+    var id: String { rawValue }
+}
+
 private struct OrchestratorConversation: View {
     @Bindable var store: AppStore
+    @State private var tab = OrchestratorTab.conversation
     var body: some View {
         let orchestrator = store.orchestrator
+        VStack(spacing: 0) {
+            header(orchestrator, empty: orchestrator.messages.isEmpty)
+            switch tab {
+            case .conversation: conversation(orchestrator)
+            case .memory: OrchestratorMemoryView(store: store)
+            case .runs: OrchestratorRunsView(store: store)
+            }
+        }
+    }
+
+    @ViewBuilder private func conversation(_ orchestrator: OrchestratorStore) -> some View {
         let messages = orchestrator.messages
         let turns = ConversationTurn.turns(messages)
         let actions = orchestrator.actions
         let anchored = Set(turns.flatMap(\.proposalIDs))
         // Proposals no visible turn shows (an earlier conversation, or history that was cut) still wait here.
-        let loose = actions.filter { !anchored.contains($0.id) && $0.status == .pending }
+        let loose = actions.filter { !anchored.contains($0.id) && $0.status == .pending && !$0.isLocal }
         VStack(spacing: 0) {
-            header(orchestrator, empty: messages.isEmpty)
+            if let viewing = orchestrator.viewing {
+                HStack(spacing: 8) {
+                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 11, weight: .medium))
+                    Text("Conversation from \(OrchestratorSessions.title(day: viewing.day))").font(.system(size: 12.5))
+                    Spacer()
+                    Button("Back to today") { Task { await orchestrator.show(nil) } }
+                        .buttonStyle(.plain).font(.system(size: 12.5, weight: .medium))
+                }
+                .foregroundStyle(AppAppearance.secondary)
+                .padding(.horizontal, 14).frame(height: 32)
+                .background(AppAppearance.raised.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .frame(maxWidth: 780).frame(maxWidth: .infinity).padding(.horizontal, 36).padding(.bottom, 6)
+            }
             if messages.isEmpty && loose.isEmpty {
                 emptyState
             } else {
@@ -76,17 +110,25 @@ private struct OrchestratorConversation: View {
                                 TurnView(turn: turn, live: orchestrator.running && turn.id == turns.last?.id,
                                          activity: orchestrator.activity, title: chatTitle) {
                                     ForEach(ids.compactMap { id in actions.first { $0.id == id } }) { action in
-                                        OrchestratorActionCard(store: store, action: action)
+                                        if action.isLocal {
+                                            OrchestratorLocalActionCard(store: store, action: action)
+                                        } else {
+                                            OrchestratorActionCard(store: store, action: action)
+                                        }
                                     }
                                 }
                             }
-                            if !loose.isEmpty {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    Text("PROPOSED EARLIER").font(.system(size: 10.5, weight: .semibold)).tracking(0.7)
-                                        .foregroundStyle(AppAppearance.tertiary)
-                                    ForEach(loose) { action in OrchestratorActionCard(store: store, action: action) }
+                            let drafts = loose.filter { $0.conversation == BriefDrafts.triageConversation }
+                            let earlier = loose.filter { $0.conversation != BriefDrafts.triageConversation }
+                            ForEach([("DRAFTED BY TRIAGE", drafts), ("PROPOSED EARLIER", earlier)], id: \.0) { title, group in
+                                if !group.isEmpty {
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        Text(title).font(.system(size: 10.5, weight: .semibold)).tracking(0.7)
+                                            .foregroundStyle(AppAppearance.tertiary)
+                                        ForEach(group) { action in OrchestratorActionCard(store: store, action: action) }
+                                    }
+                                    .padding(.leading, 38)
                                 }
-                                .padding(.leading, 38)
                             }
                             Color.clear.frame(height: 1).id("bottom")
                         }
@@ -166,11 +208,50 @@ private struct OrchestratorConversation: View {
             }
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
             .help("How hard the orchestrator thinks. Higher is more careful and slower; applies from your next message.")
-            if !empty && !orchestrator.running {
+            settingsMenu(orchestrator)
+            if tab == .conversation && !empty && !orchestrator.running && orchestrator.viewing == nil {
                 PillButton(title: "New conversation", symbol: "square.and.pencil") { orchestrator.newConversation() }
             }
         }
-        .padding(.horizontal, 28).padding(.top, 18).padding(.bottom, 14)
+        .padding(.horizontal, 28).padding(.top, 18).padding(.bottom, 10)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            HStack(spacing: 4) {
+                ForEach(OrchestratorTab.allCases) { item in
+                    Button { tab = item } label: {
+                        Text(item.rawValue).font(.system(size: 12.5, weight: tab == item ? .semibold : .regular))
+                            .foregroundStyle(tab == item ? AppAppearance.text : AppAppearance.secondary)
+                            .padding(.horizontal, 12).frame(height: 26)
+                            .background(tab == item ? AppAppearance.raised.opacity(0.7) : .clear, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 28).padding(.bottom, 10)
+        }
+    }
+
+    /// Earlier days' conversations and whether it may read notes.
+    private func settingsMenu(_ orchestrator: OrchestratorStore) -> some View {
+        Menu {
+            let earlier = orchestrator.earlierSessions
+            if !earlier.isEmpty {
+                Section("Earlier conversations") {
+                    ForEach(earlier.prefix(30)) { session in
+                        Button(OrchestratorSessions.title(day: session.day) + (session.startedAt.map { ", started " + $0.formatted(date: .omitted, time: .shortened) } ?? "")) { tab = .conversation; Task { await orchestrator.show(session) } }
+                    }
+                }
+            }
+            Section("Settings") {
+                Toggle("Let it read my notes", isOn: Bindable(orchestrator).notesAccess)
+            }
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(AppAppearance.secondary)
+                .frame(width: 30, height: 30).background(AppAppearance.raised.opacity(0.6), in: Circle())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .disabled(orchestrator.running)
+        .help("Earlier days' conversations, and whether the orchestrator may read your notes")
     }
 
     private var status: String {
@@ -335,7 +416,17 @@ private struct StepsView: View {
         case "list_worktrees": return ("arrow.triangle.branch", "Checked worktrees")
         case "start_chat": return ("plus.bubble", detail.isEmpty ? "Proposed a chat" : "Proposed a chat: \(detail)")
         case "reply_chat": return ("arrowshape.turn.up.left", title(detail).map { "Proposed a reply to “\($0)”" } ?? "Proposed a reply")
-        case "Read": return ("doc.text", detail.isEmpty ? "Read a file" : "Read \(URL(fileURLWithPath: detail).lastPathComponent)")
+        case "brief": return ("list.bullet.rectangle", "Read the brief")
+        case "chat_digest": return ("text.bubble", title(detail).map { "Checked “\($0)”" } ?? "Checked a chat")
+        case "read_shipped": return ("shippingbox", "Checked what shipped")
+        case "usage": return ("gauge.with.dots.needle.33percent", "Checked usage")
+        case "read_notes": return ("note.text", "Read notes")
+        case "add_todo": return ("checklist", "Added a to-do")
+        case "complete_todo": return ("checkmark.circle", "Completed a to-do")
+        case "remember": return ("bookmark", "Noted for later")
+        case "forget": return ("bookmark.slash", "Dropped a note")
+        case "Read", "read_file": return ("doc.text", detail.isEmpty ? "Read a file" : "Read \(URL(fileURLWithPath: detail).lastPathComponent)")
+        case "search_files": return ("magnifyingglass", detail.isEmpty ? "Searched files" : "Searched for \(detail)")
         case "Grep": return ("magnifyingglass", detail.isEmpty ? "Searched files" : "Searched for \(detail)")
         case "Glob": return ("magnifyingglass", detail.isEmpty ? "Looked for files" : "Looked for \(detail)")
         default: return ("gearshape", step.tool ?? "Tool")

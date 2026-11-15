@@ -1,10 +1,12 @@
-// Today's to-dos on Home: tick, type to add, double-click to edit. Shared with Maurice through
+// Today's to-dos on Home: tick, type to add, double-click to edit; the context menu can open the
+// New chat sheet prefilled with a to-do (it never starts the chat by itself). Shared with Maurice through
 // Convex when sync is set up; otherwise kept on this Mac until it is.
 import SwiftUI
 import BurroCore
 
 struct HomeTodayCard: View {
     @Bindable var todos: TodoStore
+    var startChat: ((TodoItem) -> Void)? = nil
     @State private var draft = ""
     @State private var editing: String?
     @State private var editText = ""
@@ -45,7 +47,8 @@ struct HomeTodayCard: View {
                     beginEdit: { editText = item.text; editing = item.id },
                     commitEdit: { if editing == item.id { todos.edit(item, text: editText); editing = nil } },
                     cancelEdit: { editing = nil },
-                    remove: { withAnimation(.easeOut(duration: 0.18)) { todos.remove(item) } })
+                    remove: { withAnimation(.easeOut(duration: 0.18)) { todos.remove(item) } },
+                    startChat: startChat.map { start in { start(item) } })
     }
 
     private var addRow: some View {
@@ -102,6 +105,7 @@ private struct HomeTodoRow: View {
     var commitEdit: () -> Void
     var cancelEdit: () -> Void
     var remove: () -> Void
+    var startChat: (() -> Void)? = nil
     @State private var hovering = false
     @FocusState private var fieldFocused: Bool
 
@@ -148,6 +152,10 @@ private struct HomeTodoRow: View {
         .contextMenu {
             Button(item.done ? "Mark Not Done" : "Mark Done", action: toggle)
             Button("Edit", action: beginEdit)
+            if let startChat {
+                Divider()
+                Button("Start chat from this…", action: startChat)
+            }
             Divider()
             Button("Delete", role: .destructive, action: remove)
         }

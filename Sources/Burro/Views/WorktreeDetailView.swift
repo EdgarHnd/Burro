@@ -26,6 +26,8 @@ struct WorktreeDetailView: View {
                     HStack {
                         Button("Finder", systemImage: "folder") { store.reveal(tree) }
                         Button("Terminal", systemImage: "terminal") { store.openTerminal(tree) }
+                        Button("New chat here", systemImage: "plus.bubble") { store.startChat(in: tree.path) }
+                            .help("Opens the New chat sheet in this worktree")
                         Button { store.copyPath(tree) } label: { Image(systemName: "doc.on.doc") }.help("Copy path")
                     }.controlSize(.small).disabled(tree.isMissing)
                 }
@@ -103,11 +105,11 @@ struct WorktreeDetailView: View {
         return VStack(alignment: .leading, spacing: Layout.gap) {
             HStack { sectionLabel("AGENTS"); Spacer(); Text("\(live.count) open").font(.caption).foregroundStyle(.secondary) }
             if live.isEmpty { Text("No live agent sessions detected").font(.callout).foregroundStyle(.secondary) }
-            ForEach(live) { session in AgentRow(session: session) }
+            ForEach(live) { session in AgentRow(session: session).opensChatInBurro(session, store: store) }
             if !historical.isEmpty {
                 DisclosureGroup("Recent history (\(historical.count))", isExpanded: $showHistory) {
                     VStack(alignment: .leading, spacing: Layout.gap) {
-                        ForEach(historical.prefix(10)) { session in AgentRow(session: session) }
+                        ForEach(historical.prefix(10)) { session in AgentRow(session: session).opensChatInBurro(session, store: store) }
                         if historical.count > 10 { Text("Showing 10 most recent chats").font(.caption2).foregroundStyle(.tertiary) }
                     }.padding(.top, Layout.gap)
                 }.font(.caption).foregroundStyle(.secondary)

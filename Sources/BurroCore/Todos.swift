@@ -24,13 +24,14 @@ public struct TodoItem: Identifiable, Codable, Sendable, Equatable {
 }
 
 public enum TodoOp: Codable, Sendable, Equatable {
-    case add(clientId: String, text: String, day: String, project: String?)
+    /// `source` tags who added it ("burro" when nil; "orchestrator" for the Orchestrator's).
+    case add(clientId: String, text: String, day: String, project: String?, source: String? = nil)
     case setDone(id: String, done: Bool)
     case edit(id: String, text: String)
     case remove(id: String)
     var target: String {
         switch self {
-        case .add(let clientId, _, _, _): TodoLedger.localPrefix + clientId
+        case .add(let clientId, _, _, _, _): TodoLedger.localPrefix + clientId
         case .setDone(let id, _), .edit(let id, _), .remove(let id): id
         }
     }
@@ -62,8 +63,8 @@ public enum TodoLedger {
             queue.append(op)
         case .edit(let id, let text):
             if let index = queue.firstIndex(where: { if case .add = $0 { $0.target == id } else { false } }),
-               case .add(let clientId, _, let day, let project) = queue[index] {
-                queue[index] = .add(clientId: clientId, text: text, day: day, project: project)
+               case .add(let clientId, _, let day, let project, let source) = queue[index] {
+                queue[index] = .add(clientId: clientId, text: text, day: day, project: project, source: source)
             } else {
                 queue.removeAll { if case .edit(let other, _) = $0 { other == id } else { false } }
                 queue.append(op)
@@ -91,10 +92,10 @@ public enum TodoLedger {
     public static func apply(_ op: TodoOp, to items: [TodoItem], now: Double) -> [TodoItem] {
         var items = items
         switch op {
-        case .add(let clientId, let text, let day, let project):
+        case .add(let clientId, let text, let day, let project, let source):
             let id = localPrefix + clientId
             guard !items.contains(where: { $0.id == id }) else { return items }
-            items.append(TodoItem(id: id, text: text, day: day, order: now, project: project, createdAt: now, updatedAt: now))
+            items.append(TodoItem(id: id, text: text, day: day, order: now, source: source ?? "burro", project: project, createdAt: now, updatedAt: now))
         case .setDone(let id, let done):
             if let i = items.firstIndex(where: { $0.id == id }) {
                 items[i].done = done; items[i].doneAt = done ? (items[i].doneAt ?? now) : nil; items[i].updatedAt = now
@@ -129,7 +130,7 @@ public struct TodoRemote: Sendable {
     public init(client: ConvexClient) { self.client = client }
 
     private struct TodayArgs: Encodable, Sendable { let day: String; let doneSince: Double }
-    private struct AddArgs: Encodable, Sendable { let text: String; let day: String; let clientId: String; let source = "burro"; let project: String? }
+    private struct AddArgs: Encodable, Sendable { let text: String; let day: String; let clientId: String; let source: String; let project: String? }
     private struct DoneArgs: Encodable, Sendable { let id: String; let done: Bool }
     private struct EditArgs: Encodable, Sendable { let id: String; let text: String }
     private struct IDArgs: Encodable, Sendable { let id: String }
@@ -140,8 +141,9 @@ public struct TodoRemote: Sendable {
     /// Returns the server id for an add.
     @discardableResult public func perform(_ op: TodoOp) async throws -> String? {
         switch op {
-        case .add(let clientId, let text, let day, let project):
-            return try await client.mutation("todos:add", AddArgs(text: text, day: day, clientId: clientId, project: project), as: String.self)
+        case .add(let clientId, let text, let day, let project, let source):
+            return try await client.mutation("todos:add", AddArgs(text: text, day: day, clientId: clientId, source: source ?? "burro", project: project),
+                                             as: String.self)
         case .setDone(let id, let done):
             _ = try await client.mutation("todos:setDone", DoneArgs(id: id, done: done), as: ConvexVoid.self)
         case .edit(let id, let text):

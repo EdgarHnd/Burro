@@ -1,6 +1,8 @@
 // The chat page's side panel, like the Claude app's: where the chat works, which model and effort,
 // how full its context is, what it has changed, and subagents still running. Changes come from a
-// read-only `git diff --shortstat` against where the branch left its base, on this Mac only.
+// read-only `git diff --shortstat` against where the branch left its base, on this Mac only. The
+// Folder row names the worktree's branch with its uncommitted/unpushed counts, and offers Open
+// worktree (Burro's Worktrees page on it) and Review cleanup… (the usual confirmation sheet).
 import SwiftUI
 import BurroCore
 
@@ -23,6 +25,16 @@ struct ChatInspector: View {
                     VStack(alignment: .trailing, spacing: 2) {
                         Text(URL(fileURLWithPath: transcript?.folder ?? session.cwd).lastPathComponent).lineLimit(1).truncationMode(.middle)
                         if let tree, !tree.branch.isEmpty { Text(tree.branch).font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).lineLimit(1) }
+                        if let tree, let pending = Self.pending(tree.facts) {
+                            Text(pending).font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
+                        }
+                        if let tree {
+                            HStack(spacing: 10) {
+                                Button("Open worktree") { openWorktree(tree) }
+                                if !tree.isPrimary { Button("Review cleanup…") { store.reviewCleanup([tree]) }.disabled(store.cleaningWorktree) }
+                            }
+                            .buttonStyle(.plain).font(.system(size: 11.5, weight: .medium)).foregroundStyle(AppAppearance.blue).padding(.top, 3)
+                        }
                     }
                     .help(transcript?.folder ?? session.cwd)
                 }
@@ -122,15 +134,23 @@ struct ChatInspector: View {
                 } else {
                     Text(diff == nil && !diffChecked ? "…" : (diff == nil ? "Not a Git folder" : "None")).foregroundStyle(AppAppearance.tertiary)
                 }
-                if let facts = tree?.facts {
-                    let pending = [facts.changed + facts.untracked > 0 ? "\(facts.changed + facts.untracked) uncommitted" : nil,
-                                   (facts.unpushed ?? 0) > 0 ? "\(facts.unpushed ?? 0) unpushed" : nil].compactMap { $0 }
-                    if !pending.isEmpty {
-                        Text(pending.joined(separator: " · ")).font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
-                    }
-                }
             }
         }
+    }
+
+    /// "3 uncommitted · 2 unpushed", or nil when both are zero.
+    static func pending(_ facts: GitFacts) -> String? {
+        let parts = [facts.changed + facts.untracked > 0 ? "\(facts.changed + facts.untracked) uncommitted" : nil,
+                     (facts.unpushed ?? 0) > 0 ? "\(facts.unpushed ?? 0) unpushed" : nil].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// Burro's Worktrees page with this worktree selected.
+    private func openWorktree(_ tree: Worktree) {
+        store.search = ""
+        store.filter = .all
+        store.page = .worktrees
+        store.selection = tree.path
     }
 
     private func loadDiff(_ tree: Worktree?) async {

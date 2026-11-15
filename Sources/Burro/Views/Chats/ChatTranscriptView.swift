@@ -1,29 +1,167 @@
 // A chat's conversation, laid out like the Claude app: a long opening brief as the chat's task,
-// your messages as bubbles, replies as Markdown, runs of tool calls folded into one line (open
-// for each call and its output), the plan as a checklist, and what it's doing right now.
+// your messages as bubbles (a reply just sent from Burro shows dimmed as "Sending…" until the log
+// has it), replies as Markdown, runs of tool calls folded into one line (open for each call and its
+// output), the plan as a checklist. While the chat works, what it's doing right now sits in a strip
+// under the conversation. The view follows new messages only while you're at the bottom; scrolled
+// up, it stays put and offers "↓ N new". When the chat waits on you, "Jump to last question" (⌘↑).
+// A chat on another machine shows Burro's copy of it at once (`RemoteTranscriptMirror`), then
+// updates; while that machine can't be reached the copy stays readable "as of" its last update, and
+// "Show earlier messages" at the top fetches more of its history when the copy doesn't start at
+// the beginning.
 import SwiftUI
 import BurroCore
 
+/// Loads a chat for the Chats page and keeps it current. A reload that finds the chat unchanged
+/// (the worker says so, or an SSH fetch returns the same messages) leaves `transcript` untouched,
+/// so the page doesn't redraw on every poll. Remote chats go through Burro's copy: the cached copy
+/// shows first, each reload fetches only what was added, and when the machine can't be reached
+/// `offline` and `syncedAt` say how current the copy shown is.
 @MainActor @Observable final class TranscriptLoader {
+    /// What the page shows: the logged conversation plus replies still sending.
     private(set) var transcript: ChatTranscript?
     private(set) var error: String?
+    /// True only while a chat is read for the first time (later polls are silent).
     private(set) var loading = false
+    @ObservationIgnored private var busy = false
+    @ObservationIgnored private var logged: ChatTranscript?
+    @ObservationIgnored private var revision: UInt64?
+    @ObservationIgnored private var echoes: [ChatEcho] = []
     @ObservationIgnored private var loadedID: String?
+    /// Remote chats: why the copy shown isn't current (nil while it is), and when it last was.
+    private(set) var offline: RemoteTranscriptMirror.Offline?
+    private(set) var syncedAt: Date?
+    /// Remote chats: the copy can fetch messages from before what it holds.
+    private(set) var canShowEarlier = false
+    private(set) var loadingEarlier = false
+    /// Messages asked of the parser; "Show earlier messages" raises it.
+    @ObservationIgnored private var limit = 300
+    /// Keeps the remote copy on screen from eviction.
+    @ObservationIgnored private var hold: RemoteTranscriptMirror.Hold?
+
+    /// A reply sent from Burro hasn't reached the chat's log yet.
+    var awaitingEcho: Bool { !echoes.isEmpty }
 
     func load(_ session: AgentSession, host: RemoteHost?, profiles: [UsageProvider: String], force: Bool = false) async {
-        if loading { return }
-        if loadedID != session.id { transcript = nil; error = nil; loadedID = session.id }
-        loading = true
-        defer { loading = false }
-        let result = await Task.detached(priority: .userInitiated) { () -> Result<ChatTranscript, Error> in
-            Result { try ChatTranscripts.load(session, host: host, profiles: profiles) }
+        await load(session, host: host, profiles: profiles, force: force, earlier: false)
+    }
+
+    /// Fetches earlier history of a remote chat into its copy and shows more messages.
+    func loadEarlier(_ session: AgentSession, host: RemoteHost?, profiles: [UsageProvider: String]) async {
+        guard loadedID == session.id, !busy else { return }
+        loadingEarlier = true
+        defer { loadingEarlier = false }
+        limit = 500
+        await load(session, host: host, profiles: profiles, force: true, earlier: true)
+    }
+
+    private func load(_ session: AgentSession, host: RemoteHost?, profiles: [UsageProvider: String], force: Bool, earlier: Bool) async {
+        if busy { return }
+        if loadedID != session.id {
+            if transcript != nil { transcript = nil }
+            if error != nil { error = nil }
+            if offline != nil { offline = nil }
+            if syncedAt != nil { syncedAt = nil }
+            if canShowEarlier { canShowEarlier = false }
+            logged = nil; revision = nil; echoes = []; loadedID = session.id; limit = 300
+            hold = session.remote != nil ? RemoteTranscriptMirror.Hold(chatID: session.id) : nil
+        }
+        busy = true
+        let first = logged == nil
+        if first { loading = true }
+        defer { busy = false; if first { loading = false } }
+        let limit = limit
+        if let host, session.remote != nil {
+            if first {
+                // The copy Burro already has shows while the machine is asked for what's new.
+                let cached = await Task.detached(priority: .userInitiated) {
+                    RemoteTranscriptMirror.shared.cached(chatID: session.id, host: host, limit: limit)
+                }.value
+                guard loadedID == session.id else { return }
+                if let cached { apply(.success(cached)) }
+            }
+            let known = force ? nil : revision
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<RemoteTranscriptMirror.Outcome, Error> in
+                Result { try RemoteTranscriptMirror.shared.refresh(chatID: session.id, host: host, limit: limit, after: known, earlier: earlier) }
+            }.value
+            guard loadedID == session.id else { return }
+            apply(result)
+            return
+        }
+        let known = force ? nil : revision
+        let result = await Task.detached(priority: .userInitiated) { () -> Result<ChatTranscriptRead, Error> in
+            Result { try ChatTranscripts.read(session, host: host, profiles: profiles, limit: limit, after: known) }
         }.value
         guard loadedID == session.id else { return }
-        switch result {
-        case .success(let value): transcript = value; error = nil
-        case .failure(let failure): if transcript == nil { error = (failure as? LocalizedError)?.errorDescription ?? "Couldn't read this chat." }
-        }
+        apply(result.map { RemoteTranscriptMirror.Outcome(read: $0, syncedAt: nil, mirrored: false) })
     }
+
+    private func apply(_ result: Result<RemoteTranscriptMirror.Outcome, Error>) {
+        switch result {
+        case .success(let outcome):
+            switch outcome.read {
+            case .unchanged: break
+            case .loaded(let value, let newRevision):
+                revision = newRevision
+                if value != logged { logged = value }
+            }
+            if error != nil { error = nil }
+            if offline != outcome.offline { offline = outcome.offline }
+            if syncedAt != outcome.syncedAt { syncedAt = outcome.syncedAt }
+            if canShowEarlier != outcome.canShowEarlier { canShowEarlier = outcome.canShowEarlier }
+        case .failure(let failure):
+            if logged == nil {
+                let message = (failure as? LocalizedError)?.errorDescription ?? "Couldn't read this chat."
+                if error != message { error = message }
+            }
+        }
+        publish()
+    }
+
+    /// Shows a reply you just sent at once, dimmed as "Sending…", until the chat's log has it.
+    /// The composer calls this after a successful send; the next reloads replace it with the logged
+    /// message (never both), and it disappears on its own if the log never shows it.
+    @discardableResult func echo(_ text: String) -> UUID {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let echo = ChatEchoes.make(trimmed, sent: Date(), logged: logged?.messages ?? [])
+        if !trimmed.isEmpty { echoes.append(echo) }
+        publish()
+        return echo.id
+    }
+
+    /// Removes a reply shown by `echo` (its send failed).
+    func withdrawEcho(_ id: UUID) {
+        echoes.removeAll { $0.id == id }
+        publish()
+    }
+
+    private func publish() {
+        echoes = ChatEchoes.pending(echoes, logged: logged?.messages ?? [], now: Date())
+        let shown = logged.map { ChatEchoes.merged($0, echoes: echoes) }
+        if shown != transcript { transcript = shown }
+    }
+}
+
+/// Restarts the Chats page's reload loop when the chat goes on or off screen, starts or stops
+/// working, or its machine comes back or goes away.
+struct TranscriptFollowKey: Hashable {
+    var onScreen: Bool
+    var live: Bool
+    var reachable: Bool = true
+}
+
+private struct ChatWaitingKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    /// The chat on screen is waiting on you (a question or an approval).
+    var chatWaiting: Bool {
+        get { self[ChatWaitingKey.self] }
+        set { self[ChatWaitingKey.self] = newValue }
+    }
+}
+
+/// Where the bottom of the conversation is, in the scroll view's own space.
+private struct TranscriptBottomKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 struct ChatTranscriptView: View {
@@ -31,6 +169,16 @@ struct ChatTranscriptView: View {
     var provider: AgentProvider
     /// The chat is working now: its last turn shows live.
     var working = false
+    /// Set for a remote chat whose copy can fetch earlier history: "Show earlier messages" calls it.
+    var showEarlier: (() -> Void)? = nil
+    var loadingEarlier = false
+    @Environment(\.chatWaiting) private var waiting
+    /// The bottom of the conversation is in view: new messages scroll into view as they come.
+    @State private var atBottom = true
+    /// The last message seen while at the bottom; what came after it is "new".
+    @State private var seen: ChatFollow.Mark?
+    @State private var viewport: CGFloat = 0
+
     var body: some View {
         let turns = ConversationTurn.turns(transcript.messages)
         // A long opening brief reads as the chat's task, as the Claude app shows a session it started.
@@ -42,11 +190,23 @@ struct ChatTranscriptView: View {
                   plan.plan?.contains(where: { $0.status != .completed }) == true else { return nil }
             return plan
         }
+        let fresh = atBottom ? 0 : ChatFollow.newCount(transcript.messages, after: seen)
+        let question = waiting ? turns.last(where: { $0.answer != nil })?.id : nil
+        let liveTurn = working ? turns.last.flatMap { $0.answer == nil ? $0 : nil } : nil
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 30) {
-                    if transcript.truncated {
-                        Label("Showing the latest \(transcript.messages.count) messages", systemImage: "clock.arrow.circlepath")
+                    if let showEarlier {
+                        Button(action: showEarlier) {
+                            HStack(spacing: 6) {
+                                if loadingEarlier { ProgressView().controlSize(.mini) } else { Image(systemName: "arrow.up") }
+                                Text("Show earlier messages")
+                            }
+                            .font(.system(size: 11, weight: .medium)).foregroundStyle(AppAppearance.secondary)
+                        }
+                        .buttonStyle(.plain).disabled(loadingEarlier).frame(maxWidth: .infinity)
+                    } else if transcript.truncated {
+                        Label("Showing the latest \(transcript.messages.filter { !$0.sending }.count) messages", systemImage: "clock.arrow.circlepath")
                             .font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).frame(maxWidth: .infinity)
                     }
                     ForEach(turns) { turn in
@@ -54,22 +214,89 @@ struct ChatTranscriptView: View {
                         ChatTurnView(turn: turn, live: working && turn.id == turns.last?.id,
                                      task: first && task ? transcript.title : nil,
                                      carriedPlan: turn.id == turns.last?.id ? carried : nil)
+                            .id(turn.id)
                     }
                     Color.clear.frame(height: 1).id("bottom")
+                        .background(GeometryReader { geometry in
+                            Color.clear.preference(key: TranscriptBottomKey.self, value: geometry.frame(in: .named("transcript")).maxY)
+                        })
+                        .onDisappear { setAtBottom(false) }
                 }
                 .padding(.horizontal, 36).padding(.vertical, 22)
+                // Room for the live strip and the floating controls over the end.
+                .padding(.bottom, liveTurn != nil || question != nil ? 40 : 0)
                 .frame(maxWidth: 840).frame(maxWidth: .infinity)
             }
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
-            .onChange(of: transcript.messages.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-            // Follow a reply as it streams in.
-            .onChange(of: transcript.messages.last?.text.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            .coordinateSpace(name: "transcript")
+            .background(GeometryReader { geometry in
+                Color.clear.onAppear { viewport = geometry.size.height }
+                    .onChange(of: geometry.size.height) { _, height in viewport = height }
+            })
+            .onPreferenceChange(TranscriptBottomKey.self) { bottom in
+                // Within a short reach of the end counts as at the bottom.
+                setAtBottom(viewport > 0 && bottom <= viewport + 48)
+            }
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        if let question {
+                            FollowPill(title: "Jump to last question", symbol: "arrow.up") {
+                                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(question, anchor: .bottom) }
+                            }
+                            .keyboardShortcut(.upArrow, modifiers: .command)
+                        }
+                        if fresh > 0 {
+                            FollowPill(title: fresh == 1 ? "1 new" : "\(fresh) new", symbol: "arrow.down") {
+                                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                            }
+                        }
+                    }
+                    if let liveTurn { LiveActivity(steps: liveTurn.steps) }
+                }
+                .padding(.bottom, 10)
+            }
+            .onAppear {
+                proxy.scrollTo("bottom", anchor: .bottom)
+                seen = ChatFollow.mark(transcript.messages)
+            }
+            .onChange(of: transcript) { _, value in
+                // Follow only while at the bottom; scrolled up, keep the place and count what's new.
+                if atBottom {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                    seen = ChatFollow.mark(value.messages)
+                }
+            }
+            .onChange(of: liveTurn != nil) { _, _ in if atBottom { proxy.scrollTo("bottom", anchor: .bottom) } }
         }
+    }
+
+    private func setAtBottom(_ value: Bool) {
+        guard value != atBottom else { return }
+        atBottom = value
+        if value { seen = ChatFollow.mark(transcript.messages) }
+    }
+}
+
+/// A small floating control over the bottom of the conversation.
+private struct FollowPill: View {
+    var title: String
+    var symbol: String
+    var action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(AppAppearance.text)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(AppAppearance.surface, in: Capsule())
+                .overlay(Capsule().strokeBorder(AppAppearance.separator))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
 /// One exchange, laid out like the Codex and Claude apps: your message (or the chat's task), a
-/// "Worked for…" line over its steps, what it's doing right now while live, then the reply.
+/// "Worked for…" line over its steps, then the reply.
 private struct ChatTurnView: View {
     var turn: ConversationTurn
     var live: Bool
@@ -83,11 +310,17 @@ private struct ChatTurnView: View {
                 if let task {
                     TaskCard(title: task, text: question.text)
                 } else {
-                    HStack {
-                        Spacer(minLength: 100)
-                        CollapsibleText(text: question.text, lines: 14, size: 14)
-                            .padding(.horizontal, 15).padding(.vertical, 10)
-                            .background(AppAppearance.raised, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    VStack(alignment: .trailing, spacing: 4) {
+                        HStack {
+                            Spacer(minLength: 100)
+                            CollapsibleText(text: question.text, lines: 14, size: 14)
+                                .padding(.horizontal, 15).padding(.vertical, 10)
+                                .background(AppAppearance.raised, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        }
+                        .opacity(question.sending ? 0.55 : 1)
+                        if question.sending {
+                            Text("Sending…").font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).padding(.trailing, 6)
+                        }
                     }
                 }
             }
@@ -98,7 +331,6 @@ private struct ChatTurnView: View {
             } else if let carriedPlan {
                 PlanCard(items: carriedPlan.plan ?? [], live: false)
             }
-            if live && turn.answer == nil { LiveActivity(steps: turn.steps) }
             if let answer = turn.answer {
                 MarkdownBlock(text: answer.text, size: 14.5)
             }
@@ -387,7 +619,8 @@ private struct PlanCard: View {
     }
 }
 
-/// While a turn runs: what the agent is doing right now and for how long.
+/// While a turn runs: a strip under the conversation saying what the agent is doing right now
+/// and for how long ("Running swift test · 1m 12s").
 struct LiveActivity: View {
     var steps: [ChatMessage]
     var body: some View {
@@ -396,15 +629,18 @@ struct LiveActivity: View {
         let since = running ? current?.at : steps.last?.at
         HStack(spacing: 8) {
             PulsingDots()
-            Text(running ? Self.describe(current!) : "Thinking").font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).lineLimit(1)
+            Text(running ? Self.describe(current!) : "Thinking").font(.system(size: 12.5)).foregroundStyle(AppAppearance.secondary).lineLimit(1)
             if let since {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(WorkedSection.duration(max(0, context.date.timeIntervalSince(since))))
+                    Text("· " + WorkedSection.duration(max(0, context.date.timeIntervalSince(since))))
                         .font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.tertiary)
                 }
             }
-            Spacer(minLength: 0)
         }
+        .padding(.leading, 8).padding(.trailing, 14).padding(.vertical, 7)
+        .background(AppAppearance.surface, in: Capsule())
+        .overlay(Capsule().strokeBorder(AppAppearance.separator))
+        .frame(maxWidth: 560)
     }
     /// "Locating the build config", or "Running swift test" when the call gave no description.
     nonisolated static func describe(_ step: ChatMessage) -> String {

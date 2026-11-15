@@ -33,6 +33,9 @@ struct Request {
     activity: Option<activity::Request>,
     #[serde(default)]
     transcript: Option<transcript::Request>,
+    /// A transcript file inside an allowed root; answered in the response's `transcript`.
+    #[serde(default, rename = "transcriptFile")]
+    transcript_file: Option<transcript::FileRequest>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -99,6 +102,7 @@ struct Worker {
     completed: completed::Worker,
     catalog: catalog::Worker,
     activity: activity::Worker,
+    // Parsed display messages of the last eight chats read (no raw bytes); see transcript.rs.
     transcript: transcript::Worker,
 }
 
@@ -201,6 +205,14 @@ impl Worker {
                 && (request.claude.is_some()
                     || request.completed.is_some()
                     || !request.paths.is_empty()))
+            || (request.transcript_file.is_some()
+                && (request.transcript.is_some()
+                    || request.claude.is_some()
+                    || request.completed.is_some()
+                    || request.usage.is_some()
+                    || request.catalog.is_some()
+                    || request.activity.is_some()
+                    || !request.paths.is_empty()))
             || (request.transcript.is_some()
                 && (request.claude.is_some()
                     || request.completed.is_some()
@@ -228,7 +240,8 @@ impl Worker {
                 && request.usage.is_none()
                 && request.catalog.is_none()
                 && request.activity.is_none()
-                && request.transcript.is_none())
+                && request.transcript.is_none()
+                && request.transcript_file.is_none())
         {
             self.cache.retain(|path, _| active.contains(path.as_str()));
         }
@@ -262,10 +275,11 @@ impl Worker {
                 .activity
                 .map(|request| self.activity.scan(request))
                 .transpose()?,
-            transcript: request
-                .transcript
-                .map(|request| self.transcript.read(request))
-                .transpose()?,
+            transcript: match (request.transcript, request.transcript_file) {
+                (Some(request), _) => Some(self.transcript.read(request)?),
+                (None, Some(request)) => Some(self.transcript.read_file(request)?),
+                (None, None) => None,
+            },
         })
     }
 }
@@ -344,6 +358,7 @@ mod tests {
             catalog: None,
             activity: None,
             transcript: None,
+            transcript_file: None,
         }
     }
 

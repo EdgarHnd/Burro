@@ -1,14 +1,17 @@
-// Proposed actions: a reply to a chat, or a new chat, that the orchestrator wants sent. The tool
+// Proposed actions: a reply to a chat, or a new chat (on this Mac or another machine), that the
+// orchestrator wants sent. The tool
 // server only records them; nothing is sent until the user clicks Send on the action's card in
 // Burro, which runs the ordinary reply or launch path from the app. They live in `actions.json`
 // (owner-only, next to the snapshot in the orchestrator's folder), survive a relaunch, and expire
 // a day after they were proposed: an expired proposal stays on screen, marked expired, until it is
 // discarded or a week has passed. Reads skip entries they can't decode instead of failing.
+// Adding or completing a to-do is different: a local action Burro applies at once and shows as a
+// small card with Undo (OrchestratorLocalActions.swift); it never sends anything to an agent.
 import Foundation
 
 public struct OrchestratorAction: Codable, Sendable, Equatable, Identifiable {
-    public enum Kind: String, Codable, Sendable { case reply, start }
-    public enum Status: String, Codable, Sendable { case pending, sent }
+    public enum Kind: String, Codable, Sendable { case reply, start, addTodo, completeTodo }
+    public enum Status: String, Codable, Sendable { case pending, sent, applied, undone }
 
     public var id: String
     public var kind: Kind
@@ -34,6 +37,17 @@ public struct OrchestratorAction: Codable, Sendable, Equatable, Identifiable {
     public var sentAt: Date?
     /// A started chat's Burro id.
     public var startedChatID: String?
+    /// Local actions (to-dos): the to-do's id, its project, and when Burro applied or undid it.
+    public var todoID: String? = nil
+    public var project: String? = nil
+    public var appliedAt: Date? = nil
+    public var undoneAt: Date? = nil
+    /// Local actions: whether applying changed the list (false: the to-do was already done), and
+    /// so whether Undo has anything to reverse. Nil until Burro applied it, and in older files.
+    public var changed: Bool? = nil
+    /// Start on another machine: its host id (`machine` holds its name). Nil means this Mac, and
+    /// files written before this existed decode without it.
+    public var hostID: String? = nil
 
     public init(id: String = UUID().uuidString.lowercased(), kind: Kind, createdAt: Date, text: String, chatID: String? = nil,
                 chatTitle: String? = nil, machine: String? = nil, agent: String? = nil, folder: String? = nil, model: String? = nil,
@@ -48,9 +62,12 @@ public struct OrchestratorAction: Codable, Sendable, Equatable, Identifiable {
     public func isExpired(now: Date = Date()) -> Bool {
         status == .pending && now.timeIntervalSince(createdAt) >= Self.lifetime
     }
-    public func isWaiting(now: Date = Date()) -> Bool { status == .pending && !isExpired(now: now) }
+    public func isWaiting(now: Date = Date()) -> Bool { !isLocal && status == .pending && !isExpired(now: now) }
 
     public var provider: LaunchProvider? { agent.flatMap(LaunchProvider.init(rawValue:)) }
+    /// A new chat proposed for another machine.
+    public var isRemoteStart: Bool { kind == .start && hostID != nil }
+    public var host: UUID? { hostID.flatMap(UUID.init(uuidString:)) }
     public var launchAccess: LaunchAccess { access.flatMap(LaunchAccess.init(rawValue:)) ?? .ask }
 
     /// What will happen, in one line.
@@ -61,13 +78,18 @@ public struct OrchestratorAction: Codable, Sendable, Equatable, Identifiable {
             return "Reply to \(title) on \(machine ?? "This Mac")"
         case .start:
             let name = folder.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "a folder"
-            return "Start a \(provider?.title ?? "Claude Code") chat in \(name)"
+            let place = isRemoteStart ? " on \(machine ?? "another machine")" : ""
+            return "Start a \(provider?.title ?? "Claude Code") chat in \(name)\(place)"
+        case .addTodo: return status == .undone ? "Took back the to-do “\(text)”" : "Added to-do “\(text)”"
+        case .completeTodo:
+            if changed == false { return "“\(text)” was already done" }
+            return status == .undone ? "Reopened “\(text)”" : "Completed “\(text)”"
         }
     }
 
     /// Two proposals are the same when they'd do the same thing to the same target.
     func sameProposal(as other: OrchestratorAction) -> Bool {
-        kind == other.kind && chatID == other.chatID && agent == other.agent && folder == other.folder
+        kind == other.kind && chatID == other.chatID && agent == other.agent && folder == other.folder && hostID == other.hostID
             && model == other.model && effort == other.effort && launchAccess == other.launchAccess
             && text.trimmingCharacters(in: .whitespacesAndNewlines) == other.text.trimmingCharacters(in: .whitespacesAndNewlines)
     }

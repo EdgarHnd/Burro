@@ -29,6 +29,7 @@ struct SettingsView: View {
                 Toggle("Show agent notch", isOn: $store.notchEnabled)
                 Toggle("Prefer the main display", isOn: $store.notchPreferMainDisplay)
                     .disabled(!store.notchEnabled)
+                OpenChatsInBurroToggle()
                 Text("Hover to expand and move away to collapse. Use the pin button to keep it open. Agent status refreshes about every 3 seconds. Automatic placement prefers a display with a camera notch.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -43,6 +44,7 @@ struct SettingsView: View {
             RemoteHostsSection(store: store)
             ActivityBrowserSettingsSection(tracker: store.activityTracker)
             ShippedSummarySettingsSection()
+            OrchestratorBriefSettingsSection(brief: store.brief)
             Section("Discovery") {
                 Toggle("Discover repositories automatically", isOn: $store.discover)
                 Text("Reads Codex projects, Claude Code sessions, ~/Dev (two levels), and Codex worktree folders. Add repositories stored elsewhere below.")

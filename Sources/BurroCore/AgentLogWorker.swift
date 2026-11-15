@@ -1,4 +1,6 @@
 // A supervised Rust child processes Codex and Claude lifecycle evidence, never retaining transcript bodies.
+// A separate child reads chats for the Chats page; it keeps the parsed display messages of the last
+// eight chats in memory (never raw bytes, never on disk) so an unchanged or grown chat is cheap to re-read.
 import Foundation
 import Darwin
 
@@ -100,6 +102,9 @@ final class AgentLogWorker: @unchecked Sendable {
     static let shared = AgentLogWorker(executable: bundledExecutable())
     // History scans have a larger budget and must never hold up live status requests.
     static let usage = AgentLogWorker(executable: bundledExecutable(), timeout: 22)
+    // Chat transcripts get their own child: reading a chat never waits behind a history scan (and
+    // the reverse), and its incremental parse state lives as long as that child.
+    static let transcripts = AgentLogWorker(executable: bundledExecutable(), timeout: 10)
     private let lock = NSLock()
     private let executable: URL?
     private let timeout: TimeInterval
@@ -169,30 +174,35 @@ final class AgentLogWorker: @unchecked Sendable {
 
     func exchange(_ paths: [String], claude: ClaudeLogRequest? = nil, usage: UsageLogRequest? = nil, completed: String? = nil,
                   catalog: CodexCatalogRequest? = nil, activity: DailyActivityRequest? = nil,
-                  transcript: TranscriptRequest? = nil) -> CodexLogBatch? {
+                  transcript: TranscriptRequest? = nil, transcriptFile: TranscriptFileRequest? = nil) -> CodexLogBatch? {
         lock.lock(); defer { lock.unlock() }
-        return exchangeLocked(paths, claude: claude, usage: usage, completed: completed, catalog: catalog, activity: activity, transcript: transcript)
+        return exchangeLocked(paths, claude: claude, usage: usage, completed: completed, catalog: catalog, activity: activity, transcript: transcript,
+                              transcriptFile: transcriptFile)
     }
 
     private func exchangeLocked(_ paths: [String], claude: ClaudeLogRequest? = nil, usage: UsageLogRequest? = nil,
                                 completed: String? = nil, catalog: CodexCatalogRequest? = nil,
-                                activity: DailyActivityRequest? = nil, transcript: TranscriptRequest? = nil) -> CodexLogBatch? {
-        guard (!paths.isEmpty || claude != nil || usage != nil || completed != nil || catalog != nil || activity != nil || transcript != nil), paths.count <= 2048,
+                                activity: DailyActivityRequest? = nil, transcript: TranscriptRequest? = nil,
+                                transcriptFile: TranscriptFileRequest? = nil) -> CodexLogBatch? {
+        guard (!paths.isEmpty || claude != nil || usage != nil || completed != nil || catalog != nil || activity != nil || transcript != nil
+               || transcriptFile != nil), paths.count <= 2048,
+              (transcriptFile == nil || (transcript == nil && paths.isEmpty && claude == nil && usage == nil && completed == nil && catalog == nil
+                                         && activity == nil)),
               (transcript == nil || (paths.isEmpty && claude == nil && usage == nil && completed == nil && catalog == nil && activity == nil)),
               (catalog == nil || (paths.isEmpty && claude == nil && usage == nil && completed == nil)),
               (usage == nil || (paths.isEmpty && claude == nil && completed == nil)), (claude?.sessions.count ?? 0) <= 256,
               (activity == nil || (paths.isEmpty && claude == nil && usage == nil && completed == nil && catalog == nil)), executable != nil,
               ProcessInfo.processInfo.systemUptime >= retryAfter else { return nil }
         do {
-            struct Request: Encodable { let version = 4; let id: String; let paths: [String]; let claude: ClaudeLogRequest?; let usage: UsageLogRequest?; let completed: String?; let catalog: CodexCatalogRequest?; let activity: DailyActivityRequest?; let transcript: TranscriptRequest? }
+            struct Request: Encodable { let version = 4; let id: String; let paths: [String]; let claude: ClaudeLogRequest?; let usage: UsageLogRequest?; let completed: String?; let catalog: CodexCatalogRequest?; let activity: DailyActivityRequest?; let transcript: TranscriptRequest?; let transcriptFile: TranscriptFileRequest? }
             let id = UUID().uuidString
-            var request = try JSONEncoder().encode(Request(id: id, paths: paths, claude: claude, usage: usage, completed: completed, catalog: catalog, activity: activity, transcript: transcript)); request.append(10)
+            var request = try JSONEncoder().encode(Request(id: id, paths: paths, claude: claude, usage: usage, completed: completed, catalog: catalog, activity: activity, transcript: transcript, transcriptFile: transcriptFile)); request.append(10)
             guard request.count <= 2 * 1024 * 1024 else { return nil }
             let deadline = ProcessInfo.processInfo.systemUptime + timeout
             try startLocked()
             guard let input, let output else { throw WorkerError.channel }
             try write(request, to: input.fileDescriptor, deadline: deadline)
-            let response = try readLine(from: output.fileDescriptor, deadline: deadline, limit: catalog == nil && activity == nil && transcript == nil ? 512 * 1024 : 8 * 1024 * 1024)
+            let response = try readLine(from: output.fileDescriptor, deadline: deadline, limit: catalog == nil && activity == nil && transcript == nil && transcriptFile == nil ? 512 * 1024 : 8 * 1024 * 1024)
             let batch = try JSONDecoder().decode(CodexLogBatch.self, from: response)
             guard batch.version == 4, batch.id == id, batch.results.count == paths.count,
                   (0...paths.count).contains(batch.reads), (0...paths.count).contains(batch.cacheHits),
@@ -230,8 +240,12 @@ final class AgentLogWorker: @unchecked Sendable {
             if let activity {
                 guard let result = batch.activity, result.valid(for: activity) else { throw WorkerError.protocolMismatch }
             } else if batch.activity != nil { throw WorkerError.protocolMismatch }
-            if let transcript {
-                guard let result = batch.transcript, result.valid(for: transcript.limit) else { throw WorkerError.protocolMismatch }
+            if let limit = transcript?.limit ?? transcriptFile?.limit {
+                // A worker that predates revisions (a stale binary) leaves them out: treat it as a
+                // mismatch rather than a chat that never changes.
+                let known = transcript?.known ?? transcriptFile?.known
+                guard let result = batch.transcript, result.valid(for: limit), !result.found || result.revision != nil,
+                      result.unchanged != true || (known != nil && result.revision == known) else { throw WorkerError.protocolMismatch }
             } else if batch.transcript != nil { throw WorkerError.protocolMismatch }
             return batch
         } catch {

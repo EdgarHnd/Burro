@@ -129,6 +129,8 @@ import BurroCore
     let notes: NotesStore
     let benches: BenchesStore
     let orchestrator: OrchestratorStore
+    /// The Brief: automatic triage of chats that stop, kept for Home and the Orchestrator.
+    let brief: OrchestratorBriefStore
     /// ⌥P opens the Notes window from any app.
     var notesShortcut: Bool { didSet { defaults.set(notesShortcut, forKey: "notes.shortcut"); onNotesShortcutChange?() } }
     var notesShortcutProblem: String?
@@ -136,12 +138,14 @@ import BurroCore
     @ObservationIgnored var showNotes: ((NotesTarget) -> Void)?
     /// The project Home features. Nil means "the repository with the most worktrees".
     var mainProjectPath: String? { didSet { defaults.set(mainProjectPath, forKey: "home.mainProject") } }
-    /// Preselects the project in the New chat sheet.
-    var newChatFolder: String?
+    /// What the New chat sheet opens prefilled with (prompt, project, choices); consumed when it appears.
+    var newChatDraft: LaunchDraft?
     // New chat launcher
     var newChatPresented = false
     var codexModels: [LaunchModel] = []
     var launching = false
+    /// Chats started from the sheet that aren't in the feed yet (AppStore+Launch.swift).
+    var pendingLaunches = PendingLaunches()
     var repositories: [String] { didSet { save() } }
     var protectedPaths: Set<String> { didSet { save() } }
     var discover: Bool { didSet { save() } }
@@ -163,6 +167,7 @@ import BurroCore
         // The app passes its real notes store; tests and previews get a throwaway folder.
         benches = BenchesStore(defaults: defaults)
         orchestrator = OrchestratorStore(defaults: defaults)
+        brief = OrchestratorBriefStore(defaults: defaults)
         activityTracker = ActivityTracker(defaults: defaults)
         today = TodayStore(defaults: defaults, tracker: activityTracker)
         notesShortcut = defaults.object(forKey: "notes.shortcut") as? Bool ?? true
@@ -184,7 +189,10 @@ import BurroCore
         baseOverrides = defaults.dictionary(forKey: "baseOverrides") as? [String: String] ?? [:]
         orchestrator.snapshot = { [weak self] in self?.orchestratorState() }
         orchestrator.profiles = { [weak self] in self?.usage.preferences.profiles ?? [:] }
+        orchestrator.applyLocal = { [weak self] in self?.applyOrchestratorTodo($0) ?? "Burro isn't ready to change to-dos." }
+        orchestrator.undoLocal = { [weak self] in self?.undoOrchestratorTodo($0) ?? "Burro isn't ready to change to-dos." }
         shipped.project = { [weak self] in self?.mainProject?.path }
+        wireBrief()
     }
     func matches(_ filter: WorktreeFilter, tree: Worktree) -> Bool {
         if filter == .candidates { return cleanupEligibility(tree).allowed }
@@ -235,7 +243,7 @@ import BurroCore
     var activeAgents: [AgentSession] { agentActivity.sessions.filter { $0.state == .working } }
     /// Chats working on this Mac, the Orchestrator included; subagents only count when nothing above them does.
     var localWorkingAgents: Int {
-        let working = localActivity.sessions.filter { $0.state == .working }
+        let working = localActivity.sessions.filter { $0.state == .working && !OrchestratorTriage.owns($0) }
         let top = working.filter { $0.isSubagent != true }.count
         return max(top, working.isEmpty && !orchestrator.running ? 0 : 1)
     }
@@ -244,12 +252,13 @@ import BurroCore
     }
     func start() {
         guard monitorTask == nil else { return }
-        // Media copied from other machines is kept for one run only; the files may change.
-        Task.detached(priority: .background) { ChatMedia.clearCache() }
+        // Other machines' last-seen chats from Burro's remote cache, shown until their first probe.
+        loadRemoteCache()
         // Owned by the app store so closing the window keeps the menu-bar monitor alive.
         usage.start()
         activityTracker.start()
         keepAwake.start()
+        brief.start()
         let coordinator = AgentRefreshCoordinator { [weak self] in
             guard let self else { return 15 }
             await self.refreshAgents()
@@ -357,7 +366,7 @@ import BurroCore
             return session.cwd.split(separator: "/").contains { $0 == name }
         }
     }
-    func startChat(in folder: String) { newChatFolder = folder; newChatPresented = true }
+    func startChat(in folder: String, prompt: String = "") { openNewChat(LaunchDraft(prompt: prompt, folder: folder)) }
     /// Opens the chat in its provider when a link exists; otherwise shows its details in Burro.
     func open(_ session: AgentSession) {
         if let url = session.chatURL, NSWorkspace.shared.open(url) { return }
@@ -487,7 +496,7 @@ import BurroCore
             snapshot.host = host
             sessions += snapshot.displaySessions().map { localActivity.readState.applying(to: $0) }
         }
-        return sessions
+        return ChatLocalStore.shared.applying(sessions)
     }
     var selectedRemote: AgentSession? { notchChatSessions.first { $0.remote != nil && $0.id == remoteSelection } }
     func connection(for host: RemoteHost) -> RemoteHostSnapshot {
@@ -496,14 +505,20 @@ import BurroCore
     }
     func saveRemoteHost(_ host: RemoteHost) {
         if let i = remoteHosts.firstIndex(where: { $0.id == host.id }) {
-            if remoteHosts[i].destination != host.destination || remoteHosts[i].port != host.port { remoteSnapshots[host.id] = nil }
+            if remoteHosts[i].destination != host.destination || remoteHosts[i].port != host.port { remoteSnapshots[host.id] = nil; forgetRemoteCache(host.id) }
             remoteHosts[i] = host
         } else { remoteHosts.append(host) }
         remoteSchedule.requestNow([host.id])
         Task { await refreshRemotes(onlyDue: true) }
     }
+    /// Checks one machine now (after something was started there).
+    func requestRemoteCheck(_ id: UUID) {
+        remoteSchedule.requestNow([id])
+        Task { await refreshRemotes(onlyDue: true) }
+    }
     func removeRemoteHost(_ id: UUID) {
         remoteSnapshots[id] = nil
+        forgetRemoteCache(id)
         remoteHosts.removeAll { $0.id == id }
         remoteSchedule.keep(only: Set(remoteHosts.map(\.id)))
     }
@@ -538,11 +553,12 @@ import BurroCore
                 ? RemoteHostSnapshot.mergeFailure(host: result.host, error: result.error ?? "Connection unavailable",
                     previous: remoteSnapshots[result.host.id], now: result.attemptedAt)
                 : result
+            if result.state == .online { saveRemoteCache(result) }
         }
         checkingRemotes = false
         rebuildAgentActivity()
     }
-    private func rebuildAgentActivity() {
+    func rebuildAgentActivity() {
         // The orchestrator's own chat lives in its pinned row, not among your chats.
         var sessions = localActivity.sessions.filter { !Orchestrator.owns($0) }
         var warnings = localActivity.warnings
@@ -554,10 +570,14 @@ import BurroCore
             if result.state == .offline { warnings.append("\(host.name): connection unavailable") }
             warnings += result.warnings.map { "\(host.name): \($0)" }
         }
+        // Notifications and triage judge results as sampled; "seen in Burro" only changes the display.
+        let copies = ChatLocalStore.shared.copies(sessions); sessions = copies.display
+        ReplyQueueModel.shared.update(sessions: sessions, hosts: remoteHosts)
         let next = AgentActivitySnapshot(sessions: sessions, warnings: warnings, sampledAt: localActivity.sampledAt)
         // Re-render Today, Home and the notch only when something they show changed.
         if agentActivity.shouldPublish(next) { agentActivity = next }
-        chatNotifier.update(sessions)
+        chatNotifier.update(copies.attention)
+        brief.update(copies.attention)
     }
     func refresh(afterCleanup: Bool = false, incremental: Bool = false, trigger: String = "explicit") async {
         guard !scanning && (!cleaningWorktree || afterCleanup) else { return }
@@ -638,5 +658,12 @@ extension AppStore {
     /// Seconds until the next host is due, re-checked at least every 5 seconds so opening a window speeds polling up promptly.
     fileprivate func remotePollSleep() -> Double {
         remoteSchedule.sleepInterval(remoteHosts.filter(\.enabled).map(\.id), now: Date(), fast: remotePollingFast, tick: 5)
+    }
+    /// Failures and next check for one machine, for its status line.
+    func remotePollStatus(_ id: UUID) -> RemotePollStatus { remoteSchedule.status(id, fast: remotePollingFast) }
+    /// Checks one machine now (a chat was just started there), leaving the others on their schedule.
+    func requestRemoteProbe(_ id: UUID) async {
+        remoteSchedule.requestNow([id])
+        await refreshRemotes(onlyDue: true)
     }
 }

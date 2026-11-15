@@ -12,7 +12,10 @@ struct NotchAgentRow: View {
     var select: () -> Void
     var inspect: () -> Void
     @State private var hovering = false
+    @AppStorage(AppStore.openChatsInBurroKey) private var openInBurro = true
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    private var opensInBurro: Bool { session.chatURL == nil || openInBurro }
+    private var providerName: String { session.provider == .codex ? "Codex" : "Claude" }
     private var workerLabel: String? {
         guard available else { return nil }
         if workerState == .waiting { return "Worker needs you" }
@@ -63,8 +66,13 @@ struct NotchAgentRow: View {
                     in: RoundedRectangle(cornerRadius: AppAppearance.cardRadius))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).onHover { hovering = $0 }.disabled(!available)
-            .help(available ? (session.chatURL == nil ? "Show details in Burro" : "Open chat in \(session.provider == .codex ? "Codex" : "Claude")") + "\n" + session.title : "No longer present in the latest scan. Update the list to remove this row.")
-            .accessibilityHint(session.chatURL == nil ? "Shows session details in Burro" : "Opens this chat in \(session.provider == .codex ? "Codex" : "Claude")")
-            .contextMenu { Button("Show in Burro", action: inspect).disabled(!available) }
+            .help(available ? (opensInBurro ? "Open in Burro" : "Open chat in \(providerName)") + "\n" + session.title : "No longer present in the latest scan. Update the list to remove this row.")
+            .accessibilityHint(opensInBurro ? "Opens this chat in Burro" : "Opens this chat in \(providerName)")
+            .contextMenu {
+                Button("Show in Burro", action: inspect).disabled(!available)
+                if let url = session.chatURL {
+                    Button("Open in \(session.provider == .codex ? "Codex" : "Claude")") { NSWorkspace.shared.open(url) }.disabled(!available)
+                }
+            }
     }
 }

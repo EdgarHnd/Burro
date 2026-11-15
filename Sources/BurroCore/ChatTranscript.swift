@@ -1,6 +1,8 @@
-// Read a chat's conversation for the in-app chat view: this Mac through the Rust history worker,
-// other machines through a fixed read-only script over SSH. Messages are held in memory for
-// display only; nothing is cached or written.
+// Read a chat's conversation for the in-app chat view: this Mac through the Rust worker's
+// transcript child, other machines through a fixed read-only script over SSH, and a transcript
+// file inside an allowed folder (Burro's cache of remote chats) through the same Rust parser.
+// The worker keeps the parsed messages of the last few chats in memory and answers "unchanged"
+// for a revision the caller already holds; nothing is written.
 import Foundation
 
 public struct ChatMessage: Identifiable, Sendable, Equatable {
@@ -15,10 +17,12 @@ public struct ChatMessage: Identifiable, Sendable, Equatable {
     public var note: String?
     /// For a plan update: the whole plan as it stood after it.
     public var plan: [ChatPlanItem]?
+    /// A reply you just sent from Burro that the chat's log doesn't show yet (see `ChatEchoes`).
+    public var sending: Bool
     public init(id: Int, kind: Kind, text: String, tool: String? = nil, output: String? = nil, at: Date? = nil,
-                note: String? = nil, plan: [ChatPlanItem]? = nil) {
+                note: String? = nil, plan: [ChatPlanItem]? = nil, sending: Bool = false) {
         self.id = id; self.kind = kind; self.text = text; self.tool = tool; self.output = output; self.at = at
-        self.note = note; self.plan = plan
+        self.note = note; self.plan = plan; self.sending = sending
     }
 }
 
@@ -51,6 +55,29 @@ struct TranscriptRequest: Encodable, Sendable {
     let id: String
     let roots: [String]
     let limit: Int
+    /// The revision the caller holds; the worker answers `unchanged` while the chat is still at it.
+    var known: UInt64? = nil
+}
+
+/// A transcript file at `path`, which must lie inside `root` (see `ChatTranscripts.read(file:)`).
+struct TranscriptFileRequest: Encodable, Sendable {
+    let provider: String
+    let path: String
+    let root: String
+    let limit: Int
+    var known: UInt64? = nil
+}
+
+/// What a read found: the chat is still at the revision you hold, or its current messages.
+public enum ChatTranscriptRead: Sendable, Equatable {
+    case unchanged
+    /// `revision` comes from the worker for chats on this Mac and cached files; nil for SSH reads.
+    case loaded(ChatTranscript, revision: UInt64?)
+
+    public var transcript: ChatTranscript? {
+        if case .loaded(let transcript, _) = self { return transcript }
+        return nil
+    }
 }
 
 struct TranscriptBatch: Decodable, Sendable {
@@ -71,9 +98,14 @@ struct TranscriptBatch: Decodable, Sendable {
     let modified: Double?
     let contextTokens: Int?
     let contextWindow: Int?
+    /// Set by the worker (not the SSH script): identifies the parse state these messages came from.
+    var revision: UInt64? = nil
+    /// The chat is still at the revision the request named; no messages were sent.
+    var unchanged: Bool? = nil
 
     func valid(for limit: Int) -> Bool {
         let messages = messages ?? []
+        if unchanged == true && (!found || !messages.isEmpty || revision == nil) { return false }
         return messages.count <= limit && messages.allSatisfy {
             $0.text.count <= 12_001 && ($0.tool?.count ?? 0) <= 81 && ($0.output?.count ?? 0) <= 601 && ($0.at.map { $0.isFinite } ?? true)
                 && ($0.note?.count ?? 0) <= 121 && ($0.plan?.count ?? 0) <= 30 && ($0.plan ?? []).allSatisfy { $0.text.count <= 201 }
@@ -122,6 +154,10 @@ public enum ChatTranscripts {
         return nil
     }
 
+    /// The worker child that reads transcripts on this Mac. It is its own process, so reading a
+    /// chat never waits behind a usage history scan, and its parse state survives between reads.
+    static var worker: AgentLogWorker? { .transcripts }
+
     /// Loads a chat by its Burro id, finding the machine among `hosts` for remote chats.
     public static func load(chatID: String, hosts: [RemoteHost], profiles: [UsageProvider: String] = [:], limit: Int = 300) throws -> ChatTranscript {
         guard let (hostID, provider, id) = identity(chatID: chatID) else { throw LoadError.unsupported }
@@ -129,29 +165,94 @@ public enum ChatTranscripts {
             guard let host = hosts.first(where: { $0.id == hostID }) else { throw LoadError.unavailable("That machine isn't configured any more.") }
             return try remote(provider: provider, id: id, host: host, limit: limit)
         }
-        return try local(provider: provider, id: id, profiles: profiles, limit: limit, worker: .usage)
+        return try local(provider: provider, id: id, profiles: profiles, limit: limit, worker: worker)
     }
 
     /// Loads the latest `limit` messages. `host` is the remote machine for remote sessions.
     public static func load(_ session: AgentSession, host: RemoteHost?, profiles: [UsageProvider: String] = [:],
                             limit: Int = 300) throws -> ChatTranscript {
+        guard let transcript = try read(session, host: host, profiles: profiles, limit: limit, after: nil).transcript else { throw LoadError.notFound }
+        return transcript
+    }
+
+    /// Like `load`, for a view that refreshes: pass the revision of what you show and an untouched
+    /// chat on this Mac answers `.unchanged` without sending its messages again. Remote chats are
+    /// fetched in full each time (compare the result with what you show before assigning it).
+    public static func read(_ session: AgentSession, host: RemoteHost?, profiles: [UsageProvider: String] = [:],
+                            limit: Int = 300, after revision: UInt64?) throws -> ChatTranscriptRead {
         guard let (provider, id) = identity(of: session) else { throw LoadError.unsupported }
         if session.remote != nil {
             guard let host else { throw LoadError.unavailable("That machine isn't configured any more.") }
-            return try remote(provider: provider, id: id, host: host, limit: limit)
+            return .loaded(try remote(provider: provider, id: id, host: host, limit: limit), revision: nil)
         }
-        return try local(provider: provider, id: id, profiles: profiles, limit: limit, worker: .usage)
+        return try local(provider: provider, id: id, profiles: profiles, limit: limit, after: revision, worker: worker)
+    }
+
+    /// Reads a transcript file Burro keeps (a cached copy of a remote chat) with the same parser and
+    /// limits as chats on this Mac. `path` must be an absolute path to a `.jsonl` file below `root`
+    /// (at most eight folders down, no `.`/`..`), and `root`, every folder between and the file must
+    /// belong to this user and none of them may be a symlink. `provider` picks the log format.
+    /// Throws `.unsupported` for a path outside `root`, `.notFound` when the file is missing or
+    /// refused (a symlink, someone else's, not a regular file) and `.unavailable` when the worker
+    /// can't run. Replace a cached file by renaming a new one over it, or only append to it:
+    /// the worker re-reads only what was added to a file it has seen.
+    public static func read(file path: String, provider: AgentProvider, root: String, limit: Int = 300,
+                            after revision: UInt64? = nil) throws -> ChatTranscriptRead {
+        try read(file: path, provider: provider, root: root, limit: limit, after: revision, worker: worker)
+    }
+
+    /// `read(file:)` without a revision: the file's latest `limit` messages.
+    public static func load(file path: String, provider: AgentProvider, root: String, limit: Int = 300) throws -> ChatTranscript {
+        guard let transcript = try read(file: path, provider: provider, root: root, limit: limit, after: nil).transcript else { throw LoadError.notFound }
+        return transcript
+    }
+
+    static func read(file path: String, provider: AgentProvider, root: String, limit: Int, after revision: UInt64?,
+                     worker: AgentLogWorker?) throws -> ChatTranscriptRead {
+        guard let worker else { throw LoadError.unavailable("Burro's log reader isn't available in this build.") }
+        guard inside(path, root: root) else { throw LoadError.unsupported }
+        let request = TranscriptFileRequest(provider: provider == .codex ? "codex" : "claude", path: path, root: root,
+                                            limit: max(1, min(500, limit)), known: revision)
+        guard let batch = worker.exchange([], transcriptFile: request)?.transcript else {
+            throw LoadError.unavailable("Couldn't read the transcript right now.")
+        }
+        return try result(batch)
     }
 
     static func local(provider: String, id: String, profiles: [UsageProvider: String], limit: Int, worker: AgentLogWorker?) throws -> ChatTranscript {
+        guard let transcript = try local(provider: provider, id: id, profiles: profiles, limit: limit, after: nil, worker: worker).transcript else {
+            throw LoadError.notFound
+        }
+        return transcript
+    }
+
+    static func local(provider: String, id: String, profiles: [UsageProvider: String], limit: Int, after revision: UInt64?,
+                      worker: AgentLogWorker?) throws -> ChatTranscriptRead {
         guard let worker else { throw LoadError.unavailable("Burro's log reader isn't available in this build.") }
         let roots = LocalUsageScanner.roots(provider: provider == "codex" ? .codex : .claude,
                                             profile: profiles[provider == "codex" ? .codex : .claude]).map(\.path)
-        guard let batch = worker.exchange([], transcript: TranscriptRequest(provider: provider, id: id, roots: roots, limit: limit))?.transcript else {
+        let request = TranscriptRequest(provider: provider, id: id, roots: roots, limit: limit, known: revision)
+        guard let batch = worker.exchange([], transcript: request)?.transcript else {
             throw LoadError.unavailable("Couldn't read the transcript right now.")
         }
+        return try result(batch)
+    }
+
+    /// `path` names a `.jsonl` file below `root` without `.`/`..` or empty parts (the worker checks
+    /// the folders and the file themselves). Checked here so a bad path never reaches the worker.
+    static func inside(_ path: String, root: String) -> Bool {
+        let base = root.hasSuffix("/") ? String(root.dropLast()) : root
+        guard base.hasPrefix("/"), base.count > 1, path.hasPrefix(base + "/"), path.hasSuffix(".jsonl"),
+              path.utf8.count <= 4096, base.utf8.count <= 4096, !path.contains("\0") else { return false }
+        let names = path.dropFirst(base.count + 1).split(separator: "/", omittingEmptySubsequences: false)
+        return (1...9).contains(names.count) && names.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+            && (names.last?.count ?? 0) > 6
+    }
+
+    private static func result(_ batch: TranscriptBatch) throws -> ChatTranscriptRead {
+        if batch.unchanged == true { return .unchanged }
         guard let transcript = batch.transcript else { throw LoadError.notFound }
-        return transcript
+        return .loaded(transcript, revision: batch.revision)
     }
 
     static func remote(provider: String, id: String, host: RemoteHost, limit: Int) throws -> ChatTranscript {

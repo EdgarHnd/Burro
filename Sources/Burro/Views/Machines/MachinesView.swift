@@ -110,7 +110,7 @@ enum MachinesModel {
                                        os: store.machines.facts[host.id.uuidString]?.os ?? peer.map { $0.os }, online: machine.map { $0.connection == .online },
                                        running: machine?.counts.running ?? 0, waiting: machine?.counts.waiting ?? 0,
                                        roots: roots(sessions), peer: peer, host: host, lastSeen: machine?.lastSeen,
-                                       detail: connection(machine?.connection)))
+                                       detail: store.remoteStatusLine(for: host)))
         }
         for peer in peers where !peer.isSelf && !store.remoteHosts.contains(where: { matches(peer, $0.destination) }) {
             models.append(MachineModel(id: "tailnet:" + peer.id, name: peer.hostName, kind: .tailnet, os: peer.os, online: peer.online,

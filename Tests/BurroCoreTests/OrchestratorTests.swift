@@ -55,14 +55,14 @@ final class OrchestratorTests: XCTestCase {
                        [.text("Hello"), .tool(id: "t1", name: "read_chat", summary: "claude:x")])
         XCTAssertEqual(parse(#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"  ok  "}]}]}}"#),
                        [.toolResult(id: "t1", output: "ok")])
-        XCTAssertEqual(parse(#"{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"abc"}"#),
-                       [.finished(isError: false, message: nil, sessionID: "abc")])
-        XCTAssertEqual(parse(#"{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["boom"]}"#),
-                       [.finished(isError: true, message: "boom", sessionID: nil)])
+        XCTAssertEqual(parse(#"{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"abc"}"#).last,
+                       .finished(isError: false, message: nil, sessionID: "abc"))
+        XCTAssertEqual(parse(#"{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["boom"]}"#).last,
+                       .finished(isError: true, message: "boom", sessionID: nil))
         XCTAssertEqual(parse("not json"), [])
     }
 
-    func testTurnArgumentsAllowOnlyBurroAndReadOnlyTools() {
+    func testTurnArgumentsAllowOnlyBurrosTools() {
         let config = URL(fileURLWithPath: "/tmp/mcp.json")
         let first = Orchestrator.arguments(sessionID: chatID, resume: false, mcpConfig: config)
         XCTAssertEqual(first.suffix(2), ["--session-id", chatID])
@@ -82,7 +82,7 @@ final class OrchestratorTests: XCTestCase {
         }
         XCTAssertEqual(model("claude-opus-5-5"), "claude-opus-5-5")
         XCTAssertEqual(model("x; rm -rf /"), "claude-fable-5-2", "Anything that isn't a plain model id falls back to the default")
-        XCTAssertEqual(value("--allowedTools"), "mcp__burro,Read,Grep,Glob")
+        XCTAssertEqual(value("--allowedTools"), "mcp__burro")
         XCTAssertTrue(value("--disallowedTools")?.contains("Bash") == true)
         XCTAssertTrue(first.contains("--strict-mcp-config"))
         XCTAssertFalse(first.contains { $0.contains("bypass") || $0.contains("dangerously") })
@@ -109,7 +109,8 @@ final class OrchestratorTests: XCTestCase {
         XCTAssertNil(tools.handle(["jsonrpc": "2.0", "method": "notifications/initialized"]))
         let list = tools.handle(["jsonrpc": "2.0", "id": 2, "method": "tools/list"])
         let names = ((list?["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String }
-        XCTAssertEqual(names, ["overview", "list_chats", "read_chat", "list_worktrees", "reply_chat", "start_chat"])
+        XCTAssertEqual(Array((names ?? []).prefix(7)), ["brief", "overview", "list_chats", "read_chat", "list_worktrees", "reply_chat", "start_chat"])
+        XCTAssertTrue(Set(names ?? []).isSuperset(of: ["chat_digest", "read_file", "search_files", "add_todo", "complete_todo", "remember", "forget"]))
         let unknown = tools.handle(["jsonrpc": "2.0", "id": 3, "method": "resources/list"])
         XCTAssertEqual((unknown?["error"] as? [String: Any])?["code"] as? Int, -32601)
         let call = tools.handle(["jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": ["name": "overview", "arguments": [String: Any]()]])

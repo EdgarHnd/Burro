@@ -3,7 +3,11 @@
 // filters that snapshot in memory. Running a row navigates like the rest of the app does: a page or
 // machine is chosen directly (no back pill), a chat, project or Orchestrator question is a jump; the
 // actions open the New chat sheet, Settings or a prefilled (never sent) Orchestrator draft, so
-// nothing here starts or messages an agent by itself.
+// nothing here starts or messages an agent by itself. Any typed text also offers "Start chat: …"
+// after the matches (or alone when nothing matches): it opens the New chat sheet with that text as
+// the prompt, in the current or last project. Each enabled machine adds "New chat on <Machine>…" and
+// "New chat in <folder> on <Machine>…" for its remembered folders (ranked below this Mac's); they
+// open the sheet prefilled with that machine, and only its Start launches.
 import SwiftUI
 import BurroCore
 
@@ -20,7 +24,7 @@ import BurroCore
     var query = "" {
         didSet {
             guard query != oldValue else { return }
-            results = index.results(for: query)
+            results = CommandPaletteStartChat.results(index.results(for: query), query: query, projectName: startChatProject?.name)
             selection = 0
         }
     }
@@ -28,6 +32,9 @@ import BurroCore
     var selection = 0
     @ObservationIgnored private let index: CommandPaletteIndex
     @ObservationIgnored private let rows: [String: Row]
+    /// Where "Start chat: …" puts the chat, and what it runs with the typed text.
+    @ObservationIgnored private let startChatProject: (path: String, name: String)?
+    @ObservationIgnored private let startChat: @MainActor (String) -> Void
 
     init(store: AppStore, openSettings: @escaping @MainActor () -> Void) {
         var items: [CommandPaletteItem] = []
@@ -96,6 +103,11 @@ import BurroCore
                                    subtitle: "Opens the New chat sheet", keywords: ["start", "launch"]),
                 Row(symbol: "plus.bubble", kindLabel: "Action") { store.startChat(in: folder.path) })
         }
+        let remoteFolders = { (host: RemoteHost) in RemoteLaunch.cachedFolders(host: host)?.folders ?? [] }
+        for entry in CommandPaletteRemoteLaunch.entries(hosts: store.remoteHosts, folders: remoteFolders) {
+            let draft = LaunchDraft(folder: entry.folder, machine: entry.machine)
+            add(entry.item, Row(symbol: "plus.bubble", kindLabel: "Action") { store.openNewChat(draft) })
+        }
         add(CommandPaletteItem(id: "action:settings", kind: .action, title: "Open Settings", subtitle: "⌘,", keywords: ["preferences"]),
             Row(symbol: "gearshape", kindLabel: "Action") { openSettings() })
         if !store.refreshingCurrentPage {
@@ -116,10 +128,19 @@ import BurroCore
 
         index = CommandPaletteIndex(items)
         self.rows = rows
+        let project = store.currentLaunchProject
+        startChatProject = project
+        startChat = { text in store.openNewChat(LaunchDraft(prompt: LaunchDraft.prompt(from: text), folder: project?.path)) }
         results = index.results(for: "")
     }
 
-    func row(_ item: CommandPaletteItem) -> Row? { rows[item.id] }
+    func row(_ item: CommandPaletteItem) -> Row? {
+        if item.id == CommandPaletteStartChat.itemID {
+            let text = query, start = startChat
+            return Row(symbol: "plus.bubble", kindLabel: "Action") { start(text) }
+        }
+        return rows[item.id]
+    }
     var selected: CommandPaletteItem? { results.indices.contains(selection) ? results[selection] : nil }
 
     func moveSelection(_ delta: Int) {
@@ -129,11 +150,11 @@ import BurroCore
     /// The selected row's action, for the caller to run once the palette has closed.
     func action(for item: CommandPaletteItem? = nil) -> (@MainActor () -> Void)? {
         guard let item = item ?? selected else { return nil }
-        return rows[item.id]?.run
+        return row(item)?.run
     }
     /// What VoiceOver reads for a row.
     func spokenLabel(_ item: CommandPaletteItem) -> String {
-        let kind = rows[item.id]?.kindLabel ?? ""
+        let kind = row(item)?.kindLabel ?? ""
         return [item.title, kind, item.subtitle].filter { !$0.isEmpty }.joined(separator: ", ")
     }
 

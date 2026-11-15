@@ -318,10 +318,14 @@ import BurroCore
         present(hoverState.expanded ? expanded : compact, expanded: hoverState.expanded, animate: animate)
         if !panel.isVisible || !animate { panel.orderFrontRegardless() }
     }
+    /// A click on a chat here or in the menu bar's "Needs you" list: Burro's Chats page when
+    /// "Open chats in Burro" is on (the default), its provider's app otherwise; ⌥ flips the two.
     func select(_ session: AgentSession) {
         // Collapse before handing focus to another app; opening a chat never sends input.
         collapse()
-        if let url = session.chatURL, NSWorkspace.shared.open(url) { return }
+        let target = ChatOpenTarget.decide(openInBurro: store?.openChatsInBurro ?? true,
+                                           optionKey: NSEvent.modifierFlags.contains(.option), hasProviderLink: session.chatURL != nil)
+        if target == .provider, let url = session.chatURL, NSWorkspace.shared.open(url) { return }
         inspect(session)
     }
     private func inspect(_ session: AgentSession) {

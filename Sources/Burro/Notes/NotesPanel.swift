@@ -44,6 +44,8 @@ struct NoteAction: Identifiable {
     @ObservationIgnored var showChrome: (Bool) -> Void = { _ in }
     @ObservationIgnored var sendToOrchestrator: (String) -> Void = { _ in }
     @ObservationIgnored var addTodos: ([String]) -> Void = { _ in }
+    /// Opens the New chat sheet in the main window prefilled with a note (never starts it).
+    @ObservationIgnored var startChat: (String) -> Void = { _ in }
     @ObservationIgnored private var back: [UUID] = []
     @ObservationIgnored private var forward: [UUID] = []
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
@@ -326,6 +328,12 @@ struct NoteAction: Identifiable {
             self.openDashboard()
         }
         model.addTodos = { [weak store] items in items.forEach { store?.todos.add($0) } }
+        model.startChat = { [weak self, weak store] text in
+            guard let self, let store else { return }
+            store.startChat(withText: text)
+            self.hide()
+            self.openDashboard()
+        }
 
         let panel = NotesPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 600),
                                styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],

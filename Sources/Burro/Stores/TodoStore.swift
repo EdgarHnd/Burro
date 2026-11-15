@@ -1,6 +1,8 @@
 // Today's to-dos: instant local edits, a persistent queue, and a sync with Maurice's Convex
 // backend when one is set up. Without sync the list lives on this Mac and uploads later.
 // Syncs only after a change or while Home is on screen; there is no timer of its own.
+// To-dos the Orchestrator adds carry the source "orchestrator"; if the server refuses that source,
+// the add is retried once as an ordinary one so the to-do isn't lost.
 import AppKit
 import Foundation
 import Observation
@@ -26,6 +28,8 @@ import BurroCore
     @ObservationIgnored private let cacheURL: URL
     @ObservationIgnored private let remote: (ConvexConfig) -> TodoRemote
     @ObservationIgnored private let now: () -> Date
+    /// Local ids the server has since given real ids, for this run (Undo of an Orchestrator to-do).
+    @ObservationIgnored private var remapped: [String: String] = [:]
 
     init(cacheURL: URL = TodoStore.defaultCacheURL, config: ConvexConfig? = ConvexCredentials.load(),
          remote: @escaping (ConvexConfig) -> TodoRemote = { TodoRemote(client: ConvexClient(config: $0)) },
@@ -44,9 +48,13 @@ import BurroCore
     var hasUnsyncedChanges: Bool { !pending.isEmpty }
 
     // MARK: Editing
-    func add(_ text: String, project: String? = nil) {
+    func add(_ text: String, project: String? = nil, clientId: String = UUID().uuidString.lowercased(), source: String? = nil) {
         guard let clean = TodoLedger.clean(text) else { return }
-        change(.add(clientId: UUID().uuidString.lowercased(), text: clean, day: TodoDay.key(now()), project: project))
+        change(.add(clientId: clientId, text: clean, day: TodoDay.key(now()), project: project, source: source))
+    }
+    /// A to-do by id, following a local id to the server's id once it synced.
+    func item(id: String) -> TodoItem? {
+        items.first { $0.id == id } ?? remapped[id].flatMap { remote in items.first { $0.id == remote } }
     }
     func toggle(_ item: TodoItem) { change(.setDone(id: item.id, done: !item.done)) }
     func edit(_ item: TodoItem, text: String) {
@@ -106,13 +114,18 @@ import BurroCore
             do {
                 let id = try await remote.perform(op)
                 pending.removeFirst()
-                if case .add(let clientId, _, _, _) = op, let id {
+                if case .add(let clientId, _, _, _, _) = op, let id {
                     let local = TodoLedger.localPrefix + clientId
                     pending = TodoLedger.remap(pending, from: local, to: id)
+                    remapped[local] = id
                 }
                 saveCache()
             } catch let error as ConvexClientError where error.isRetryable {
                 state = .offline(error.errorDescription ?? "Offline"); return
+            } catch where Self.ordinaryAdd(op) != nil {
+                // The server may only know Burro's own source: send it as an ordinary add instead.
+                pending[0] = Self.ordinaryAdd(op)!
+                saveCache()
             } catch {
                 // A refusal won't succeed on retry: drop that change and say why.
                 pending.removeFirst()
@@ -130,6 +143,12 @@ import BurroCore
             state = .failed((error as? LocalizedError)?.errorDescription ?? "Sync failed")
         }
         rebuild(); saveCache()
+    }
+
+    /// The same add without a source tag, when it had one.
+    private static func ordinaryAdd(_ op: TodoOp) -> TodoOp? {
+        guard case .add(let clientId, let text, let day, let project, let source) = op, source != nil else { return nil }
+        return .add(clientId: clientId, text: text, day: day, project: project)
     }
 
     private func rebuild() {

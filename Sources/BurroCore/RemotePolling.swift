@@ -1,8 +1,20 @@
 // When each remote Mac is next checked: every 10 seconds while you are looking at remote chats or one
 // is working or waiting on you, otherwise once a minute. A host that fails is retried after 15, 30, 60,
 // then 120 seconds (never sooner than the current cadence); the first success, a manual refresh, or
-// adding/editing the host resets that and checks it straight away.
+// adding/editing the host resets that and checks it straight away. `status` reports the failure
+// count, when the host is next due and since when it has been failing, for the status line.
 import Foundation
+
+/// What the per-machine status line needs from the schedule.
+public struct RemotePollStatus: Sendable, Equatable {
+    public var failures: Int
+    public var nextDue: Date
+    /// The first failure in the current run of failures; nil after a success.
+    public var failingSince: Date?
+    public init(failures: Int = 0, nextDue: Date = .distantPast, failingSince: Date? = nil) {
+        self.failures = failures; self.nextDue = nextDue; self.failingSince = failingSince
+    }
+}
 
 public struct RemotePollSchedule: Sendable, Equatable {
     public static let fastInterval: TimeInterval = 10
@@ -13,6 +25,7 @@ public struct RemotePollSchedule: Sendable, Equatable {
         var finishedAt: Date?
         var failures = 0
         var requested = false
+        var failingSince: Date?
     }
     private var hosts: [UUID: HostState] = [:]
 
@@ -23,6 +36,9 @@ public struct RemotePollSchedule: Sendable, Equatable {
         surfaceVisible || remoteStates.contains { $0 == .working || $0 == .waiting }
     }
     public func failures(_ id: UUID) -> Int { hosts[id]?.failures ?? 0 }
+    public func status(_ id: UUID, fast: Bool) -> RemotePollStatus {
+        RemotePollStatus(failures: failures(id), nextDue: nextDue(id, fast: fast), failingSince: hosts[id]?.failingSince)
+    }
 
     /// When the host should next be probed. A host never checked, or asked for, is due at once.
     public func nextDue(_ id: UUID, fast: Bool) -> Date {
@@ -48,11 +64,12 @@ public struct RemotePollSchedule: Sendable, Equatable {
     public mutating func recordFailure(_ id: UUID, at date: Date) {
         var state = hosts[id] ?? HostState()
         state.finishedAt = date; state.failures += 1; state.requested = false
+        if state.failingSince == nil { state.failingSince = date }
         hosts[id] = state
     }
     /// A manual refresh, or a host added or edited: probe now and forget any backoff.
     public mutating func requestNow(_ ids: [UUID]) {
-        for id in ids { hosts[id] = HostState(finishedAt: hosts[id]?.finishedAt, failures: 0, requested: true) }
+        for id in ids { hosts[id] = HostState(finishedAt: hosts[id]?.finishedAt, failures: 0, requested: true, failingSince: hosts[id]?.failingSince) }
     }
     /// Drops hosts that were removed.
     public mutating func keep(only ids: Set<UUID>) { hosts = hosts.filter { ids.contains($0.key) } }
