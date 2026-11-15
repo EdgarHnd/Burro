@@ -1,5 +1,6 @@
-// Burro's landing page: a cover, your projects and machines as benches, a plain-language summary,
-// and to-dos, today so far (when activity tracking is on), notes and a scratchpad on the side.
+// Burro's landing page: a cover with a greeting, live chips and a plain-language summary, then what
+// needs you, the Orchestrator, the main project, your projects and machines as benches, and to-dos,
+// today so far (when activity tracking is on), notes and a scratchpad on the side.
 // Read-only like the rest of monitoring. While on screen it keeps Mac Health sampling, syncs
 // to-dos, rescans today's activity at most every 90 seconds and re-reads today's tracked activity
 // once a minute; it starts no other background work.
@@ -26,15 +27,14 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     HomeCover(store: store, summary: summary)
+                    HomeAttention(store: store, summary: summary)
                     HStack(alignment: .top, spacing: 28) {
                         VStack(alignment: .leading, spacing: 30) {
-                            quickActions
                             HomeOrchestrator(store: store)
                             HomeMainProject(store: store, summary: summary)
                             benches(summary)
                             projects(summary)
                             machines(summary)
-                            summaryText(summary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         VStack(spacing: 16) {
                             HomeTodayCard(todos: store.todos)
@@ -43,7 +43,6 @@ struct HomeView: View {
                                     store.today.show(Date()); store.page = .today
                                 }
                             }
-                            if !summary.needsYou.isEmpty || !summary.unread.isEmpty { HomeInbox(store: store, summary: summary) }
                             HomeNotesCard(notes: store.notes) { store.showNotes?($0) }
                             HomeScratchpadCard(notes: store.notes)
                         }.frame(width: 320)
@@ -94,14 +93,6 @@ struct HomeView: View {
         }
     }
 
-    private var quickActions: some View {
-        HStack(spacing: 12) {
-            PillButton(title: "Chat", symbol: "plus.bubble") { store.newChatPresented = true }.help("Start a Codex or Claude chat (⌘N)")
-            PillButton(title: "Project", symbol: "folder.badge.plus") { store.addRepository() }.help("Add a repository")
-            PillButton(title: "Machine", symbol: "server.rack") { store.page = .machines }.help("See your machines and their agent tools")
-        }
-    }
-
     private func newBench() -> Bench {
         Bench(id: UUID(), name: "", symbol: Bench.symbols[store.benches.benches.count % Bench.symbols.count],
               color: store.benches.benches.count % Bench.colors.count, projects: [])
@@ -114,7 +105,7 @@ struct HomeView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 16)], spacing: 18) {
                     ForEach(store.benches.benches) { bench in
                         let rollup = store.benches.rollup(bench, projects: summary.projects)
-                        BenchCard(title: bench.name, symbol: bench.symbol, tint: bench.tint, counts: rollup.counts,
+                        BenchCard(title: bench.name, symbol: bench.symbol, counts: rollup.counts,
                                   quiet: rollup.tokens > 0 ? HomeFormat.tokens(rollup.tokens) + " tokens today"
                                          : "\(bench.projects.count) project\(bench.projects.count == 1 ? "" : "s") · Quiet",
                                   help: "Show \(bench.name)'s worktrees") {
@@ -153,8 +144,7 @@ struct HomeView: View {
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 16)], spacing: 18) {
                     ForEach(loose.prefix(6)) { project in
-                        BenchCard(title: project.name, symbol: project.isRepository ? nil : "folder",
-                                  tint: HomeStyle.tint(for: project.name), counts: project.counts,
+                        BenchCard(title: project.name, symbol: project.isRepository ? nil : "folder", counts: project.counts,
                                   quiet: project.tokensToday > 0 ? HomeFormat.tokens(project.tokensToday) + " tokens today" : "Quiet",
                                   help: project.isRepository ? "Show \(project.name)'s worktrees" : project.id) { store.showProject(project) }
                     }
@@ -170,7 +160,7 @@ struct HomeView: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 16)], spacing: 18) {
                 ForEach(summary.machines) { machine in
                     BenchCard(title: machine.name, symbol: machine.connection == .local ? "laptopcomputer" : "desktopcomputer",
-                              tint: machine.connection == .local ? AppAppearance.green : (machine.connection == .online ? .teal : AppAppearance.tertiary),
+                              dimmed: !(machine.connection == .local || machine.connection == .online),
                               counts: machine.counts,
                               quiet: machine.connection == .local || machine.connection == .online ? "Quiet" : MachinesModel.connection(machine.connection),
                               help: machine.connection == .local ? "Mac Health" : "Machines") {
@@ -179,20 +169,5 @@ struct HomeView: View {
                 }
             }
         }
-    }
-
-    private func summaryText(_ summary: HomeSummary) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(store.didCheckAgents ? summary.sentence : "Checking on your agents…")
-                .font(.system(size: 17)).lineSpacing(5).foregroundStyle(AppAppearance.text)
-                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 720, alignment: .leading)
-                .textSelection(.enabled)
-            HStack(spacing: 6) {
-                Image(systemName: "clock")
-                Text(store.agentActivity.sampledAt == .distantPast ? "Waiting for the first check" : "Updated \(HomeFormat.ago(store.agentActivity.sampledAt))")
-                Button { Task { await store.refreshAgents() } } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain).help("Check agents now")
-            }.font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-        }.padding(.top, 4)
     }
 }

@@ -1,8 +1,13 @@
 // Burro's own activity tracker: off by default, on this Mac only. While on and not paused, the
 // sampler's observations go through ActivityPrivacy, the recorder merges them, and finished spans
 // are appended to the day's file on a background queue at most every 30 seconds (and on idle,
-// lock, pause and quit). Old days are pruned at launch and once a day. Nothing here is sent
-// anywhere, logged, or included in the orchestrator's snapshot.
+// lock, pause and quit). While the sampler runs, a recording interval is kept in the day's coverage
+// sidecar (ActivityCoverage.swift): begun when recording starts, extended every 30 seconds and on
+// wake, ended on pause, turn off and quit, so the Today page can tell "not recording" from "away".
+// How long without input counts as away is the `activity.idleAfter` preference (2, 5 or 10
+// minutes), applied live. The Today page's day is built on the writer queue. Old days are pruned
+// at launch and once a day. Nothing here is sent anywhere, logged, or included in the
+// orchestrator's snapshot.
 import AppKit
 import ApplicationServices
 import Observation
@@ -11,11 +16,21 @@ import BurroCore
 @MainActor @Observable final class ActivityTracker {
     var enabled: Bool { didSet { defaults.set(enabled, forKey: "activity.enabled"); apply() } }
     var paused: Bool { didSet { defaults.set(paused, forKey: "activity.paused"); apply() } }
+    /// Seconds without input before you count as away: one of `ActivityPresence.idleChoices`.
+    var idleAfter: TimeInterval {
+        didSet {
+            idleAfter = ActivityPresence.idleAfter(preference: idleAfter)
+            defaults.set(Int(idleAfter), forKey: "activity.idleAfter")
+            sampler?.idleAfter = idleAfter
+        }
+    }
     private(set) var accessibilityTrusted = AXIsProcessTrusted()
     private(set) var rules = ActivityRules()
     /// Bumps whenever stored data or rules change, so the Today page re-reads.
     private(set) var revision = 0
     var recording: Bool { enabled && !paused }
+    /// Applies the Settings preference `activity.browserPages` to a running sampler at once.
+    func browserPagesChanged() { sampler?.wakesBrowserTrees = defaults.object(forKey: "activity.browserPages") as? Bool ?? true }
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let log: ActivityLog
@@ -25,6 +40,8 @@ import BurroCore
     @ObservationIgnored private var started = false
     @ObservationIgnored private var lastCheckpoint = Date()
     @ObservationIgnored private var lastPrune = Date.distantPast
+    @ObservationIgnored private var coverage = ActivityRecording()
+    @ObservationIgnored private var heartbeat: Timer?
     @ObservationIgnored private let writer = DispatchQueue(label: "local.burro.activity.write", qos: .utility)
 
     init(defaults: UserDefaults = .standard, log: ActivityLog = ActivityLog()) {
@@ -32,6 +49,7 @@ import BurroCore
         self.log = log
         enabled = defaults.bool(forKey: "activity.enabled")
         paused = defaults.bool(forKey: "activity.paused")
+        idleAfter = ActivityPresence.idleAfter(preference: defaults.object(forKey: "activity.idleAfter"))
     }
 
     func start() {
@@ -46,9 +64,13 @@ import BurroCore
     /// Quit: saves everything still in memory before returning.
     func stop() {
         sampler?.stop()
-        let spans = unsaved, log = log
+        heartbeat?.invalidate(); heartbeat = nil
+        let spans = unsaved, log = log, piece = coverage.end(at: Date())
         unsaved = []
-        writer.sync { if !spans.isEmpty { try? log.append(spans) } }
+        writer.sync {
+            if !spans.isEmpty { try? log.append(spans) }
+            if let piece { try? log.recordCoverage(piece) }
+        }
     }
 
     private func apply() {
@@ -58,16 +80,40 @@ import BurroCore
             let sampler = ActivitySampler()
             sampler.onChange = { [weak self] observation, at in self?.observe(observation, at: at) }
             sampler.onTick = { [weak self] now in self?.tick(now) }
-            sampler.onTrustChange = { [weak self] trusted in self?.accessibilityTrusted = trusted }
-            // Hidden preference (default on): ask Arc and other Chromium browsers for their page's address.
+            sampler.onTrustChange = { [weak self] trusted in self?.setTrusted(trusted) }
+            sampler.onResume = { [weak self] now in self?.beat(now) }
+            sampler.idleAfter = idleAfter
+            // Settings preference (default on): ask Arc and other Chromium browsers for their page's address.
             sampler.wakesBrowserTrees = defaults.object(forKey: "activity.browserPages") as? Bool ?? true
             self.sampler = sampler
             lastCheckpoint = Date()
+            writeCoverage(coverage.begin(at: Date()))
             sampler.start()
+            startHeartbeat()
         } else if let sampler {
             sampler.stop()
             self.sampler = nil
+            heartbeat?.invalidate(); heartbeat = nil
+            writeCoverage(coverage.end(at: Date()))
         }
+    }
+
+    /// Every 30 seconds while recording, away or not (the sampler's own tick stops while you're away).
+    private func startHeartbeat() {
+        heartbeat?.invalidate()
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.beat(Date()) } }
+        timer.tolerance = 5
+        RunLoop.main.add(timer, forMode: .common)
+        heartbeat = timer
+    }
+
+    /// Extends the recording interval to `now` on disk; after a sleep it covers the sleep too.
+    private func beat(_ now: Date) { writeCoverage(coverage.beat(at: now)) }
+
+    private func writeCoverage(_ piece: DateInterval?) {
+        guard let piece else { return }
+        let log = log
+        writer.async { try? log.recordCoverage(piece) }
     }
 
     private func observe(_ observation: ActivityObservation?, at time: Date) {
@@ -105,27 +151,38 @@ import BurroCore
 
     // MARK: Reading and editing
 
-    /// The day's spans from disk, read after any pending writes, plus today's unsaved time.
+    /// The day's spans and coverage from disk, read after any pending writes, plus today's unsaved
+    /// time and open recording interval, built into the day on the writer queue.
     func day(_ date: Date) async -> ActivityDay {
         let log = log, rules = rules, now = Date()
-        let live = Calendar.current.isDate(date, inSameDayAs: now) ? unsaved + recorder.live(at: now) : []
-        let stored = await withCheckedContinuation { (done: CheckedContinuation<[ActivitySpan], Never>) in
-            writer.async { done.resume(returning: log.read(day: date)) }
+        let today = Calendar.current.isDate(date, inSameDayAs: now)
+        let live = today ? unsaved + recorder.live(at: now) : []
+        let open = coverage.live(at: now).map { [$0] } ?? []
+        return await withCheckedContinuation { (done: CheckedContinuation<ActivityDay, Never>) in
+            writer.async {
+                let stored = log.readCoverage(day: date)
+                let intervals = stored.map { $0 + open } ?? (today && !open.isEmpty ? open : nil)
+                done.resume(returning: ActivityDay.build(spans: log.read(day: date) + live, rules: rules, day: date,
+                                                         coverage: intervals, now: now))
+            }
         }
-        return ActivityDay.build(spans: stored + live, rules: rules, day: date)
     }
 
+    /// Removes the day's spans and coverage; on today, recording counts again from now.
     func deleteDay(_ date: Date) {
-        let log = log
-        if Calendar.current.isDateInToday(date) { recorder.discard(at: Date()); unsaved = [] }
+        let log = log, now = Date()
+        let today = Calendar.current.isDate(date, inSameDayAs: now)
+        if today { recorder.discard(at: now); unsaved = [] }
         writer.async { log.deleteDay(date) }
+        if today { writeCoverage(coverage.restart(at: now)) }
         revision += 1
     }
 
     func deleteAll() {
-        let log = log
-        recorder.discard(at: Date()); unsaved = []
+        let log = log, now = Date()
+        recorder.discard(at: now); unsaved = []
         writer.async { log.deleteAll() }
+        writeCoverage(coverage.restart(at: now))
         revision += 1
     }
 
@@ -153,11 +210,14 @@ import BurroCore
         saveRules()
     }
 
-    func refreshTrust() { accessibilityTrusted = AXIsProcessTrusted(); sampler?.refreshTrust() }
+    func refreshTrust() { setTrusted(AXIsProcessTrusted()); sampler?.refreshTrust() }
+
+    /// Assigned only on change, so views reading it don't invalidate on every refresh.
+    private func setTrusted(_ trusted: Bool) { if trusted != accessibilityTrusted { accessibilityTrusted = trusted } }
 
     /// Only on an explicit click: macOS's prompt, then the Accessibility pane.
     func requestAccessibility() {
-        accessibilityTrusted = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+        setTrusted(AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary))
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }

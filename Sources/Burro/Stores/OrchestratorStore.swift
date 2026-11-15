@@ -1,6 +1,8 @@
-// The orchestrator chat: one Claude Code (Fable 5.2) conversation Burro runs headless, one
-// `claude -p` process per turn, resumed by session id. History is the chat's own transcript,
-// read back through the Rust worker after each turn; the turn in progress streams live.
+// The orchestrator chat: one Claude Code conversation Burro runs headless (Fable 5.2 unless you
+// pick another model), one `claude -p` process per turn, resumed by session id. History is the
+// chat's own transcript, read back through the Rust worker after each turn; the turn in progress
+// streams live. Replies and chats it proposes are kept as pending actions (read from the
+// actions file as its tools write them) until you send or discard each one.
 import Foundation
 import Observation
 import BurroCore
@@ -15,6 +17,12 @@ import BurroCore
     private(set) var sessionID: String? { didSet { defaults.set(sessionID, forKey: "orchestrator.session") } }
     /// How hard the orchestrator thinks; applies from the next message.
     var effort: String { didSet { defaults.set(effort, forKey: "orchestrator.effort") } }
+    /// Which Claude model runs it; applies from the next message.
+    var model: String { didSet { defaults.set(model, forKey: "orchestrator.chosenModel") } }
+    /// Replies and chats it proposed, newest last; nothing here has been sent unless marked sent.
+    private(set) var actions: [OrchestratorAction] = []
+    /// Proposals being sent right now.
+    private(set) var sendingActions: Set<String> = []
     var draft = ""
 
     /// Burro's current picture, written for the tool server before and during each turn.
@@ -24,8 +32,9 @@ import BurroCore
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, actionStore: OrchestratorActionStore = .standard) {
         self.defaults = defaults
+        self.actionStore = actionStore
         sessionID = defaults.string(forKey: "orchestrator.session")
         // A new orchestrator model starts at its own default effort; a pick made since stays.
         if defaults.string(forKey: "orchestrator.model") != Orchestrator.model {
@@ -34,7 +43,12 @@ import BurroCore
         }
         let saved = defaults.string(forKey: "orchestrator.effort") ?? Orchestrator.defaultEffort
         effort = Orchestrator.efforts.contains(saved) ? saved : Orchestrator.defaultEffort
+        let picked = defaults.string(forKey: "orchestrator.chosenModel") ?? Orchestrator.model
+        model = Orchestrator.models.contains { $0.id == picked } ? picked : Orchestrator.model
+        actions = actionStore.load()
     }
+
+    @ObservationIgnored let actionStore: OrchestratorActionStore
 
     var setupProblem: String? {
         if ClaudeLaunch.executable() == nil { return "Install Claude Code on this Mac to use the orchestrator." }
@@ -49,12 +63,10 @@ import BurroCore
         if !streaming.isEmpty { all.append(ChatMessage(id: 0, kind: .assistant, text: streaming)) }
         return all.enumerated().map { index, message in var copy = message; copy.id = index; return copy }
     }
-    /// Chats it started this conversation, from its start_chat results.
-    var startedChatIDs: [String] {
-        messages.filter { $0.kind == .tool && $0.tool == "start_chat" }.compactMap { message in
-            message.output?.firstMatch(of: /(?:claude|codex):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/).map { String($0.0) }
-        }
-    }
+    /// Chats started from its proposals.
+    var startedChatIDs: [String] { actions.compactMap(\.startedChatID) }
+    /// Proposals still waiting for Send or Discard (not expired).
+    var waitingActions: [OrchestratorAction] { actions.filter { $0.isWaiting() } }
     var lastReply: String? { (streaming.isEmpty ? nil : streaming) ?? messages.last { $0.kind == .assistant }?.text }
     var lastQuestion: String? { messages.last { $0.kind == .user }?.text }
     /// What the orchestrator is doing right now, for the Home card.
@@ -106,7 +118,7 @@ import BurroCore
         do {
             let config = try Orchestrator.prepare(toolServer: server)
             writeSnapshot()
-            let turn = try OrchestratorTurn(executable: executable, arguments: Orchestrator.arguments(sessionID: id, resume: resume, mcpConfig: config, effort: effort), prompt: prompt)
+            let turn = try OrchestratorTurn(executable: executable, arguments: Orchestrator.arguments(sessionID: id, resume: resume, mcpConfig: config, effort: effort, model: model), prompt: prompt)
             self.turn = turn
             if !resume { sessionID = id }
             // Keep the snapshot fresh during long turns.
@@ -129,6 +141,7 @@ import BurroCore
                     append(ChatMessage(id: 0, kind: .tool, text: summary, tool: name, at: Date()))
                 case .toolResult(_, let output):
                     if let index = live.lastIndex(where: { $0.kind == .tool && $0.output == nil }) { live[index].output = output }
+                    if output.hasPrefix("Proposal ") { reloadActions() }
                 case .finished(let isError, let message, _):
                     if isError { failure = message ?? "The orchestrator stopped." }
                 }
@@ -143,6 +156,7 @@ import BurroCore
                 return
             }
             await reloadHistory()
+            reloadActions()
             if let failure { error = failure.trimmingCharacters(in: .whitespacesAndNewlines) }
         } catch {
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -151,6 +165,39 @@ import BurroCore
     }
 
     private func append(_ message: ChatMessage) { live.append(message) }
+
+    // MARK: Proposed actions
+
+    func reloadActions() { actions = actionStore.load() }
+
+    func discard(_ action: OrchestratorAction) {
+        try? actionStore.discard(action.id)
+        reloadActions()
+    }
+
+    /// Marks a proposal as going out; false when it's already sending, sent, expired or gone.
+    func beginSending(_ id: String) -> Bool {
+        reloadActions()
+        guard let action = actions.first(where: { $0.id == id }), action.isWaiting(), !sendingActions.contains(id) else { return false }
+        sendingActions.insert(id)
+        return true
+    }
+
+    /// Records what Send did: the text that went, and the confirmation or the error.
+    func finishSending(_ id: String, text: String, outcome: Result<(message: String, chatID: String?), Error>) {
+        sendingActions.remove(id)
+        _ = try? actionStore.modify(id) { action in
+            action.text = text
+            switch outcome {
+            case .success(let sent):
+                action.status = .sent; action.result = sent.message; action.error = nil; action.sentAt = Date()
+                action.startedChatID = sent.chatID
+            case .failure(let failure):
+                action.error = (failure as? LocalizedError)?.errorDescription ?? failure.localizedDescription
+            }
+        }
+        reloadActions()
+    }
 
     private func finishTurn() {
         running = false
@@ -186,7 +233,8 @@ import BurroCore
         case "list_chats": "Listing chats…"
         case "read_chat": "Reading a chat…"
         case "list_worktrees": "Checking worktrees…"
-        case "start_chat": "Starting a chat…"
+        case "start_chat": "Proposing a chat…"
+        case "reply_chat": "Drafting a reply…"
         case "Read": "Reading a file…"
         case "Grep", "Glob": "Searching files…"
         default: "Working…"

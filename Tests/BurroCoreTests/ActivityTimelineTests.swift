@@ -228,4 +228,35 @@ final class ActivityTimelineTests: XCTestCase {
         XCTAssertEqual(late.idle.count, 2)
         XCTAssertEqual(late.height, late.placed[2].y + late.placed[2].height + 30, accuracy: 0.01)
     }
+
+    func testNotRecordedStretchesAreTheirOwnDividers() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let midnight = calendar.startOfDay(for: t0)
+        let rel = { (hour: Double) in midnight.timeIntervalSince(self.t0) / 60 + hour * 60 }
+        let date = { (hour: Double) in midnight.addingTimeInterval(hour * 3600) }
+        // Opened at 16:42, paused 18:00–19:00, idle 20:00–21:30, now 22:00.
+        let day = blocks([(xcode, rel(16.75), rel(18), nil, nil), (xcode, rel(19), rel(20), nil, nil), (slack, rel(21.5), rel(21.9), nil, nil)])
+        let gaps = [DateInterval(start: midnight, end: date(16.7)), DateInterval(start: date(18), end: date(19))]
+        let layout = ActivityTimelineLayout(blocks: day, notRecorded: gaps, now: date(22), hourHeight: 60, minHeight: 20, idleHeight: 30,
+                                            calendar: calendar)
+        XCTAssertEqual(layout.idle.map(\.kind), [.notRecording, .notRecording, .idle])
+        XCTAssertEqual(layout.idle[0].y, 0, "a day that opens unrecorded starts with the divider")
+        XCTAssertEqual(layout.idle[0].start, midnight)
+        XCTAssertEqual(layout.idle[1].duration, 3600)
+        XCTAssertEqual(layout.idle[2].duration, 90 * 60)
+        XCTAssertEqual(layout.placed[1].y, layout.idle[1].y + 30, accuracy: 0.01, "an hour paused is one thin divider")
+        for gap in layout.idle where gap.kind == .notRecording {
+            XCTAssertFalse(layout.marks.contains { $0.date >= gap.start && $0.date < gap.end }, "no hour lines inside it")
+        }
+        XCTAssertTrue(layout.marks.contains { $0.date == date(17) })
+        // Paused since 22:00 and now 23:30: the stretch up to now is a not-recording divider, not idle.
+        let paused = ActivityTimelineLayout(blocks: day, notRecorded: gaps + [DateInterval(start: date(22), end: date(23.5))], now: date(23.5),
+                                            hourHeight: 60, minHeight: 20, calendar: calendar)
+        XCTAssertEqual(paused.idle.last?.kind, .notRecording)
+        XCTAssertEqual(paused.idle.last?.end, date(23.5))
+        XCTAssertEqual(try XCTUnwrap(paused.nowY), paused.height, accuracy: 0.01)
+        // Without coverage, nothing changes.
+        XCTAssertEqual(ActivityTimelineLayout(blocks: day, now: date(22), hourHeight: 60, minHeight: 20, calendar: calendar).idle.map(\.kind), [.idle, .idle])
+    }
 }

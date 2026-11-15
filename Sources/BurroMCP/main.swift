@@ -1,5 +1,6 @@
 // burro-mcp: Burro's tool server for the orchestrator chat. Claude Code starts it over stdio
-// (newline-delimited JSON-RPC); it answers from the snapshot Burro writes at $BURRO_STATE.
+// (newline-delimited JSON-RPC); it answers from the snapshot Burro writes at $BURRO_STATE and
+// records proposed replies and chats beside it. It never sends a message or starts a chat.
 import Foundation
 import BurroCore
 

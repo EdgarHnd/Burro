@@ -1,5 +1,5 @@
-// The desktop shell: Home is the landing page; worktrees, usage, Mac health and remote
-// sessions open from it, the toolbar's page switcher, or ⌘1–⌘5.
+// The desktop shell: Home is the landing page; every other page opens from it, the top bar,
+// or ⌘1–⌘8 (Home, Orchestrator, Today, Chats, Worktrees, Machines, Usage, Mac Health).
 import SwiftUI
 import BurroCore
 
@@ -34,6 +34,7 @@ struct ContentView: View {
             CleanupResultsView(batch: store.cleanupBatch)
         }
         .sheet(isPresented: $store.newChatPresented) { NewChatSheet(store: store) }
+        .modifier(CommandPaletteHost(store: store))
         .frame(minWidth: 1000, minHeight: 620)
         .onChange(of: store.page) { _, page in
             if page == .worktrees { store.reconcileSelection(selectFirst: true) }

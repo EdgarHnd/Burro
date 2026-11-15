@@ -4,7 +4,10 @@
 // minimum height, so the axis stretches a little around short ones instead of letting them
 // overlap, and hour lines follow the same stretched scale. A gap longer than `collapseIdle`
 // between blocks (or between the last block and now) is drawn as a thin "Idle" divider instead
-// of empty space, and hour lines inside it are left out.
+// of empty space, and hour lines inside it are left out. A stretch Burro wasn't recording (closed
+// or paused, from ActivityDay.notRecorded) is always its own divider of the `.notRecording` kind,
+// wherever it falls: before the first block, between blocks or after the last; idle time on either
+// side of it collapses as usual.
 import Foundation
 
 public struct ActivityTimelineLayout: Sendable {
@@ -18,8 +21,15 @@ public struct ActivityTimelineLayout: Sendable {
         public var date: Date
         public var y: Double
     }
-    /// A collapsed idle gap: drawn as a divider of `height` at `y`.
+    /// A collapsed gap: drawn as a divider of `height` at `y`.
     public struct Idle: Sendable, Equatable, Identifiable {
+        public enum Kind: Sendable, Equatable {
+            /// You were away (Burro was recording).
+            case idle
+            /// Burro was closed or tracking was paused.
+            case notRecording
+        }
+        public var kind: Kind = .idle
         public var start: Date
         public var end: Date
         public var y: Double
@@ -38,17 +48,20 @@ public struct ActivityTimelineLayout: Sendable {
     public private(set) var nowY: Double?
     private var anchors: [(date: Date, y: Double)] = []
 
-    public init(blocks: [ActivityBlock], now: Date?, hourHeight: Double, minHeight: Double, idleHeight: Double = 30,
-                calendar: Calendar = .current) {
-        guard let first = blocks.first, let last = blocks.map(\.end).max() else { return }
+    /// `notRecorded`: stretches Burro wasn't recording, sorted and clear of the blocks (as ActivityDay leaves them).
+    public init(blocks: [ActivityBlock], notRecorded: [DateInterval] = [], now: Date?, hourHeight: Double, minHeight: Double,
+                idleHeight: Double = 30, calendar: Calendar = .current) {
+        guard let firstBlock = blocks.first, let lastBlock = blocks.map(\.end).max() else { return }
         let perSecond = hourHeight / 3600
-        let from = calendar.dateInterval(of: .hour, for: first.start)?.start ?? first.start
+        let first = min(firstBlock.start, notRecorded.first?.start ?? firstBlock.start)
+        let last = max(lastBlock, notRecorded.map(\.end).max() ?? lastBlock)
+        let from = calendar.dateInterval(of: .hour, for: first)?.start ?? first
         let to = max(last, now ?? last)
         var time = from, y = 0.0
         anchors.append((from, 0))
         func advance(to date: Date) {
             guard date > time else { return }
-            if !placed.isEmpty, date.timeIntervalSince(time) > Self.collapseIdle {
+            if !placed.isEmpty || !idle.isEmpty, date.timeIntervalSince(time) > Self.collapseIdle {
                 idle.append(Idle(start: time, end: date, y: y, height: idleHeight))
                 anchors.append((time, y))
                 y += idleHeight
@@ -58,7 +71,23 @@ public struct ActivityTimelineLayout: Sendable {
             }
             time = date
         }
+        var gaps = notRecorded[...]
+        /// Not-recorded stretches that start before `date`, each as its own divider.
+        func dividers(before date: Date) {
+            while let gap = gaps.first, gap.start < date {
+                gaps.removeFirst()
+                guard gap.end > time else { continue }
+                advance(to: gap.start)
+                let start = max(time, gap.start)
+                anchors.append((start, y))
+                idle.append(Idle(kind: .notRecording, start: start, end: gap.end, y: y, height: idleHeight))
+                y += idleHeight
+                time = gap.end
+                anchors.append((time, y))
+            }
+        }
         for block in blocks {
+            dividers(before: block.start)
             advance(to: block.start)
             let height = max(minHeight, block.duration * perSecond)
             anchors.append((max(time, block.start), y))
@@ -67,12 +96,16 @@ public struct ActivityTimelineLayout: Sendable {
             time = max(time, block.end)
             anchors.append((time, y))
         }
+        dividers(before: .distantFuture)
         advance(to: to)
         anchors.append((to, y))
         height = y
         var hour = from
         while hour <= to {
-            if !idle.contains(where: { $0.start < hour && hour < $0.end }) { marks.append(Mark(date: hour, y: map(hour))) }
+            // A not-recorded stretch also hides the hour it starts on (a day that opens with one starts at 0:00).
+            if !idle.contains(where: { ($0.start < hour || ($0.kind == .notRecording && $0.start == hour)) && hour < $0.end }) {
+                marks.append(Mark(date: hour, y: map(hour)))
+            }
             guard let next = calendar.date(byAdding: .hour, value: 1, to: hour) else { break }
             hour = next
         }

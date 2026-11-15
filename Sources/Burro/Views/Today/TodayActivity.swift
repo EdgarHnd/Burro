@@ -1,8 +1,8 @@
 // Burro's own on-device tracker on the Today page (frontmost app, window title, a browser's host;
 // never the screen). Off, it is a small full-width card that explains it and turns it on. On, the
 // day view (TodayDayView.swift) takes its place. The pieces both share
-// live here: the controls (Pause, Turn off, Open Burro at login, Delete this day…, Delete everything…, each delete
-// behind a confirmation), the Accessibility prompt, app/site rows whose right-click changes the
+// live here: the controls (Pause, Turn off, Away after 2/5/10 min, Open Burro at login, Delete this day…,
+// Delete everything…, each delete behind a confirmation), the Accessibility prompt, app/site rows whose right-click changes the
 // category or marks a site private, app icons and category colours.
 import AppKit
 import SwiftUI
@@ -26,7 +26,7 @@ struct TodayActivityCard: View {
     }
 }
 
-/// Recording/Paused, Pause or Turn on, and a menu with Turn off, Open Burro at login and the deletes.
+/// Recording/Paused, Pause or Turn on, and a menu with Turn off, Away after, Open Burro at login and the deletes.
 struct ActivityControls: View {
     var today: TodayStore
     /// Given by the Today page; without it the menu has no login item.
@@ -54,6 +54,13 @@ struct ActivityControls: View {
                     Button("Turn off") { tracker.enabled = false }
                     Divider()
                 }
+                // Reading agent output without touching the Mac counts as here for this long.
+                Picker("Away after", selection: Binding(get: { tracker.idleAfter }, set: { tracker.idleAfter = $0 })) {
+                    ForEach(ActivityPresence.idleChoices, id: \.self) { seconds in
+                        Text("\(Int(seconds / 60)) min").tag(seconds)
+                    }
+                }
+                Divider()
                 if let loginItem {
                     // Tracking only records while Burro runs, so starting with the Mac belongs here.
                     if loginItem.state == .requiresApproval {
@@ -70,7 +77,7 @@ struct ActivityControls: View {
                 Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).frame(width: 26, height: 26)
                     .background(AppAppearance.raised, in: Circle())
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Pause, turn off, open at login or delete")
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("Pause, turn off, set when you count as away, open at login or delete")
         }
         .onAppear { loginItem?.refresh() }
         .alert("Open at login", isPresented: Binding(get: { loginFailure != nil }, set: { if !$0 { loginFailure = nil } })) {

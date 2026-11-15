@@ -45,6 +45,7 @@ public struct LaunchModel: Identifiable, Sendable, Equatable, Hashable {
         LaunchModel(id: "claude-opus-5-5", title: "Opus 5.5", efforts: claudeEfforts, defaultEffort: "high", isDefault: true),
         LaunchModel(id: "claude-sonnet-5-5", title: "Sonnet 5.5", efforts: claudeEfforts, defaultEffort: "medium"),
         LaunchModel(id: "claude-haiku-5-5", title: "Haiku 5.5", efforts: claudeEfforts, defaultEffort: "medium"),
+        LaunchModel(id: "claude-fable-5-2", title: "Fable 5.2", efforts: claudeEfforts, defaultEffort: "high"),
         LaunchModel(id: "claude-fable-5-1", title: "Fable 5.1", efforts: claudeEfforts, defaultEffort: "high"),
     ]
     public static let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]

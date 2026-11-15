@@ -3,7 +3,9 @@
 // timeline's blocks and focus stretches (ActivityTimeline.swift). Categories come from the
 // current rules, so a rule you change applies to past days as well. Lock-screen and login-window
 // spans (ActivityPrivacy.systemScreens) aren't activity and are dropped first; apps and sites with
-// under a minute aren't listed, though their time still counts.
+// under a minute aren't listed, though their time still counts. Given the day's recording intervals
+// (ActivityCoverage.swift), it also lists the stretches Burro wasn't recording (closed or paused),
+// up to now for today, with a short note for the summary; without them it makes no such claim.
 import Foundation
 
 public struct ActivityDay: Sendable, Equatable {
@@ -42,6 +44,13 @@ public struct ActivityDay: Sendable, Equatable {
     /// The day timeline: readable blocks, idle gaps left out.
     public var blocks: [ActivityBlock]
     public var focus: ActivityFocus
+    /// Whether the day has a coverage record; days before it existed, and imported days, don't.
+    public var coverageKnown = false
+    /// Stretches of 5 minutes or more Burro wasn't recording (closed, paused or off), in order;
+    /// empty when coverage is unknown. Sleep and screen lock aren't among them: that's time away.
+    public var notRecorded: [DateInterval] = []
+    /// "Not recorded 0:00–16:42", or "Not recorded for 5h 20m" when there are several gaps; nil when there's nothing to say.
+    public var notRecordedNote: String?
     /// Everything except Break.
     public var focused: TimeInterval { categories.filter { $0.category != .break }.reduce(0) { $0 + $1.seconds } }
 
@@ -54,7 +63,9 @@ public struct ActivityDay: Sendable, Equatable {
         return (shown, seconds.rounded() >= ActivityTimeline.minimumShown ? (rest.count, seconds) : nil)
     }
 
-    public static func build(spans input: [ActivitySpan], rules: ActivityRules, day: Date, calendar: Calendar = .current) -> ActivityDay {
+    /// `coverage` is the day's recording intervals (nil: unknown); `now` ends the day early for today.
+    public static func build(spans input: [ActivitySpan], rules: ActivityRules, day: Date, coverage: [DateInterval]? = nil, now: Date? = nil,
+                             calendar: Calendar = .current) -> ActivityDay {
         let start = calendar.startOfDay(for: day)
         let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
         // Clip to the day and trim overlaps (a live span can repeat one just written).
@@ -107,6 +118,8 @@ public struct ActivityDay: Sendable, Equatable {
             entries[index].label = titles.max { $0.value < $1.value }?.key ?? entries[index].host ?? entries[index].app
         }
 
+        let until = min(end, max(start, now ?? end))
+        let gaps = ActivityCoverage.notRecorded(coverage: coverage, spans: spans, within: DateInterval(start: start, end: until))
         return ActivityDay(
             day: start, total: spans.reduce(0) { $0 + $1.duration },
             categories: perCategory.map { CategoryTime(category: $0.key, seconds: $0.value) }.sorted { $0.seconds > $1.seconds },
@@ -115,6 +128,7 @@ public struct ActivityDay: Sendable, Equatable {
             sites: sites.map { Item(id: $0.key, name: $0.key, category: main($0.value.categories), seconds: $0.value.seconds) }
                 .filter(listed).sorted { $0.seconds > $1.seconds },
             entries: entries, hourly: hourly,
-            blocks: ActivityTimeline.blocks(categorized), focus: ActivityTimeline.focus(categorized))
+            blocks: ActivityTimeline.blocks(categorized), focus: ActivityTimeline.focus(categorized),
+            coverageKnown: coverage != nil, notRecorded: gaps, notRecordedNote: ActivityCoverage.note(gaps, day: start, calendar: calendar))
     }
 }

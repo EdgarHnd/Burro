@@ -12,12 +12,10 @@ struct HomeTodayCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 10) {
-                Image(systemName: "checklist").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 30, height: 30).background(AppAppearance.blue, in: Circle())
-                Text("To-dos").font(.system(size: 16, weight: .semibold)).foregroundStyle(AppAppearance.blue)
-                Spacer()
-                Text("\(todos.openCount)").font(.system(size: 24, weight: .semibold, design: .rounded)).monospacedDigit()
+            HomeSectionHeader(title: "To-dos") {
+                if todos.openCount > 0 {
+                    Text("\(todos.openCount) open").monospacedDigit().foregroundStyle(AppAppearance.tertiary)
+                }
             }
             VStack(alignment: .leading, spacing: 1) {
                 ForEach(todos.items) { item in row(item) }
@@ -27,8 +25,12 @@ struct HomeTodayCard: View {
                 HStack(alignment: .top, spacing: 6) {
                     Text(message).font(.system(size: 11)).foregroundStyle(AppAppearance.amber).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
-                    Button { todos.message = nil } label: { Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)) }
-                        .buttonStyle(.plain).foregroundStyle(AppAppearance.tertiary).accessibilityLabel("Dismiss")
+                    Button { todos.message = nil } label: {
+                        Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                            .frame(width: 22, height: 22).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).foregroundStyle(AppAppearance.tertiary).padding(-5)
+                    .help("Dismiss message").accessibilityLabel("Dismiss message")
                 }
             }
             syncFooter

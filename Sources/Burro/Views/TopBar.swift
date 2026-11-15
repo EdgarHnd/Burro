@@ -1,6 +1,9 @@
-// The window's top bar, drawn by Burro instead of the system toolbar: Today and Home with a
-// breadcrumb on the left, page tools in the middle, and icon buttons with badges on the right.
-// The traffic lights sit in its left inset; dragging the bar moves the window.
+// The window's top bar, drawn by Burro instead of the system toolbar: Home, Orchestrator and
+// Today on the left (in ⌘1–⌘3 order), then a back pill after a jump from inside a page (and
+// "‹ Today" on the Timeline), page tools in the middle, and icon buttons with badges on the right.
+// The current page's icon widens into a pill with its title. The Chats badge is amber while a
+// chat needs you and blue when there are only results to read. The traffic lights sit in its
+// left inset; dragging the bar moves the window.
 import AppKit
 import SwiftUI
 import BurroCore
@@ -8,30 +11,31 @@ import BurroCore
 struct TopBar: View {
     @Bindable var store: AppStore
     var notch: NotchController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 4) {
             Color.clear.frame(width: 74, height: 1) // traffic lights
-            TopBarIcon(symbol: "calendar", help: AppPage.today.help, selected: store.page == .today) { store.page = .today }
-            TopBarIcon(symbol: "house", help: AppPage.home.help, selected: store.page == .home) { store.page = .home }
-            TopBarIcon(symbol: "sparkles", help: AppPage.orchestrator.help + ": your agents' project manager",
-                       working: store.orchestrator.running, selected: store.page == .orchestrator) { store.page = .orchestrator }
-            if ![.home, .today, .orchestrator].contains(store.page) {
-                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(AppAppearance.tertiary)
-                    .padding(.horizontal, 4)
-                Label(store.page.title, systemImage: store.page.icon)
-                    .font(.system(size: 14, weight: .semibold)).labelStyle(.titleAndIcon)
+            icon(.home, symbol: "house")
+            icon(.orchestrator, symbol: "sparkles", help: AppPage.orchestrator.help + ": your agents' project manager",
+                 working: store.orchestrator.running)
+            icon(.today, symbol: "calendar")
+            if let target = store.backPillTarget {
+                TopBarBackPill(title: target.title) { store.followBackPill() }
+                    .padding(.leading, 6)
+                    .transition(.opacity)
             }
             Spacer(minLength: 16)
             pageTools.padding(.trailing, 10)
-            TopBarIcon(symbol: "bubble.left.and.bubble.right", help: AppPage.remote.help + ": every conversation, badge = needs you or ready to read",
-                       badge: store.agentActivity.attentionCount, selected: store.page == .remote) { store.page = .remote }
-            TopBarIcon(symbol: "arrow.triangle.branch", help: AppPage.worktrees.help, selected: store.page == .worktrees) { store.page = .worktrees }
-            TopBarIcon(symbol: "server.rack", help: AppPage.machines.help, selected: store.page == .machines) { store.page = .machines }
-            TopBarIcon(symbol: "gauge.with.dots.needle.33percent", help: AppPage.usage.help, selected: store.page == .usage) { store.page = .usage }
-            TopBarIcon(symbol: "heart.text.square", help: AppPage.health.help + (store.keepAwake.awake ? ": keeping this Mac awake" : ""),
-                       badge: store.health.report.leftovers.count, badgeColor: AppAppearance.amber,
-                       dot: store.keepAwake.awake ? AppAppearance.green : nil, selected: store.page == .health) { store.page = .health }
+            icon(.remote, symbol: "bubble.left.and.bubble.right", help: AppPage.remote.help + ": every conversation, badge = needs you (amber) or ready to read (blue)",
+                 badge: store.agentActivity.attentionCount,
+                 badgeColor: store.agentActivity.waitingCount > 0 ? AppAppearance.amber : AppAppearance.blue)
+            icon(.worktrees, symbol: "arrow.triangle.branch")
+            icon(.machines, symbol: "server.rack")
+            icon(.usage, symbol: "gauge.with.dots.needle.33percent")
+            icon(.health, symbol: "heart.text.square", help: AppPage.health.help + (store.keepAwake.awake ? ": keeping this Mac awake" : ""),
+                 badge: store.health.report.leftovers.count, badgeColor: AppAppearance.amber,
+                 dot: store.keepAwake.awake ? AppAppearance.green : nil)
             TopBarIcon(symbol: "square.and.pencil", help: "New chat (⌘N)", selected: false) { store.newChatPresented = true }
         }
         .padding(.horizontal, 14)
@@ -40,6 +44,13 @@ struct TopBar: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { NSApp.keyWindow?.zoom(nil) }
         .modifier(WindowDragArea())
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.page)
+    }
+
+    private func icon(_ page: AppPage, symbol: String, help: String? = nil, badge: Int = 0, badgeColor: Color = AppAppearance.amber,
+                      working: Bool = false, dot: Color? = nil) -> TopBarIcon {
+        TopBarIcon(symbol: symbol, help: help ?? page.help, title: page.title, badge: badge, badgeColor: badgeColor,
+                   working: working, dot: dot, selected: store.page == page) { store.go(to: page) }
     }
 
     @ViewBuilder private var pageTools: some View {
@@ -69,12 +80,15 @@ struct TopBar: View {
     }
 }
 
-/// A plain top-bar icon: a soft circle on hover or when it's the current page, and an optional badge.
+/// A plain top-bar icon: a soft circle on hover, and an optional badge. When it is the current
+/// page and has a title, it widens into a pill showing the icon and the page's name.
 struct TopBarIcon: View {
     var symbol: String
     var help: String
+    var title: String? = nil
     var badge: Int = 0
-    var badgeColor: Color = .red
+    /// Amber for something that needs you, blue for something ready to read.
+    var badgeColor: Color = AppAppearance.amber
     /// A small pulsing dot while something runs behind this page.
     var working = false
     /// A small steady dot for a state that stays on (Keep Awake).
@@ -82,13 +96,22 @@ struct TopBarIcon: View {
     var selected: Bool
     var action: () -> Void
     @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var showsTitle: Bool { selected && title != nil }
     var body: some View {
         Button(action: action) {
             ZStack(alignment: .topTrailing) {
-                Image(systemName: symbol).font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(selected || hovering ? AppAppearance.text : AppAppearance.secondary)
-                    .frame(width: 34, height: 34)
-                    .background(selected ? AppAppearance.raised : (hovering ? AppAppearance.hover : .clear), in: Circle())
+                HStack(spacing: 6) {
+                    Image(systemName: symbol).font(.system(size: 15, weight: .regular))
+                    if showsTitle, let title {
+                        Text(title).font(.system(size: 13, weight: .semibold)).lineLimit(1).fixedSize()
+                            .transition(.opacity)
+                    }
+                }
+                .foregroundStyle(selected || hovering ? AppAppearance.text : AppAppearance.secondary)
+                .padding(.horizontal, showsTitle ? 12 : 0)
+                .frame(minWidth: 34, minHeight: 34)
+                .background(selected ? AppAppearance.raised : (hovering ? AppAppearance.hover : .clear), in: Capsule())
                 if badge > 0 {
                     Text(badge > 99 ? "99+" : "\(badge)").font(.system(size: 9.5, weight: .bold)).monospacedDigit()
                         .foregroundStyle(.white).padding(.horizontal, 4).frame(minWidth: 16, minHeight: 16)
@@ -99,19 +122,44 @@ struct TopBarIcon: View {
                     Circle().fill(OrchestratorStyle.tint).frame(width: 7, height: 7)
                         .overlay(Circle().strokeBorder(AppAppearance.background, lineWidth: 1.5))
                         .offset(x: -3, y: 4)
-                        .symbolEffect(.pulse, isActive: true)
+                        .symbolEffect(.pulse, isActive: !reduceMotion)
                 } else if let dot {
                     Circle().fill(dot).frame(width: 7, height: 7)
                         .overlay(Circle().strokeBorder(AppAppearance.background, lineWidth: 1.5))
                         .offset(x: -3, y: 4)
                 }
             }
-            .contentShape(Circle())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(help)
         .accessibilityLabel(badge > 0 ? "\(help), \(badge)" : help)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// "‹ Page": returns to where a jump from inside a page started (⌘[ does the same).
+struct TopBarBackPill: View {
+    var title: String
+    var action: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
+                Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1).fixedSize()
+            }
+            .foregroundStyle(hovering ? AppAppearance.text : AppAppearance.secondary)
+            .padding(.horizontal, 10).frame(height: 26)
+            .background(hovering ? AppAppearance.hover : .clear, in: Capsule())
+            .overlay(Capsule().strokeBorder(AppAppearance.separator))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Back to \(title) (⌘[)")
+        .accessibilityLabel("Back to \(title)")
     }
 }
 

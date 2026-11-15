@@ -12,7 +12,7 @@ struct UsageDashboardView: View {
     @State private var days = 7
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "Usage", subtitle: "Your accounts. Every limit in one place.") {
+            PageHeader(title: "Usage", subtitle: "Every limit in one place") {
                 PillButton(title: "Settings", symbol: "slider.horizontal.3") { settings = true }.help("Usage settings")
                 PillButton(title: usage.checking ? "Refreshing…" : "Refresh", symbol: "arrow.clockwise") { Task { await usage.refresh(force: true) } }
                     .disabled(usage.checking || !usage.enabled)
@@ -28,7 +28,8 @@ struct UsageDashboardView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if let message = usage.message {
-                        HStack { Label(message, systemImage: "info.circle"); Spacer(); Button { usage.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }
+                        HStack { Label(message, systemImage: "info.circle"); Spacer(); Button { usage.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+                            .accessibilityLabel("Dismiss message").help("Dismiss") }
                             .font(.callout).padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
                     }
                     if !usage.enabled {
@@ -56,8 +57,9 @@ struct UsageDashboardView: View {
                             UsageCostView(provider: selected, profile: usage.preferences.profiles[selected])
                         }
                     }
-                    Text("Burro connects directly to each provider. Quotas follow the account shown above; local session activity and token estimates belong to this Mac.")
+                    Text("Quotas follow each account; token estimates are this Mac's.")
                         .font(.caption).foregroundStyle(.secondary)
+                        .help("Burro connects directly to each provider. Quotas follow the account shown above; local session activity and token estimates belong to this Mac.")
                 }.padding(Layout.inset).frame(maxWidth: 1060).frame(maxWidth: .infinity)
             }
         }

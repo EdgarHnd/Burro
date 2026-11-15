@@ -1,5 +1,6 @@
-// Shared orchestrator pieces (avatar, composer, suggestion chips) and its Home card. The full
-// conversation lives on its own page (OrchestratorPage.swift).
+// Shared orchestrator pieces (avatar, composer, suggestion chips) and its Home card, which also
+// says when proposed replies or chats wait for you. The full conversation lives on its own page
+// (OrchestratorPage.swift).
 import SwiftUI
 import BurroCore
 
@@ -93,7 +94,7 @@ struct HomeOrchestrator: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 8) {
                         Text("Orchestrator").font(.system(size: 17, weight: .semibold))
-                        Text(Orchestrator.modelTitle.uppercased()).font(.system(size: 10, weight: .bold)).tracking(0.8)
+                        Text(Orchestrator.modelTitle(orchestrator.model).uppercased()).font(.system(size: 10, weight: .bold)).tracking(0.8)
                             .foregroundStyle(OrchestratorStyle.ink)
                             .padding(.horizontal, 7).padding(.vertical, 3).background(OrchestratorStyle.tint.opacity(0.2), in: Capsule())
                     }
@@ -105,6 +106,14 @@ struct HomeOrchestrator: View {
                 }
             }
             latest(orchestrator)
+            if !orchestrator.waitingActions.isEmpty {
+                let count = orchestrator.waitingActions.count
+                Button { store.showOrchestrator() } label: {
+                    Label(count == 1 ? "1 proposed action waits for you" : "\(count) proposed actions wait for you", systemImage: "hand.raised")
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(AppAppearance.amber)
+                }
+                .buttonStyle(.plain).help("Review and send or discard them on the Orchestrator page")
+            }
             OrchestratorComposer(orchestrator: orchestrator, placeholder: "Ask about your chats, machines and projects, or have it start work…")
             if orchestrator.messages.isEmpty && !orchestrator.running {
                 SuggestionChips(suggestions: OrchestratorStyle.suggestions(store)) { store.askOrchestrator($0) }
@@ -121,7 +130,7 @@ struct HomeOrchestrator: View {
     private var subtitle: String {
         let chats = store.homeSummary.counts
         let machines = 1 + store.remoteHosts.filter(\.enabled).count
-        return "Watches \(machines == 1 ? "this Mac" : "\(machines) machines") · \(chats.running) running, \(chats.waiting) need you · starts chats for you"
+        return "Watches \(machines == 1 ? "this Mac" : "\(machines) machines") · \(chats.running) running, \(chats.waiting) need you · drafts replies and chats for you"
     }
 
     @ViewBuilder private func latest(_ orchestrator: OrchestratorStore) -> some View {

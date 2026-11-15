@@ -122,7 +122,7 @@ public final class AgentFileWatcher: @unchecked Sendable {
             self.schedule(after: self.dirty ? self.earliestDelay : max(self.minimumInterval, interval))
         }
     }
-    public static func interval(states: [AgentState], warnings: Bool, watching: Bool) -> TimeInterval {
+    nonisolated public static func interval(states: [AgentState], warnings: Bool, watching: Bool) -> TimeInterval {
         // A live session or uncertain evidence still gets frequent PID/lock checks.
         guard watching, !warnings, !states.contains(where: { [.working, .waiting, .unknown].contains($0) }) else { return 3 }
         return 15

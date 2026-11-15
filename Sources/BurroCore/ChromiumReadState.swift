@@ -46,28 +46,32 @@ enum ChromiumReadState {
         crc = ~crc
         return ((crc >> 15) | (crc << 17)) &+ 0xa282ead8
     }
+    // LevelDB log framing: 32 KiB blocks of 7-byte-headed records (FULL, FIRST, MIDDLE, LAST).
+    // A block tail shorter than a header is padding, and a zero header skips the rest of its
+    // block (preallocated space). A FIRST record may carry no payload when exactly a header
+    // fits before the block end. The end of a live file being appended (a short header, a
+    // record running past the end of the file, or an unfinished fragment) ends the log; a bad
+    // checksum, an oversized length or a broken fragment sequence inside it is corruption.
     static func records(_ bytes: [UInt8]) throws -> [[UInt8]] {
-        var c = Cursor(bytes: bytes), fragment: [UInt8] = [], result: [[UInt8]] = []
+        var c = Cursor(bytes: bytes), fragment: [UInt8]?, result: [[UInt8]] = []
         while c.position < bytes.count {
-            let remaining = 32768 - c.position % 32768
-            if remaining < 7 { _ = try c.take(min(remaining, bytes.count - c.position)); continue }
-            guard bytes.count - c.position >= 7 else { throw Failure.changed }
+            let remaining = 32768 - c.position % 32768, available = bytes.count - c.position
+            if remaining < 7 { c.position += min(remaining, available); continue }
+            guard available >= 7 else { break }
             let crc = try c.fixed(4), length = Int(try c.fixed(2)), kind = try c.fixed(1)
-            if kind == 0 && length == 0 {
-                _ = try c.take(min(remaining - 7, bytes.count - c.position)); continue
-            }
+            if kind == 0 && length == 0 { c.position += min(remaining, available) - 7; continue }
             guard length <= remaining - 7 else { throw Failure.corrupt }
+            guard length <= available - 7 else { break }
             let payload = try c.take(length)
             guard checksum([UInt8(kind)] + payload) == crc else { throw Failure.corrupt }
             switch kind {
-            case 1: guard fragment.isEmpty else { throw Failure.corrupt }; result.append(payload)
-            case 2: guard fragment.isEmpty else { throw Failure.corrupt }; fragment = payload
-            case 3: guard !fragment.isEmpty else { throw Failure.corrupt }; fragment += payload
-            case 4: guard !fragment.isEmpty else { throw Failure.corrupt }; result.append(fragment + payload); fragment = []
+            case 1: guard fragment == nil else { throw Failure.corrupt }; result.append(payload)
+            case 2: guard fragment == nil else { throw Failure.corrupt }; fragment = payload
+            case 3: guard fragment != nil else { throw Failure.corrupt }; fragment! += payload
+            case 4: guard let first = fragment else { throw Failure.corrupt }; result.append(first + payload); fragment = nil
             default: throw Failure.unsupported
             }
         }
-        guard fragment.isEmpty else { throw Failure.changed }
         return result
     }
     static func snappy(_ input: [UInt8]) throws -> [UInt8] {

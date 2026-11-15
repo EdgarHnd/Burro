@@ -2,7 +2,8 @@
 // CLI only while the page is on screen: today at most every five minutes, yesterday again until
 // half an hour after midnight (late merges), older days once. Kept in memory only; the written
 // summary on top is cached on disk per repository and day and rewritten only when the day's
-// items change (one Claude call per change, never per refresh).
+// items change (one Claude call per change, never per refresh). With "Write summaries with Claude"
+// off in Settings (`shipped.summaries`, on by default) no new summary is asked for; cached ones still show.
 import Foundation
 import Observation
 import BurroCore
@@ -60,6 +61,10 @@ import BurroCore
         return nil
     }
     func summary(_ day: Date) -> Summary? { summaries[calendar.startOfDay(for: day)] }
+
+    /// The Settings preference for asking Claude to write day, week and month summaries.
+    nonisolated static let summariesKey = "shipped.summaries"
+    private var writesSummaries: Bool { UserDefaults.standard.object(forKey: Self.summariesKey) as? Bool ?? true }
 
     func refresh(_ date: Date, force: Bool = false) {
         let day = calendar.startOfDay(for: date), now = Date()
@@ -132,6 +137,7 @@ import BurroCore
                 }
                 return
             }
+            guard self.writesSummaries else { return }
             let previous = self.cache?.entries[id]?.text.nonEmpty ?? self.summaries[day]?.text
             guard self.writing[day] != key else { return }
             if let failed = self.failedAt[key], Date().timeIntervalSince(failed) < 600 { return }
@@ -278,6 +284,7 @@ import BurroCore
                 return
             }
             guard let key = report.key else { state.summary = nil; self.periods[id] = state; return }
+            guard self.writesSummaries else { self.periods[id] = state; return }
             let previous = entry?.text.nonEmpty ?? state.summary?.text
             guard self.periodWriting[id] != key else { self.periods[id] = state; return }
             if let failed = self.failedAt[key], Date().timeIntervalSince(failed) < 600 { self.periods[id] = state; return }

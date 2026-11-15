@@ -1,5 +1,5 @@
-// Pieces of the Today page: the date header, the summary row of stat tiles (one row that wraps,
-// sized to its content), the hours strip, and chat groups. The tracked-activity pieces are in
+// Pieces of the Today page: the date header (on the page background, the time to the minute), the
+// summary (one headline number and one quiet line of facts that wraps), the hours strip, and chat groups. The tracked-activity pieces are in
 // TodayActivity.swift and TodayDayView.swift.
 import SwiftUI
 import BurroCore
@@ -8,14 +8,14 @@ struct TodayHeader: View {
     var today: TodayStore
     var body: some View {
         HStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(today.isToday ? "TODAY" : today.day.formatted(.dateTime.weekday(.wide)).uppercased())
                     .font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(AppAppearance.secondary)
                 Text(today.day, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day())
-                    .font(.system(size: 40, weight: .bold, design: .rounded))
+                    .font(.system(size: 32, weight: .bold, design: .rounded))
                 if today.isToday {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(context.date, format: .dateTime.hour().minute().second())
+                    TimelineView(.everyMinute) { context in
+                        Text(context.date, format: .dateTime.hour().minute())
                             .font(.system(size: 15, weight: .medium)).monospacedDigit().foregroundStyle(AppAppearance.secondary)
                     }
                 } else {
@@ -30,15 +30,7 @@ struct TodayHeader: View {
                 stepButton("chevron.right", "Next day", enabled: today.canGoForward) { today.step(1) }
             }
         }
-        .padding(28)
-        .background {
-            RoundedRectangle(cornerRadius: 22, style: .continuous).fill(AppAppearance.surface)
-                .shadow(color: AppAppearance.shadow, radius: 14, y: 4)
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(LinearGradient(colors: [AppAppearance.blue.opacity(0.07), .clear, HomeStyle.heroWash],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
-        }
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(AppAppearance.separator))
+        .padding(.horizontal, 2)
     }
     private func stepButton(_ symbol: String, _ label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -156,9 +148,11 @@ struct TodayCard<Content: View>: View {
     }
 }
 
-/// The day's numbers in one row of compact tiles that wraps on narrow windows. With tracking on,
-/// tracked focus is the headline; the time from your first to your last message is a secondary fact
-/// in the hours card. With tracking off, that span leads instead ("With agents").
+/// The day's numbers as one headline and one line of facts. With tracking on, tracked focus is the
+/// headline ("4h 58m focused of 6h 10m tracked"); with tracking off, the time from your first to your
+/// last message leads instead ("With agents"). The facts line (Break, longest focus, messages, to-dos,
+/// questions) leaves out anything with nothing to say and wraps on narrow windows. Questions waiting
+/// on you now are the only amber.
 struct TodaySummaryRow: View {
     struct Todos { var done: Int; var open: Int; var added: Int }
     var activity: DailyActivity?
@@ -169,114 +163,95 @@ struct TodaySummaryRow: View {
     var todos: Todos?
     var waitingNow: Int
 
+    struct Fact: Identifiable {
+        var text: String
+        var help: String
+        var needsYou = false
+        var id: String { text }
+    }
+
     var body: some View {
-        TileGrid(minWidth: 120, spacing: 10) {
-            if tracking { trackedTiles } else { chatSpanTile }
-            TodayTile(title: "Messages", symbol: "bubble.left", color: AppAppearance.blue,
-                      value: activity.map { "\($0.turns)" } ?? "—",
-                      caption: activity.map { "sent · \($0.replies) replies" } ?? "sent · replies")
-                .help("Messages you sent and agent replies, across Codex and Claude on this Mac.")
-            if let todos {
-                TodayTile(title: "To-dos", symbol: "checklist", color: AppAppearance.green, value: "\(todos.done)",
-                          caption: "done · \(todos.open) open", valueColor: todos.done > 0 ? AppAppearance.green : nil)
-                    .help("Done today, still open, and \(todos.added) added today.")
+        let facts = self.facts
+        VStack(alignment: .leading, spacing: 6) {
+            if tracking { trackedHeadline } else { chatSpanHeadline }
+            if !facts.isEmpty {
+                FlowLayout(spacing: 0) {
+                    ForEach(Array(facts.enumerated()), id: \.element.id) { index, fact in
+                        HStack(spacing: 0) {
+                            if index > 0 { Text("  ·  ").foregroundStyle(AppAppearance.tertiary) }
+                            Text(fact.text).foregroundStyle(fact.needsYou ? AppAppearance.amber : AppAppearance.secondary)
+                                .help(fact.help)
+                        }
+                        .font(.system(size: 13)).monospacedDigit().lineLimit(1)
+                    }
+                }
             }
-            let decision = TodaySummary.decisions(asked: activity?.questions ?? 0, waitingNow: waitingNow)
-            TodayTile(title: "Questions", symbol: "questionmark.bubble", color: AppAppearance.amber,
-                      value: decision.asked > 0 ? "\(decision.answered)/\(decision.asked)" : "0",
-                      caption: waitingNow > 0 ? "answered · \(waitingNow) waiting" : "answered")
-                .help("Explicit questions agents asked (Codex request_user_input, Claude AskUserQuestion) and chats waiting on you now. Approval prompts aren't logged by the tools, so they aren't included.")
         }
+        .padding(.horizontal, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder private var trackedTiles: some View {
-        let day = tracked.flatMap { $0.total > 0 ? $0 : nil }
-        let breakTime = day?.categories.first { $0.category == .break }?.seconds ?? 0
-        let longest = day?.focus.longest
-        TodayTile(title: "Focused", symbol: "scope", color: AppAppearance.amber, value: day.map { TodaySummary.duration($0.focused) } ?? "—",
-                  caption: "outside Break")
-            .help("Tracked time outside Break on this Mac.")
-        TodayTile(title: "Tracked", symbol: "waveform.path.ecg", color: AppAppearance.secondary,
-                  value: day.map { TodaySummary.duration($0.total) } ?? "—", caption: "at this Mac")
-            .help("Everything Burro recorded; idle time and the lock screen don't count.")
-        TodayTile(title: "Break", symbol: "cup.and.saucer", color: ActivityStyle.color(.break),
-                  value: day.map { _ in TodaySummary.duration(breakTime) } ?? "—",
-                  caption: day.map { breakTime > 0 ? "\(Int((breakTime / $0.total * 100).rounded()))% of tracked" : "none\(isToday ? " yet" : "")" } ?? "of tracked")
-        TodayTile(title: "Longest focus", symbol: "timer", color: AppAppearance.amber,
-                  value: longest.map { TodaySummary.duration($0.duration) } ?? "—",
-                  caption: longest.map { ActivityStyle.range($0.start, $0.end) } ?? "no stretch yet")
-            .help("A focus stretch is time outside Break; idle time or a break under 2 minutes doesn't end it.")
+    private var day: ActivityDay? { tracked.flatMap { $0.total > 0 ? $0 : nil } }
+
+    @ViewBuilder private var trackedHeadline: some View {
+        headline(value: day.map { TodaySummary.duration($0.focused) },
+                 caption: day.map { "focused of \(TodaySummary.duration($0.total)) tracked" } ?? "focused · nothing tracked\(isToday ? " yet" : "")")
+            .help("Focused: tracked time outside Break on this Mac. Tracked: everything Burro recorded; idle time and the lock screen don't count.")
     }
 
-    @ViewBuilder private var chatSpanTile: some View {
-        TodayTile(title: "With agents", symbol: "clock", color: AppAppearance.amber,
-                  value: activity?.span.map(TodaySummary.duration) ?? "—",
-                  caption: activity?.firstTurn.flatMap { first in activity?.lastTurn.map { ActivityStyle.range(first, $0) } }
-                      ?? (activity == nil ? "reading your logs…" : "no messages yet"))
+    @ViewBuilder private var chatSpanHeadline: some View {
+        headline(value: activity?.span.map(TodaySummary.duration),
+                 caption: activity?.firstTurn.flatMap { first in activity?.lastTurn.map { "with agents, \(ActivityStyle.range(first, $0))" } }
+                     ?? (activity == nil ? "with agents · reading your logs…" : "with agents · no messages yet"))
             .help("From your first to your last message to an agent.")
     }
-}
 
-/// One stat: a coloured label, a number and one line of context.
-struct TodayTile: View {
-    var title: String
-    var symbol: String
-    var color: Color
-    var value: String
-    var caption: String
-    var valueColor: Color? = nil
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label(title, systemImage: symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(color).lineLimit(1)
-            Text(value).font(.system(size: 24, weight: .semibold, design: .rounded)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-                .foregroundStyle(value == "—" ? AppAppearance.tertiary : valueColor ?? AppAppearance.text)
-            Text(caption).font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).lineLimit(1).truncationMode(.tail)
+    /// A large number with its caption on the same baseline; the caption wraps under itself if it must.
+    private func headline(value: String?, caption: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(value ?? "—").font(.system(size: 32, weight: .semibold, design: .rounded)).monospacedDigit()
+                .foregroundStyle(value == nil ? AppAppearance.tertiary : AppAppearance.text)
+                .lineLimit(1).fixedSize()
+            Text(caption).font(.system(size: 15)).foregroundStyle(AppAppearance.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 14).padding(.vertical, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
         .accessibilityElement(children: .combine)
     }
-}
 
-/// Equal-width tiles in as few rows as fit, balanced (7 tiles that need two rows go 4 + 3); each
-/// row is as tall as its tallest tile.
-struct TileGrid: SwiftUI.Layout {
-    var minWidth: CGFloat
-    var spacing: CGFloat
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? minWidth * CGFloat(subviews.count)
-        let grid = arrange(width: width, subviews)
-        return CGSize(width: width, height: grid.heights.reduce(0, +) + spacing * CGFloat(max(0, grid.heights.count - 1)))
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let grid = arrange(width: bounds.width, subviews)
-        var y = bounds.minY
-        for (row, height) in grid.heights.enumerated() {
-            for column in 0..<grid.columns {
-                let index = row * grid.columns + column
-                guard index < subviews.count else { break }
-                subviews[index].place(at: CGPoint(x: bounds.minX + CGFloat(column) * (grid.width + spacing), y: y),
-                                      proposal: ProposedViewSize(width: grid.width, height: height))
+    var facts: [Fact] {
+        var facts: [Fact] = []
+        if tracking, let note = tracked?.notRecordedNote {
+            facts.append(Fact(text: note, help: "Burro was closed or tracking was paused then, so nothing was recorded. Time away from the Mac isn't counted here."))
+        }
+        if tracking, let day {
+            let breakTime = day.categories.first { $0.category == .break }?.seconds ?? 0
+            if breakTime >= 60 {
+                facts.append(Fact(text: "Break \(TodaySummary.duration(breakTime))",
+                                  help: "\(Int((breakTime / day.total * 100).rounded()))% of tracked time went to Break."))
             }
-            y += height + spacing
+            if let longest = day.focus.longest {
+                facts.append(Fact(text: "Longest focus \(TodaySummary.duration(longest.duration)) (\(ActivityStyle.range(longest.start, longest.end)))",
+                                  help: "A focus stretch is time outside Break; idle time or a break under 2 minutes doesn't end it."))
+            }
         }
-    }
-
-    private func arrange(width: CGFloat, _ subviews: Subviews) -> (columns: Int, width: CGFloat, heights: [CGFloat]) {
-        guard !subviews.isEmpty else { return (1, width, []) }
-        let fit = max(1, Int((width + spacing) / (minWidth + spacing)))
-        let rows = Int((Double(subviews.count) / Double(fit)).rounded(.up))
-        let columns = Int((Double(subviews.count) / Double(rows)).rounded(.up))
-        let tile = (width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
-        let heights = (0..<rows).map { row in
-            (row * columns..<min(subviews.count, (row + 1) * columns)).map {
-                subviews[$0].sizeThatFits(ProposedViewSize(width: tile, height: nil)).height
-            }.max() ?? 0
+        if let activity {
+            let help = "Messages you sent and agent replies, across Codex and Claude on this Mac."
+            if activity.turns > 0 { facts.append(Fact(text: "\(activity.turns) sent", help: help)) }
+            if activity.replies > 0 { facts.append(Fact(text: "\(activity.replies) repl\(activity.replies == 1 ? "y" : "ies")", help: help)) }
         }
-        return (columns, tile, heights)
+        if let todos, todos.done + todos.open > 0 {
+            facts.append(Fact(text: "\(todos.done)/\(todos.done + todos.open) to-dos",
+                              help: "\(todos.done) done today, \(todos.open) still open, and \(todos.added) added today."))
+        }
+        let decision = TodaySummary.decisions(asked: activity?.questions ?? 0, waitingNow: waitingNow)
+        let questionsHelp = "Explicit questions agents asked (Codex request_user_input, Claude AskUserQuestion) and chats waiting on you now. Approval prompts aren't logged by the tools, so they aren't included."
+        if decision.answered > 0 {
+            facts.append(Fact(text: "\(decision.answered) question\(decision.answered == 1 ? "" : "s") answered", help: questionsHelp))
+        }
+        if waitingNow > 0 {
+            facts.append(Fact(text: "\(waitingNow) question\(waitingNow == 1 ? "" : "s") waiting", help: questionsHelp, needsYou: true))
+        }
+        return facts
     }
 }
 
@@ -303,7 +278,7 @@ struct TodayHoursCard: View {
                 ForEach(hours, id: \.hour) { hour in
                     VStack(spacing: 3) {
                         RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(hour.turns > 0 ? AppAppearance.amber.opacity(0.25 + 0.75 * Double(hour.turns) / Double(peak)) : AppAppearance.raised)
+                            .fill(hour.turns > 0 ? AppAppearance.text.opacity(0.14 + 0.5 * Double(hour.turns) / Double(peak)) : AppAppearance.raised)
                             .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous)
                                 .strokeBorder(hour.hour == currentHour ? AppAppearance.text.opacity(0.5) : .clear, lineWidth: 1.2))
                             .frame(height: 20)

@@ -1,11 +1,12 @@
 // Watches what you're doing, event-driven and on this Mac only: the frontmost app from NSWorkspace
 // and, with Accessibility, the focused window's title and a browser's address-bar text (its host
 // is all that's kept, by ActivityPrivacy). No screenshots, no keystrokes. Only input decides
-// whether you're here (ActivityPresence): two minutes without it is away, and an app switch while
+// whether you're here (ActivityPresence): `idleAfter` without it (2 minutes unless the tracker sets
+// 5 or 10; a change applies at once) is away, and an app switch while
 // you're away (an agent driving apps) records nothing, though the window is still followed so it's
-// known when you return. A 30-second timer (10 s tolerance) checks for those two minutes; while
+// known when you return. A 30-second timer (10 s tolerance) checks for that threshold; while
 // you're away it checks every 5 seconds (1 s tolerance) so a return is noticed quickly. Sleep, lock
-// and session switches stop it outright. Title notifications are muted after the first one until a read 1–5 s later, so a
+// and session switches stop it outright, and coming back from them is reported (`onResume`). Title notifications are muted after the first one until a read 1–5 s later, so a
 // window that renames itself ten times a second costs one read every five seconds. The lock
 // screen, login window and screen saver count as away. Arc (and Chrome, Brave or Edge when their
 // address field can't be found) only builds its accessibility tree when asked: the sampler sets
@@ -27,13 +28,22 @@ struct ActivityObservation: Sendable, Equatable {
 private struct AXBox: @unchecked Sendable { let element: AXUIElement }
 
 @MainActor final class ActivitySampler {
-    static let idleAfter: TimeInterval = 120
+    /// How long without input counts as away; changing it re-checks at once.
+    var idleAfter: TimeInterval = ActivityPresence.defaultIdleAfter {
+        didSet {
+            guard idleAfter != oldValue else { return }
+            presence.idleAfter = idleAfter
+            if running, !suspended { check() }
+        }
+    }
     /// The current window, or nil when you went idle, locked the screen or the Mac slept.
     /// The date may be in the past (idle started, or input resumed, before the check noticed).
     var onChange: (ActivityObservation?, Date) -> Void = { _, _ in }
     /// Every check while you're active; the tracker saves on it.
     var onTick: (Date) -> Void = { _ in }
     var onTrustChange: (Bool) -> Void = { _ in }
+    /// The Mac woke, the screen unlocked or the session came back.
+    var onResume: (Date) -> Void = { _ in }
     private(set) var trusted = AXIsProcessTrusted()
     /// Ask Chromium-family browsers to build their accessibility tree when no address field is found.
     /// It costs the browser some CPU and memory; off, those browsers fall back to window titles.
@@ -42,7 +52,7 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var timer: Timer?
     private var timerInterval: TimeInterval = 0
-    private var presence = ActivityPresence(idleAfter: ActivitySampler.idleAfter)
+    private var presence = ActivityPresence()
     private var suspended = false
     private var running = false
     private var app: (bundleID: String, name: String, pid: pid_t, element: AXUIElement)?
@@ -150,6 +160,7 @@ private struct AXBox: @unchecked Sendable { let element: AXUIElement }
         suspended = false
         presence.reset(quiet: Self.quietSeconds())
         syncTimer()
+        onResume(Date())
         activate(NSWorkspace.shared.frontmostApplication)
     }
 

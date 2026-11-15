@@ -10,8 +10,10 @@ enum AppAppearance {
     static let surface = adaptive(light: (1, 1, 1, 1), dark: (0.155, 0.155, 0.15, 1))
     static let raised = adaptive(light: (0.925, 0.920, 0.905, 1), dark: (0.205, 0.205, 0.20, 1))
     static let text = adaptive(light: (0.11, 0.11, 0.10, 0.92), dark: (1, 1, 1, 0.88))
-    static let secondary = adaptive(light: (0.11, 0.11, 0.10, 0.56), dark: (1, 1, 1, 0.58))
-    static let tertiary = adaptive(light: (0.11, 0.11, 0.10, 0.36), dark: (1, 1, 1, 0.36))
+    // Against the page background, secondary text is about 4.9:1 (light) and 6.5:1 (dark), and
+    // tertiary about 3.2:1 and 4.9:1, so small labels stay readable in both themes.
+    static let secondary = adaptive(light: (0.11, 0.11, 0.10, 0.64), dark: (1, 1, 1, 0.58))
+    static let tertiary = adaptive(light: (0.11, 0.11, 0.10, 0.50), dark: (1, 1, 1, 0.48))
     static let green = adaptive(light: (0.10, 0.58, 0.25, 1), dark: (0.19, 0.79, 0.34, 1))
     static let lime = adaptive(light: (0.42, 0.62, 0.08, 1), dark: (0.76, 0.90, 0.29, 1))
     static let amber = adaptive(light: (0.80, 0.50, 0.0, 1), dark: (1, 0.73, 0.05, 1))
@@ -93,6 +95,8 @@ struct SoftSurface: ViewModifier {
 struct PageHeader<Trailing: View>: View {
     var title: String
     var subtitle: String? = nil
+    /// Left and right padding; narrow columns (the Chats list) use less.
+    var inset: CGFloat = 30
     @ViewBuilder var trailing: () -> Trailing
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -103,7 +107,7 @@ struct PageHeader<Trailing: View>: View {
             Spacer(minLength: 12)
             trailing()
         }
-        .padding(.horizontal, 30).padding(.top, 20).padding(.bottom, 14)
+        .padding(.horizontal, inset).padding(.top, 20).padding(.bottom, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

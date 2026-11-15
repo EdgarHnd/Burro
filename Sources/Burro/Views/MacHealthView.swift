@@ -92,7 +92,7 @@ struct MacHealthView: View {
     @State private var onScreen = false
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: "Mac Health", subtitle: "CPU, memory and storage, anything still running after its work ended, and keeping the Mac awake.") {
+            PageHeader(title: "Mac Health", subtitle: "This Mac, and anything left running") {
                 if health.refreshing { ProgressView().controlSize(.small).accessibilityLabel("Refreshing") }
                 PillButton(title: "Refresh", symbol: "arrow.clockwise") { Task { await health.refresh(force: true) } }
                     .disabled(health.refreshing)
@@ -100,7 +100,8 @@ struct MacHealthView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if let message = health.message {
-                        HStack { Label(message, systemImage: "info.circle"); Spacer(); Button { health.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }
+                        HStack { Label(message, systemImage: "info.circle"); Spacer(); Button { health.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+                            .accessibilityLabel("Dismiss message").help("Dismiss") }
                             .font(.callout).padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
                     }
                     KeepAwakeCard(keepAwake: keepAwake)
@@ -122,8 +123,9 @@ struct MacHealthView: View {
                     }
                     leftovers
                     busiest
-                    Text("Updates every few seconds only while Mac Health or the notch Mac tab is on screen; the process list refreshes every 15 seconds. Monitoring is read-only; Burro stops a process or simulator only after you confirm, and only if it is still the same one.")
+                    Text("Read-only; Burro stops nothing without asking.")
                         .font(.caption).foregroundStyle(.secondary)
+                        .help("CPU, memory, storage, anything still running after its work ended, and keeping the Mac awake. Updates every few seconds only while Mac Health or the notch Mac tab is on screen; the process list refreshes every 15 seconds. Monitoring is read-only; Burro stops a process or simulator only after you confirm, and only if it is still the same one.")
                 }.padding(Layout.inset).frame(maxWidth: 1060).frame(maxWidth: .infinity)
             }
         }

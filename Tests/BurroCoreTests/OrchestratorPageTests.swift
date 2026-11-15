@@ -1,4 +1,5 @@
-// Check how the Orchestrator page groups a conversation into turns, and the reply Markdown blocks.
+// Check how the Orchestrator page groups a conversation into turns (and finds the proposals each
+// turn made), the saved model pick, and the reply Markdown blocks.
 import XCTest
 @testable import Burro
 @testable import BurroCore
@@ -43,6 +44,33 @@ final class OrchestratorPageTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "orchestrator.model"), "claude-fable-5-2")
         first.effort = "max"
         XCTAssertEqual(OrchestratorStore(defaults: defaults).effort, "max")
+    }
+
+    func testTurnsFindTheProposalsTheirStepsRecorded() {
+        let id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        let turns = ConversationTurn.turns([
+            message(0, .user, "Answer the login chat"),
+            message(1, .tool, "claude:x", tool: "reply_chat", output: "Proposal \(id): Reply to \"Fix login\". Nothing has been sent."),
+            message(2, .tool, "Fix it", tool: "start_chat", output: "Couldn't find the folder"),
+            message(3, .tool, "x", tool: "read_chat", output: "Proposal ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee: not a proposal tool"),
+            message(4, .assistant, "Drafted it; it's waiting for you."),
+        ])
+        XCTAssertEqual(turns[0].proposalIDs, [id])
+    }
+
+    @MainActor func testModelPickIsSavedAndUnknownModelsFallBack() throws {
+        let suite = "burro-orchestrator-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let actions = OrchestratorActionStore(url: FileManager.default.temporaryDirectory.appendingPathComponent("burro-actions-\(UUID().uuidString)/actions.json"))
+        let first = OrchestratorStore(defaults: defaults, actionStore: actions)
+        XCTAssertEqual(first.model, "claude-fable-5-2", "Fable 5.2 is the default")
+        first.model = "claude-opus-5-5"
+        let second = OrchestratorStore(defaults: defaults, actionStore: actions)
+        XCTAssertEqual(second.model, "claude-opus-5-5")
+        XCTAssertEqual(second.effort, "high", "picking a model leaves the effort alone")
+        defaults.set("claude-retired-1", forKey: "orchestrator.chosenModel")
+        XCTAssertEqual(OrchestratorStore(defaults: defaults, actionStore: actions).model, "claude-fable-5-2")
     }
 
     func testMarkdownBlocks() {

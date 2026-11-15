@@ -89,7 +89,7 @@ final class RemoteSessionTests: XCTestCase {
         let feed = NotchFeed(sessions: sessions, includeIdle: false)
         XCTAssertEqual(feed.groups.count, 1)
         XCTAssertEqual(feed.groups.first?.root?.title, "Delegated work")
-        let stale = snapshot.displaySessions(now: now.addingTimeInterval(31)).map { unread.applying(to: $0) }
+        let stale = snapshot.displaySessions(now: now.addingTimeInterval(RemoteHostSnapshot.freshFor + 1)).map { unread.applying(to: $0) }
         XCTAssertEqual(AgentActivitySnapshot(sessions: stale, warnings: [], sampledAt: now).workingCount, 0)
         XCTAssertFalse(stale[0].isDone)
     }
@@ -101,7 +101,7 @@ final class RemoteSessionTests: XCTestCase {
         let live = AgentActivitySnapshot(sessions: snapshot.displaySessions(now: now), warnings: [], sampledAt: now)
         XCTAssertEqual(live.scheduledCount, 1); XCTAssertEqual(live.workingCount, 0)
         XCTAssertEqual(live.visibleSessions(includeIdle: false).count, 2)
-        let stale = AgentActivitySnapshot(sessions: snapshot.displaySessions(now: now.addingTimeInterval(31)), warnings: [], sampledAt: now)
+        let stale = AgentActivitySnapshot(sessions: snapshot.displaySessions(now: now.addingTimeInterval(RemoteHostSnapshot.freshFor + 1)), warnings: [], sampledAt: now)
         XCTAssertEqual(stale.scheduledCount, 0)
     }
 
@@ -119,7 +119,7 @@ final class RemoteSessionTests: XCTestCase {
         var host = RemoteHost(name: "Laptop", destination: "laptop")
         var snapshot = try RemoteAgentMonitor.decode(payload(), host: host, receivedAt: now)
         XCTAssertEqual(snapshot.displaySessions(now: now)[0].state, .working)
-        XCTAssertTrue(snapshot.displaySessions(now: now.addingTimeInterval(31)).allSatisfy { $0.state == .unknown })
+        XCTAssertTrue(snapshot.displaySessions(now: now.addingTimeInterval(RemoteHostSnapshot.freshFor + 1)).allSatisfy { $0.state == .unknown })
         host.enabled = false; snapshot.host = host
         XCTAssertTrue(snapshot.displaySessions(now: now).isEmpty)
     }

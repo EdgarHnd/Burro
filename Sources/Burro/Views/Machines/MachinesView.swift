@@ -31,15 +31,6 @@ struct MachinesView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
                 VStack(alignment: .leading, spacing: 14) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("MACHINES").font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(AppAppearance.tertiary)
-                        Text("\(models.count)").font(.system(size: 11, weight: .semibold)).monospacedDigit()
-                            .padding(.horizontal, 6).padding(.vertical, 1).background(AppAppearance.raised, in: Capsule())
-                            .foregroundStyle(AppAppearance.secondary)
-                        Spacer()
-                        PillButton(title: "Add", symbol: "plus") { editing = RemoteHost(name: "", destination: "") }
-                            .help("Add a machine you can reach over SSH")
-                    }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 270), spacing: 16, alignment: .top)], spacing: 16) {
                         ForEach(models) { model in
                             MachineCard(model: model, facts: machines.facts[model.id], probing: machines.probing.contains(model.id),
@@ -59,11 +50,18 @@ struct MachinesView: View {
                         Label(message, systemImage: "info.circle").font(.system(size: 12))
                         Spacer()
                         Button { machines.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+                            .accessibilityLabel("Dismiss message").help("Dismiss")
                     }.foregroundStyle(AppAppearance.secondary)
                 }
             }
-            .padding(.horizontal, 36).padding(.vertical, 28)
+            .padding(.horizontal, 36).padding(.top, 8).padding(.bottom, 28)
             .frame(maxWidth: 1240).frame(maxWidth: .infinity)
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            PageHeader(title: "Machines", subtitle: "\(models.count) machine\(models.count == 1 ? "" : "s")") {
+                PillButton(title: "Add", symbol: "plus") { editing = RemoteHost(name: "", destination: "") }
+                    .help("Add a machine you can reach over SSH")
+            }.background(AppAppearance.background)
         }
         .background(AppAppearance.background)
         .background(WindowOcclusionReader { onScreen = $0 })

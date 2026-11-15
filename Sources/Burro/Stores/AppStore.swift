@@ -91,6 +91,10 @@ import BurroCore
     var remoteSnapshots: [UUID: RemoteHostSnapshot] = [:]
     var checkingRemotes = false
     var remoteSelection: String?
+    /// When each remote Mac is next probed (cadence and per-host backoff).
+    @ObservationIgnored private var remoteSchedule = RemotePollSchedule()
+    /// Whether the notch is open; wired to the notch's presentation at launch.
+    @ObservationIgnored var notchExpanded: @MainActor () -> Bool = { false }
     private var localActivity = AgentActivitySnapshot.empty
     var checkingAgents = false
     var didCheckAgents = false
@@ -104,7 +108,10 @@ import BurroCore
         set { worktreeSelection = Set([newValue].compactMap { $0 }) }
     }
     var filter: WorktreeFilter = .all
-    var page: AppPage = .home
+    var page: AppPage = .home { didSet { pageChanged(from: oldValue) } }
+    /// Pages shown so far, for Back and Forward (AppStore+PageHistory.swift).
+    var pageHistory = PageHistory<AppPage>(start: .home)
+    @ObservationIgnored var pageChosenDirectly = false
     var appearance: AppearancePreference { didSet { save(); appearance.apply() } }
     /// Today's tokens per working folder from the Rust history worker; nil until scanned or if unavailable.
     var projectActivity: ProjectActivity?
@@ -115,6 +122,8 @@ import BurroCore
     let activityTracker: ActivityTracker
     /// Open at login; macOS's login-item status, read live and never saved here.
     let loginItem = LoginItemStore()
+    /// Opt-in notifications when a chat needs you or finishes.
+    let chatNotifier: ChatNotifier
     let shipped = ShippedStore()
     let machines = MachinesStore()
     let notes: NotesStore
@@ -161,6 +170,7 @@ import BurroCore
         self.notes = notes ?? NotesStore(folder: FileManager.default.temporaryDirectory.appendingPathComponent("burro-notes-\(UUID().uuidString)"))
         self.cleanupBatch = cleanupBatch ?? CleanupBatchStore()
         usage = UsageStore(defaults: defaults)
+        chatNotifier = ChatNotifier(defaults: defaults)
         health = MacHealthStore(defaults: defaults)
         keepAwake = KeepAwakeStore(defaults: defaults)
         remoteHosts = defaults.data(forKey: "remoteHosts").flatMap { try? JSONDecoder().decode([RemoteHost].self, from: $0) } ?? []
@@ -207,7 +217,7 @@ import BurroCore
                     messages: ["Waiting for the first connection."], checkedAt: nil))
                 continue
             }
-            let stale = result.sampledAt.map { Date().timeIntervalSince($0) > 30 } ?? true
+            let stale = result.sampledAt.map { Date().timeIntervalSince($0) > RemoteHostSnapshot.freshFor } ?? true
             if result.state == .offline || stale {
                 notices.append(NotchNotice(id: host.id.uuidString, source: host.name, summary: "\(host.name): status unavailable",
                     messages: [result.error ?? "The last sample has expired. Retrying automatically."],
@@ -243,8 +253,7 @@ import BurroCore
         let coordinator = AgentRefreshCoordinator { [weak self] in
             guard let self else { return 15 }
             await self.refreshAgents()
-            return AgentRefreshCoordinator.interval(states: self.localActivity.sessions.map(\.state),
-                warnings: !self.localActivity.warnings.isEmpty, watching: self.agentWatcher?.isRunning == true)
+            return self.localActivity.samplingInterval(watching: self.agentWatcher?.isRunning == true)
         }
         agentRefresh = coordinator
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -255,8 +264,8 @@ import BurroCore
         coordinator.start()
         remoteMonitorTask = Task {
             while !Task.isCancelled {
-                await refreshRemotes()
-                try? await Task.sleep(for: .seconds(10))
+                await refreshRemotes(onlyDue: true)
+                try? await Task.sleep(for: .seconds(remotePollSleep()))
             }
         }
         startWorktreeRefresh()
@@ -446,7 +455,7 @@ import BurroCore
             case .disabled: connection = .paused
             case .notChecked: connection = .connecting
             case .offline: connection = .offline
-            case .online: connection = result.sampledAt.map { Date().timeIntervalSince($0) > 30 } ?? true ? .stale : .online
+            case .online: connection = result.sampledAt.map { Date().timeIntervalSince($0) > RemoteHostSnapshot.freshFor } ?? true ? .stale : .online
             }
             return HomeHost(id: host.id, name: host.name, connection: connection, lastSeen: result.sampledAt)
         }
@@ -490,16 +499,23 @@ import BurroCore
             if remoteHosts[i].destination != host.destination || remoteHosts[i].port != host.port { remoteSnapshots[host.id] = nil }
             remoteHosts[i] = host
         } else { remoteHosts.append(host) }
-        Task { await refreshRemotes() }
+        remoteSchedule.requestNow([host.id])
+        Task { await refreshRemotes(onlyDue: true) }
     }
     func removeRemoteHost(_ id: UUID) {
         remoteSnapshots[id] = nil
         remoteHosts.removeAll { $0.id == id }
+        remoteSchedule.keep(only: Set(remoteHosts.map(\.id)))
     }
-    func refreshRemotes() async {
+    /// Probes remote Macs. A manual call checks every enabled host now; the background loop passes
+    /// `onlyDue` and checks only the hosts `remoteSchedule` says are due.
+    func refreshRemotes(onlyDue: Bool = false) async {
+        if !onlyDue { remoteSchedule.requestNow(remoteHosts.filter(\.enabled).map(\.id)) }
         guard !checkingRemotes else { return }
-        let hosts = remoteHosts.filter(\.enabled)
-        guard !hosts.isEmpty else { rebuildAgentActivity(); return }
+        let enabled = remoteHosts.filter(\.enabled)
+        let fast = remotePollingFast
+        let hosts = onlyDue ? enabled.filter { remoteSchedule.isDue($0.id, now: Date(), fast: fast) } : enabled
+        guard !hosts.isEmpty else { if !onlyDue { rebuildAgentActivity() }; return }
         checkingRemotes = true
         // Keep slow/offline hosts out of the local 3-second activity loop; cap parallel SSH processes.
         let results = await Task.detached(priority: .utility) {
@@ -507,7 +523,7 @@ import BurroCore
             for offset in stride(from: 0, to: hosts.count, by: 4) {
                 let batch = Array(hosts[offset..<min(offset + 4, hosts.count)])
                 await withTaskGroup(of: RemoteHostSnapshot.self) { group in
-                    for host in batch { group.addTask { RemoteAgentMonitor().sample(host) } }
+                    for host in batch { group.addTask { await RemoteAgentMonitor().sample(host) } }
                     for await value in group { values.append(value) }
                 }
             }
@@ -516,6 +532,8 @@ import BurroCore
         for result in results {
             // A response for a removed/edited/paused host must not resurrect old data.
             guard remoteHosts.contains(result.host) else { continue }
+            if result.state == .offline { remoteSchedule.recordFailure(result.host.id, at: Date()) }
+            else { remoteSchedule.recordSuccess(result.host.id, at: Date()) }
             remoteSnapshots[result.host.id] = result.state == .offline
                 ? RemoteHostSnapshot.mergeFailure(host: result.host, error: result.error ?? "Connection unavailable",
                     previous: remoteSnapshots[result.host.id], now: result.attemptedAt)
@@ -536,7 +554,10 @@ import BurroCore
             if result.state == .offline { warnings.append("\(host.name): connection unavailable") }
             warnings += result.warnings.map { "\(host.name): \($0)" }
         }
-        agentActivity = AgentActivitySnapshot(sessions: sessions, warnings: warnings, sampledAt: localActivity.sampledAt)
+        let next = AgentActivitySnapshot(sessions: sessions, warnings: warnings, sampledAt: localActivity.sampledAt)
+        // Re-render Today, Home and the notch only when something they show changed.
+        if agentActivity.shouldPublish(next) { agentActivity = next }
+        chatNotifier.update(sessions)
     }
     func refresh(afterCleanup: Bool = false, incremental: Bool = false, trigger: String = "explicit") async {
         guard !scanning && (!cleaningWorktree || afterCleanup) else { return }
@@ -603,5 +624,19 @@ import BurroCore
         defaults.set(Array(protectedPaths), forKey: "protectedPaths")
         defaults.set(discover, forKey: "discover")
         defaults.set(baseOverrides, forKey: "baseOverrides")
+    }
+}
+
+// MARK: Remote polling cadence
+extension AppStore {
+    /// Fast while the main window is on screen or the notch is open, or a remote chat is working or waiting on you.
+    fileprivate var remotePollingFast: Bool {
+        let enabled = Set(remoteHosts.filter(\.enabled).map(\.id))
+        let states = remoteSnapshots.filter { enabled.contains($0.key) }.values.flatMap { $0.sessions.map(\.state) }
+        return RemotePollSchedule.wantsFast(surfaceVisible: !visibleDashboards.isEmpty || notchExpanded(), remoteStates: states)
+    }
+    /// Seconds until the next host is due, re-checked at least every 5 seconds so opening a window speeds polling up promptly.
+    fileprivate func remotePollSleep() -> Double {
+        remoteSchedule.sleepInterval(remoteHosts.filter(\.enabled).map(\.id), now: Date(), fast: remotePollingFast, tick: 5)
     }
 }

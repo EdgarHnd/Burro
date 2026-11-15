@@ -76,6 +76,12 @@ final class OrchestratorTests: XCTestCase {
         }
         XCTAssertEqual(effort("max"), "max")
         XCTAssertEqual(effort("ludicrous"), "high", "Unknown levels fall back to the default")
+        func model(_ id: String) -> String? {
+            let args = Orchestrator.arguments(sessionID: chatID, resume: true, mcpConfig: config, model: id)
+            return args.firstIndex(of: "--model").map { args[$0 + 1] }
+        }
+        XCTAssertEqual(model("claude-opus-5-5"), "claude-opus-5-5")
+        XCTAssertEqual(model("x; rm -rf /"), "claude-fable-5-2", "Anything that isn't a plain model id falls back to the default")
         XCTAssertEqual(value("--allowedTools"), "mcp__burro,Read,Grep,Glob")
         XCTAssertTrue(value("--disallowedTools")?.contains("Bash") == true)
         XCTAssertTrue(first.contains("--strict-mcp-config"))
@@ -103,7 +109,7 @@ final class OrchestratorTests: XCTestCase {
         XCTAssertNil(tools.handle(["jsonrpc": "2.0", "method": "notifications/initialized"]))
         let list = tools.handle(["jsonrpc": "2.0", "id": 2, "method": "tools/list"])
         let names = ((list?["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String }
-        XCTAssertEqual(names, ["overview", "list_chats", "read_chat", "list_worktrees", "start_chat"])
+        XCTAssertEqual(names, ["overview", "list_chats", "read_chat", "list_worktrees", "reply_chat", "start_chat"])
         let unknown = tools.handle(["jsonrpc": "2.0", "id": 3, "method": "resources/list"])
         XCTAssertEqual((unknown?["error"] as? [String: Any])?["code"] as? Int, -32601)
         let call = tools.handle(["jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": ["name": "overview", "arguments": [String: Any]()]])
@@ -176,54 +182,99 @@ final class OrchestratorTests: XCTestCase {
         XCTAssertTrue(tools.readChat(value, [:]).1)
     }
 
-    func testStartChatResolvesProjectsAndRefusesUnknownFolders() throws {
+    func testStartChatOnlyRecordsAProposal() throws {
         let root = try folder()
         let project = root.appendingPathComponent("focustown")
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
         var value = state(chats: [])
         value.projects = [.init(name: "focustown", path: project.path, isRepository: true, worktrees: 1, readyToRemove: 0, tokensToday: 0, lastActive: nil)]
-        var tools = try tools(value)
-        var launched: LaunchRequest?
-        tools.launch = { request in
-            launched = request
-            return LaunchResult(provider: request.provider, sessionID: self.chatID.uppercased(), handle: nil, folder: request.folder)
-        }
-        let (text, isError) = tools.startChat(["agent": "claude", "folder": "FocusTown", "prompt": "Fix the login bug"])
+        let tools = try tools(value)
+        let (text, isError) = tools.startChat(["agent": "claude", "folder": "FocusTown", "prompt": "Fix the login bug",
+                                               "model": "claude-opus-5-5", "effort": "medium"])
         XCTAssertFalse(isError, text)
-        XCTAssertEqual(launched?.folder, project.path)
-        XCTAssertEqual(launched?.access, .ask, "Started chats ask before acting unless told otherwise")
-        XCTAssertTrue(text.contains("claude:\(chatID)"))
-        launched = nil
+        let saved = tools.actions.load()
+        XCTAssertEqual(saved.count, 1)
+        let action = try XCTUnwrap(saved.first)
+        XCTAssertEqual(action.kind, .start)
+        XCTAssertEqual(action.status, .pending)
+        XCTAssertEqual(action.folder, project.path)
+        XCTAssertEqual(action.agent, "claude")
+        XCTAssertEqual(action.text, "Fix the login bug")
+        XCTAssertEqual(action.model, "claude-opus-5-5")
+        XCTAssertEqual(action.effort, "medium")
+        XCTAssertEqual(action.launchAccess, .ask, "Proposed chats ask before acting unless told otherwise")
+        XCTAssertTrue(text.hasPrefix("Proposal \(action.id)"), "the result leads with the id the page anchors the card by")
+        XCTAssertTrue(text.contains("Nothing has started") && text.contains("approval"), text)
+        XCTAssertFalse(text.contains("Started"), text)
+        XCTAssertEqual(action.headline, "Start a Claude Code chat in focustown")
+
         XCTAssertTrue(tools.startChat(["agent": "claude", "folder": "/definitely/not/here", "prompt": "x"]).1)
         XCTAssertTrue(tools.startChat(["agent": "grok", "folder": "focustown", "prompt": "x"]).1)
         XCTAssertTrue(tools.startChat(["agent": "codex", "folder": "focustown", "prompt": "  "]).1)
-        XCTAssertNil(launched)
+        XCTAssertTrue(tools.startChat(["agent": "codex", "folder": Orchestrator.folder.path, "prompt": "x"]).1)
+        XCTAssertEqual(tools.actions.load().count, 1, "refused proposals record nothing")
+
+        // The same proposal again is not added twice.
+        let again = tools.handle(["jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                                  "params": ["name": "start_chat", "arguments": ["agent": "claude", "folder": project.path, "prompt": " Fix the login bug ",
+                                                                                 "model": "claude-opus-5-5", "effort": "medium"]]])
+        let result = try XCTUnwrap(again?["result"] as? [String: Any])
+        XCTAssertEqual(result["isError"] as? Bool, false)
+        let reply = ((result["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
+        XCTAssertTrue(reply.contains("already waiting"), reply)
+        XCTAssertEqual(tools.actions.load().count, 1)
     }
 
-    /// A launch that didn't really start reaches the orchestrator as an error, never as "Started".
-    func testStartChatReportsALaunchThatDidNotStart() throws {
-        let root = try folder()
-        let project = root.appendingPathComponent("focustown-rn-godot")
-        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
-        var value = state(chats: [])
-        value.projects = [.init(name: "focustown-rn-godot", path: project.path, isRepository: true, worktrees: 1, readyToRemove: 0, tokensToday: 0, lastActive: nil)]
-        var tools = try tools(value)
-        var launched: LaunchRequest?
-        tools.launch = { request in
-            launched = request
-            throw LaunchError.blocked(folder: request.folder, reason: "approve 1 new project MCP server (focustown-insights)")
+    func testReplyChatOnlyRecordsAProposal() throws {
+        let host = UUID()
+        let chats = [session("claude:\(chatID)", "Fix login", state: .waiting),
+                     session("codex:\(otherID)", "Season pass", state: .working, cwd: "/home/edgar/focustown", remote: (host, "devbox"))]
+        let tools = try tools(state(chats: chats))
+        let (text, isError) = tools.replyChat(["id": chatID, "message": "Yes, go with option B."])
+        XCTAssertFalse(isError, text)
+        let action = try XCTUnwrap(tools.actions.load().first)
+        XCTAssertEqual(action.kind, .reply)
+        XCTAssertEqual(action.chatID, "claude:\(chatID)", "a bare UUID resolves to the full chat id")
+        XCTAssertEqual(action.chatTitle, "Fix login")
+        XCTAssertEqual(action.machine, "This Mac")
+        XCTAssertEqual(action.text, "Yes, go with option B.")
+        XCTAssertEqual(action.headline, "Reply to “Fix login” on This Mac")
+        XCTAssertTrue(text.contains("Nothing has been sent") && !text.contains("not waiting"), text)
+
+        let remote = tools.call("reply_chat", ["id": "remote:\(host.uuidString):codex:\(otherID)", "message": "Ship it"])
+        XCTAssertFalse(remote.1, remote.0)
+        XCTAssertTrue(remote.0.contains("not waiting"), "a chat that isn't waiting is pointed out: \(remote.0)")
+        XCTAssertEqual(tools.actions.load().last?.machine, "devbox")
+
+        XCTAssertTrue(tools.replyChat(["id": "claude:33333333-4444-4555-8666-777777777777", "message": "x"]).1, "unknown chats are refused")
+        XCTAssertTrue(tools.replyChat(["id": chatID, "message": "   "]).1)
+        XCTAssertTrue(tools.replyChat(["message": "x"]).1)
+        XCTAssertEqual(tools.actions.load().count, 2)
+    }
+
+    /// The tool server must have no way to send a message or start a chat by itself.
+    func testToolServerHasNoPathThatSendsOrLaunches() throws {
+        let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources")
+        let files = [sources.appendingPathComponent("BurroCore/OrchestratorTools.swift"), sources.appendingPathComponent("BurroCore/OrchestratorActions.swift")]
+            + (try FileManager.default.contentsOfDirectory(at: sources.appendingPathComponent("BurroMCP"), includingPropertiesForKeys: nil))
+        for file in files where file.pathExtension == "swift" {
+            let code = try String(contentsOf: file, encoding: .utf8)
+            for forbidden in ["ClaudeLaunch.start", "CodexLaunch.start", "ChatReply.send", "CodexAppServer", "LaunchShell.run", "remoteClaude", "Process("] {
+                XCTAssertFalse(code.contains(forbidden), "\(file.lastPathComponent) must not call \(forbidden)")
+            }
         }
-        let (text, isError) = tools.startChat(["agent": "claude", "folder": "focustown-rn-godot", "prompt": "Fix it",
-                                               "model": "claude-opus-5-5", "effort": "medium", "access": "edit"])
-        XCTAssertTrue(isError)
-        XCTAssertFalse(text.contains("Started"), text)
-        XCTAssertTrue(text.contains("did not start") && text.contains("focustown-insights"), text)
-        XCTAssertEqual(launched?.effort, "medium", "the effort the orchestrator asks for reaches the launch")
-        XCTAssertEqual(launched?.model, "claude-opus-5-5")
-        let reply = tools.handle(["jsonrpc": "2.0", "id": 7, "method": "tools/call",
-                                  "params": ["name": "start_chat", "arguments": ["agent": "claude", "folder": project.path, "prompt": "Fix it"]]])
-        let result = try XCTUnwrap(reply?["result"] as? [String: Any])
-        XCTAssertEqual(result["isError"] as? Bool, true)
+        // And calling every tool leaves only proposals behind.
+        let root = try folder()
+        var value = state(chats: [session("claude:\(chatID)", "Fix login", state: .waiting)])
+        value.projects = [.init(name: "scratch", path: root.path, isRepository: false, worktrees: 0, readyToRemove: 0, tokensToday: 0, lastActive: nil)]
+        let tools = try tools(value)
+        for (name, arguments) in [("start_chat", ["agent": "claude", "folder": root.path, "prompt": "x"]), ("reply_chat", ["id": chatID, "message": "y"])] {
+            let (text, isError) = tools.call(name, arguments)
+            XCTAssertFalse(isError, text)
+            XCTAssertTrue(text.hasPrefix("Proposal "), text)
+        }
+        XCTAssertEqual(tools.actions.load().map(\.status), [.pending, .pending])
     }
 
     func testMissingSnapshotIsAnError() {

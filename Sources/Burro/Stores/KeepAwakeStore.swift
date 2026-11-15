@@ -208,7 +208,7 @@ private struct KeepAwakeLaunchChecks: Sendable {
         let (disabled, battery, alive) = await Task.detached(priority: .utility) {
             (system.sleepDisabled(), system.battery(), current.map { system.isAlive($0) })
         }.value
-        sleepDisabled = disabled
+        if disabled != sleepDisabled { sleepDisabled = disabled }
         if battery != self.battery { self.battery = battery }
         if let current, session == current, alive == false {
             session = nil; lastStop = Date()

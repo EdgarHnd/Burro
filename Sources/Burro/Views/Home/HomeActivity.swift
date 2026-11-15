@@ -40,11 +40,7 @@ struct HomeActivityCard: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 10) {
-                Image(systemName: "waveform.path.ecg").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 30, height: 30).background(Color.indigo, in: Circle())
-                Text("Today so far").font(.system(size: 16, weight: .semibold)).foregroundStyle(Color.indigo)
-                Spacer()
+            HomeSectionHeader(title: "Today so far") {
                 HStack(spacing: 5) {
                     Circle().fill(tracker.paused ? AppAppearance.amber : AppAppearance.green).frame(width: 6, height: 6)
                     Text(tracker.paused ? "Paused" : "Recording")

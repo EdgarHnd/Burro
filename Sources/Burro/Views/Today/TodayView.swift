@@ -1,6 +1,6 @@
-// The Today page: one day at a glance, top to bottom and full width. The date header; one row of
-// stat tiles (tracked focus, tracked time, Break, longest focus, messages, to-dos, questions;
-// with tracking off the first-to-last-message span leads instead); the hours strip; the day Burro
+// The Today page: one day at a glance, top to bottom and full width. The date header; the summary
+// (tracked focus as the headline, then one line of facts: Break, longest focus, messages, to-dos,
+// questions; with tracking off the first-to-last-message span leads instead); the hours strip; the day Burro
 // tracked on this Mac (timeline with Your day so far beside it), or a small card that explains
 // tracking and turns it on; what shipped on GitHub; chats grouped by status or project.
 import SwiftUI
@@ -146,12 +146,20 @@ enum TodayRows {
         let activity = Dictionary((today.activity?.chats ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var ids = Set(activity.keys)
         if today.isToday { ids.formUnion(live.filter { $0.updatedAt >= start && $0.updatedAt < end }.map(\.id)) }
+        // Worktree paths and lookup are built once per build, not once per row.
         let worktrees = store.snapshot.worktrees
+        let roots = worktrees.map(\.path)
+        let byPath = Dictionary(worktrees.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         return ids.compactMap { id -> TodayRow? in
             let session = byID[id], chat = activity[id]
             guard session != nil || chat != nil else { return nil }
-            let folder = session.map { store.workspacePath(for: $0) } ?? chat?.folder ?? ""
-            let tree = worktrees.first { $0.path == Paths.owner(of: folder, in: worktrees.map(\.path)) }
+            // Same answer as `store.workspacePath(for:)`: a local chat's owning worktree, else its folder.
+            let owned = session.flatMap { session -> String? in
+                guard session.remote == nil else { return nil }
+                return session.attachedPaths.lazy.compactMap { Paths.owner(of: $0, in: roots) }.first ?? Paths.owner(of: session.cwd, in: roots)
+            }
+            let folder = owned ?? session?.cwd ?? chat?.folder ?? ""
+            let tree = owned.flatMap { byPath[$0] } ?? Paths.owner(of: folder, in: roots).flatMap { byPath[$0] }
             let project = tree?.repository ?? (folder.isEmpty ? "Unknown folder" : URL(fileURLWithPath: folder).lastPathComponent)
             var crumbs: [String] = []
             if let host = session?.remote?.hostName { crumbs.append(host) }

@@ -26,6 +26,9 @@ public struct RemoteOrigin: Codable, Sendable, Equatable {
 }
 public enum RemoteConnectionState: String, Sendable { case notChecked = "Not connected", online = "Connected", offline = "Unreachable", disabled = "Paused" }
 public struct RemoteHostSnapshot: Sendable {
+    /// How long a successful sample stays live: the slow polling cadence plus a probe's timeout and some slack.
+    /// A failed probe marks the host offline at once, so this only covers samples that simply aren't renewed.
+    public static let freshFor: TimeInterval = RemotePollSchedule.slowInterval + 30
     public var host: RemoteHost
     public var sessions: [AgentSession]
     public var warnings: [String]
@@ -40,7 +43,7 @@ public struct RemoteHostSnapshot: Sendable {
     }
     public func displaySessions(now: Date = Date()) -> [AgentSession] {
         guard host.enabled else { return [] }
-        let stale = state != .online || sampledAt.map { now.timeIntervalSince($0) > 30 } != false
+        let stale = state != .online || sampledAt.map { now.timeIntervalSince($0) > Self.freshFor } != false
         return sessions.map { original in
             var session = original
             session.remote = RemoteOrigin(hostID: host.id, hostName: host.name, sampledAt: sampledAt ?? .distantPast, stale: stale)

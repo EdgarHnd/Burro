@@ -68,7 +68,7 @@ final class UnreadCompletionTests: XCTestCase {
         XCTAssertFalse(result.sessions[0].isDone)
         var read = ProviderReadState.empty; read.codexUnread = [id]
         XCTAssertTrue(read.applying(to: result.sessions[0]).isDone)
-        let stale = result.displaySessions(now: Date().addingTimeInterval(60))[0]
+        let stale = result.displaySessions(now: Date().addingTimeInterval(RemoteHostSnapshot.freshFor + 1))[0]
         XCTAssertFalse(read.applying(to: stale).isDone)
     }
 }

@@ -2,7 +2,8 @@
 import SwiftUI
 import BurroCore
 
-/// Top-level destinations. Home is the landing page; the others open from it, the toolbar or ⌘1–⌘5.
+/// Top-level destinations. Home is the landing page; the others open from it, the top bar or ⌘1–⌘8
+/// (Timeline has no shortcut: it opens from Today's Shipped section).
 enum AppPage: String, CaseIterable, Identifiable, Hashable {
     case home, orchestrator, today, worktrees, machines, usage, health, remote, timeline
     var id: String { rawValue }
@@ -90,8 +91,9 @@ extension SafetyLevel {
     }
 }
 extension AgentState {
+    /// Amber only for a chat waiting on you; an uncertain chat stays grey.
     var color: Color {
-        switch self { case .working: AppAppearance.green; case .scheduled: .teal; case .waiting: AppAppearance.amber; case .recent: AppAppearance.blue; case .unknown: AppAppearance.amber; default: .secondary }
+        switch self { case .working: AppAppearance.green; case .scheduled: .teal; case .waiting: AppAppearance.amber; case .recent: AppAppearance.blue; default: .secondary }
     }
 }
 enum Layout {

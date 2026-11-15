@@ -451,7 +451,7 @@ final class ShippedTests: XCTestCase {
             "acme/app 2026-11-09": .init(key: "a", text: "You: postcard.", model: "m", createdAt: end, digest: monday, final: true),
             "acme/app 2026-11-10": .init(key: "b", text: "Dante: legends.", model: "m", createdAt: end, digest: tuesday, final: true),
         ]
-        let report = ShippedPeriodReport(period: week, repository: "acme/app", entries: entries, through: end.addingTimeInterval(3600 * 30), calendar: calendar)
+        let report = ShippedPeriodReport(period: week, repository: "acme/app", entries: entries, through: end.addingTimeInterval(3600 * 30), now: end.addingTimeInterval(3600 * 30), calendar: calendar)
         XCTAssertEqual(report.days.count, 3, "through Wednesday")
         XCTAssertEqual(report.missing, 1, "Wednesday was never read")
         XCTAssertEqual(report.tallies.map(\.person.name), ["You", "Dante", "dependabot"])
@@ -468,10 +468,10 @@ final class ShippedTests: XCTestCase {
         let key = try XCTUnwrap(report.key)
         var cached = entries
         cached[week.cacheID(repository: "acme/app", calendar: calendar)] = .init(key: key, text: "You: the week.", model: "m", createdAt: end)
-        XCTAssertEqual(ShippedPeriodReport(period: week, repository: "acme/app", entries: cached, through: end.addingTimeInterval(3600 * 30), calendar: calendar).summary,
+        XCTAssertEqual(ShippedPeriodReport(period: week, repository: "acme/app", entries: cached, through: end.addingTimeInterval(3600 * 30), now: end.addingTimeInterval(3600 * 30), calendar: calendar).summary,
                        "You: the week.", "written from these exact days")
         cached["acme/app 2026-11-11"] = .init(key: "", text: "", model: "m", createdAt: end, digest: tuesday, final: true)
-        XCTAssertNil(ShippedPeriodReport(period: week, repository: "acme/app", entries: cached, through: end.addingTimeInterval(3600 * 30), calendar: calendar).summary,
+        XCTAssertNil(ShippedPeriodReport(period: week, repository: "acme/app", entries: cached, through: end.addingTimeInterval(3600 * 30), now: end.addingTimeInterval(3600 * 30), calendar: calendar).summary,
                      "a new day changes the week: write it again")
 
         let text = report.render(summary: "You: the week.")

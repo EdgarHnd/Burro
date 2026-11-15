@@ -267,6 +267,28 @@ final class ActivityTrackingTests: XCTestCase {
         XCTAssertNil(presence.update(quiet: 605, at: at(2000)))
     }
 
+    func testIdleThresholdPreferenceIsTwoFiveOrTenMinutes() {
+        XCTAssertEqual(ActivityPresence.idleChoices, [120, 300, 600])
+        XCTAssertEqual(ActivityPresence.idleAfter(preference: nil), 120, "the default stays two minutes")
+        XCTAssertEqual(ActivityPresence.idleAfter(preference: 300), 300)
+        XCTAssertEqual(ActivityPresence.idleAfter(preference: 600.0), 600)
+        XCTAssertEqual(ActivityPresence.idleAfter(preference: 5), 300, "small numbers are minutes")
+        XCTAssertEqual(ActivityPresence.idleAfter(preference: "10"), 600)
+        XCTAssertEqual(ActivityPresence.idleAfter(preference: 3600), 600, "clamped to the longest choice")
+        XCTAssertEqual(ActivityPresence.idleAfter(preference: 30), 120, "clamped to the shortest choice")
+        XCTAssertEqual(ActivityPresence.idleAfter(preference: 400), 300, "snapped to the nearest choice")
+        for junk: Any in [0, -5, Double.nan, Double.infinity, true, "soon", [120]] {
+            XCTAssertEqual(ActivityPresence.idleAfter(preference: junk), 120, "\(junk)")
+        }
+        // A longer threshold applies at the next check: four quiet minutes are away at 2, back at 5.
+        var presence = ActivityPresence()
+        XCTAssertEqual(presence.update(quiet: 240, at: at(240)), .away(since: at(0)))
+        presence.idleAfter = 300
+        XCTAssertEqual(presence.update(quiet: 245, at: at(245)), .back(since: at(0)))
+        XCTAssertNil(presence.update(quiet: 290, at: at(290)))
+        XCTAssertEqual(presence.update(quiet: 301, at: at(301)), .away(since: at(0)))
+    }
+
     // MARK: Day shown
 
     func testShownDayFollowsTodayAcrossMidnightAndStaysOnAPickedDay() throws {
@@ -379,6 +401,206 @@ final class ActivityTrackingTests: XCTestCase {
         XCTAssertEqual(rulesMode, 0o600)
     }
 
+    // MARK: Coverage
+
+    private func seoul() throws -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"))
+        return calendar
+    }
+    private func span(_ from: Date, _ to: Date) -> ActivitySpan { ActivitySpan(key("com.apple.dt.Xcode", "Burro"), start: from, end: to) }
+
+    func testALateStartIsNotRecordedBeforeIt() throws {
+        let calendar = try seoul()
+        let day = calendar.startOfDay(for: t0)
+        let clock = { (h: Double, m: Double) in day.addingTimeInterval(h * 3600 + m * 60) }
+        let now = clock(17, 5)
+        let built = ActivityDay.build(spans: [span(clock(16, 43), clock(17, 5))], rules: ActivityRules(), day: day,
+                                      coverage: [DateInterval(start: clock(16, 42), end: now)], now: now, calendar: calendar)
+        XCTAssertTrue(built.coverageKnown)
+        XCTAssertEqual(built.notRecorded, [DateInterval(start: day, end: clock(16, 42))])
+        XCTAssertEqual(built.notRecordedNote, "Not recorded 0:00–16:42")
+        // Up to now only: the rest of today isn't a gap yet.
+        XCTAssertFalse(built.notRecorded.contains { $0.end > now })
+    }
+
+    func testTheDayCoverageBeganClaimsNothingBeforeIt() throws {
+        // Spans from before the first recording interval: the day this started being recorded.
+        let calendar = try seoul()
+        let day = calendar.startOfDay(for: t0)
+        let clock = { (h: Double, m: Double) in day.addingTimeInterval(h * 3600 + m * 60) }
+        let spans = [span(clock(14, 22), clock(15, 0)), span(clock(17, 0), clock(17, 30)), span(clock(23, 30), clock(23, 40))]
+        let built = ActivityDay.build(spans: spans, rules: ActivityRules(), day: day,
+                                      coverage: [DateInterval(start: clock(23, 28), end: clock(23, 50))], now: clock(23, 50), calendar: calendar)
+        XCTAssertEqual(built.notRecorded, [], "idle gaps between earlier spans aren't unrecorded time")
+        XCTAssertNil(built.notRecordedNote)
+        // A later stop on that day is still a gap.
+        let stopped = ActivityDay.build(spans: spans, rules: ActivityRules(), day: day,
+                                        coverage: [DateInterval(start: clock(23, 28), end: clock(23, 41))], now: nil, calendar: calendar)
+        XCTAssertEqual(stopped.notRecorded, [DateInterval(start: clock(23, 41), end: clock(24, 0))])
+    }
+
+    func testAPauseInTheMiddleAndSeveralGaps() throws {
+        let calendar = try seoul()
+        let day = calendar.startOfDay(for: t0)
+        let clock = { (h: Double, m: Double) in day.addingTimeInterval(h * 3600 + m * 60) }
+        let coverage = [DateInterval(start: clock(0, 0), end: clock(12, 0)), DateInterval(start: clock(13, 10), end: clock(13, 12)),
+                        DateInterval(start: clock(13, 15), end: clock(24, 0))]
+        let built = ActivityDay.build(spans: [], rules: ActivityRules(), day: day, coverage: coverage, now: nil, calendar: calendar)
+        XCTAssertEqual(built.notRecorded, [DateInterval(start: clock(12, 0), end: clock(13, 10))], "a 3-minute gap is ignored")
+        XCTAssertEqual(built.notRecordedNote, "Not recorded 12:00–13:10")
+        // A past day Burro quit early ends at 24:00; two gaps read as a total.
+        let early = ActivityDay.build(spans: [], rules: ActivityRules(), day: day, coverage: [DateInterval(start: clock(9, 0), end: clock(18, 0))],
+                                      calendar: calendar)
+        XCTAssertEqual(early.notRecorded.count, 2)
+        XCTAssertEqual(early.notRecordedNote, "Not recorded for 15h 0m")
+        let quit = ActivityDay.build(spans: [], rules: ActivityRules(), day: day, coverage: [DateInterval(start: clock(0, 0), end: clock(18, 0))],
+                                     calendar: calendar)
+        XCTAssertEqual(quit.notRecordedNote, "Not recorded 18:00–24:00")
+        let full = ActivityDay.build(spans: [], rules: ActivityRules(), day: day, coverage: [DateInterval(start: clock(0, 0), end: clock(24, 0))],
+                                     calendar: calendar)
+        XCTAssertEqual(full.notRecorded, [])
+        XCTAssertNil(full.notRecordedNote)
+    }
+
+    func testUnknownCoverageClaimsNothingAndSpansCountAsRecorded() throws {
+        let calendar = try seoul()
+        let day = calendar.startOfDay(for: t0)
+        let clock = { (h: Double, m: Double) in day.addingTimeInterval(h * 3600 + m * 60) }
+        let spans = [span(clock(9, 0), clock(10, 0)), span(clock(15, 0), clock(16, 0))]
+        let old = ActivityDay.build(spans: spans, rules: ActivityRules(), day: day, calendar: calendar)
+        XCTAssertFalse(old.coverageKnown)
+        XCTAssertEqual(old.notRecorded, [])
+        XCTAssertNil(old.notRecordedNote)
+        // Imported time in the morning, coverage from the afternoon: nothing is claimed before coverage began.
+        let mixed = ActivityDay.build(spans: spans, rules: ActivityRules(), day: day,
+                                      coverage: [DateInterval(start: clock(14, 0), end: clock(24, 0))], calendar: calendar)
+        XCTAssertEqual(mixed.notRecorded, [])
+        // A span inside a gap between two recording intervals still counts as recorded.
+        let between = ActivityDay.build(spans: [span(clock(12, 0), clock(13, 0))], rules: ActivityRules(), day: day,
+                                        coverage: [DateInterval(start: clock(0, 0), end: clock(11, 0)), DateInterval(start: clock(14, 0), end: clock(24, 0))],
+                                        calendar: calendar)
+        XCTAssertEqual(between.notRecorded, [DateInterval(start: clock(11, 0), end: clock(12, 0)), DateInterval(start: clock(13, 0), end: clock(14, 0))])
+    }
+
+    func testCoverageSurvivesAKillSleepAndMidnight() throws {
+        let log = try temporaryLog(), calendar = try seoul()
+        let day = calendar.startOfDay(for: t0)
+        let clock = { (h: Double, m: Double) in day.addingTimeInterval(h * 3600 + m * 60) }
+        XCTAssertNil(log.readCoverage(day: day, calendar: calendar), "no sidecar: unknown")
+
+        // Opened at 9:00, heartbeats every 30 s, killed at 12:00:25: the last beat (12:00:00) is what's kept.
+        var recording = ActivityRecording()
+        try log.recordCoverage(try XCTUnwrap(recording.begin(at: clock(9, 0))), calendar: calendar)
+        for minute in stride(from: 0.5, through: 180, by: 0.5) {
+            try log.recordCoverage(try XCTUnwrap(recording.beat(at: clock(9, minute))), calendar: calendar)
+        }
+        XCTAssertNil(recording.beat(at: clock(12, 0)), "nothing moved, nothing to write")
+        // Relaunched at 14:00.
+        recording = ActivityRecording()
+        try log.recordCoverage(try XCTUnwrap(recording.begin(at: clock(14, 0))), calendar: calendar)
+        try log.recordCoverage(try XCTUnwrap(recording.beat(at: clock(14, 0.5))), calendar: calendar)
+        XCTAssertEqual(log.readCoverage(day: day, calendar: calendar),
+                       [DateInterval(start: clock(9, 0), end: clock(12, 0)), DateInterval(start: clock(14, 0), end: clock(14, 0.5))])
+        // The Mac sleeps at 22:00 and wakes at 7:00 the next day; the first beat after waking covers the sleep, split at midnight.
+        try log.recordCoverage(try XCTUnwrap(recording.beat(at: clock(22, 0))), calendar: calendar)
+        try log.recordCoverage(try XCTUnwrap(recording.beat(at: clock(31, 0))), calendar: calendar)
+        try log.recordCoverage(try XCTUnwrap(recording.beat(at: clock(31, 0.5))), calendar: calendar)
+        let first = try XCTUnwrap(log.readCoverage(day: day, calendar: calendar))
+        XCTAssertEqual(first, [DateInterval(start: clock(9, 0), end: clock(12, 0)), DateInterval(start: clock(14, 0), end: clock(24, 0))])
+        let next = clock(24, 0)
+        XCTAssertEqual(log.readCoverage(day: next, calendar: calendar), [DateInterval(start: next, end: clock(31, 0.5))])
+        let built = ActivityDay.build(spans: [], rules: ActivityRules(), day: day, coverage: first, calendar: calendar)
+        XCTAssertEqual(built.notRecorded, [DateInterval(start: day, end: clock(9, 0)), DateInterval(start: clock(12, 0), end: clock(14, 0))],
+                       "the sleep is away, the kill is not recorded")
+        let today = ActivityDay.build(spans: [], rules: ActivityRules(), day: next, coverage: log.readCoverage(day: next, calendar: calendar),
+                                      now: clock(31, 0.5), calendar: calendar)
+        XCTAssertEqual(today.notRecorded, [], "recording since midnight")
+        // Pausing ends the interval; resuming starts another.
+        XCTAssertEqual(recording.end(at: clock(32, 0), calendar: calendar), DateInterval(start: next, end: clock(32, 0)))
+        XCTAssertNil(recording.live(at: clock(33, 0)))
+        XCTAssertNil(recording.beat(at: clock(33, 0)))
+    }
+
+    func testCoverageSidecarIsPrivateBoundedAndGoesWithTheDay() throws {
+        let log = try temporaryLog()
+        let calendar = Calendar.current, now = Date()
+        for back in [0, 1, 400] {
+            let day = calendar.date(byAdding: .day, value: -back, to: calendar.startOfDay(for: now))!.addingTimeInterval(3600)
+            try log.recordCoverage(DateInterval(start: day, end: day.addingTimeInterval(600)), calendar: calendar)
+            try log.append([span(day, day.addingTimeInterval(60))], calendar: calendar)
+        }
+        let url = log.coverageURL(for: now)
+        let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int)
+        XCTAssertEqual(mode, 0o600)
+        XCTAssertLessThan(try Data(contentsOf: url).count, 64, "the write stays tiny")
+        log.prune(now: now)
+        XCTAssertEqual(log.coverageFiles().count, 2, "pruned with the day files")
+        log.deleteDay(now)
+        XCTAssertNil(log.readCoverage(day: now), "deleted with the day")
+        XCTAssertEqual(log.coverageFiles().count, 1)
+
+        // Bad or forged contents read as unknown; a symlink is neither read nor written through.
+        try Data("[[1,".utf8).write(to: url)
+        XCTAssertNil(log.readCoverage(day: now))
+        try FileManager.default.removeItem(at: url)
+        let target = log.folder.appendingPathComponent("elsewhere.txt")
+        try Data("[[0,1]]".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
+        XCTAssertNil(log.readCoverage(day: now), "symlinks are not followed")
+        XCTAssertThrowsError(try log.recordCoverage(DateInterval(start: now, end: now.addingTimeInterval(1))))
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "[[0,1]]")
+        try FileManager.default.removeItem(at: url)
+        try Data(count: 70 * 1024).write(to: url)
+        XCTAssertNil(log.readCoverage(day: now), "oversized sidecars are ignored")
+
+        log.deleteAll()
+        XCTAssertTrue(log.coverageFiles().isEmpty, "delete everything removes coverage")
+        XCTAssertTrue(log.dayFiles().isEmpty)
+    }
+
+    func testAnUnreadableCoverageSidecarIsSetAsideAndTheDayStaysUnknown() throws {
+        let log = try temporaryLog()
+        let calendar = Calendar.current, now = Date()
+        let start = calendar.startOfDay(for: now).addingTimeInterval(3600)
+        let url = log.coverageURL(for: start, calendar: calendar), bad = log.unreadableCoverageURL(for: start, calendar: calendar)
+        try FileManager.default.createDirectory(at: log.folder, withIntermediateDirectories: true)
+        try Data("[[1,".utf8).write(to: url)
+        try log.recordCoverage(DateInterval(start: start, end: start.addingTimeInterval(60)), calendar: calendar)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "no fresh claim replaces the unreadable one")
+        XCTAssertEqual(try String(contentsOf: bad, encoding: .utf8), "[[1,", "the unreadable record is kept aside")
+        let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: bad.path)[.posixPermissions] as? Int)
+        XCTAssertEqual(mode, 0o600)
+        try log.recordCoverage(DateInterval(start: start, end: start.addingTimeInterval(120)), calendar: calendar)
+        try log.recordCoverage(DateInterval(start: start.addingTimeInterval(600), end: start.addingTimeInterval(660)), calendar: calendar)
+        XCTAssertNil(log.readCoverage(day: start, calendar: calendar), "unknown for the rest of the day")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+
+        // An oversized sidecar the same way, replacing the earlier one set aside; other days are unaffected.
+        try Data(count: 70 * 1024).write(to: url)
+        try log.recordCoverage(DateInterval(start: start, end: start.addingTimeInterval(60)), calendar: calendar)
+        XCTAssertEqual(try Data(contentsOf: bad).count, 70 * 1024)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        let other = calendar.date(byAdding: .day, value: -1, to: start)!
+        try log.recordCoverage(DateInterval(start: other, end: other.addingTimeInterval(60)), calendar: calendar)
+        XCTAssertNotNil(log.readCoverage(day: other, calendar: calendar))
+
+        // Deleting the day clears it, so recording counts again; pruning and delete everything take it too.
+        log.deleteDay(start, calendar: calendar)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bad.path))
+        try log.recordCoverage(DateInterval(start: start, end: start.addingTimeInterval(60)), calendar: calendar)
+        XCTAssertNotNil(log.readCoverage(day: start, calendar: calendar))
+        let old = calendar.date(byAdding: .day, value: -400, to: start)!
+        try Data("x".utf8).write(to: log.unreadableCoverageURL(for: old, calendar: calendar))
+        try Data("x".utf8).write(to: bad)
+        XCTAssertEqual(log.coverageFiles().filter { $0.hasSuffix(".bad") }.count, 2)
+        log.prune(now: now, calendar: calendar)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: log.unreadableCoverageURL(for: old, calendar: calendar).path), "pruned with the day")
+        log.deleteAll()
+        XCTAssertTrue(log.coverageFiles().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bad.path))
+    }
+
     // MARK: Rollup
 
     func testDayRollup() throws {
@@ -443,7 +665,7 @@ final class ActivityTrackingTests: XCTestCase {
             XCTAssertTrue(child.value is Int || child.value is [ActivityCategory: TimeInterval], "Report.\(child.label ?? "?") isn't a count")
         }
         let tracking = try ["ActivityPrivacy", "ActivityLog", "ActivityRecorder", "ActivityPresence", "ActivitySummary", "ActivityCategories", "ActivityTimeline",
-                            "ActivityTimelineLayout", "ActivityImport"].map {
+                            "ActivityTimelineLayout", "ActivityImport", "ActivityCoverage"].map {
             try String(contentsOf: root.appendingPathComponent("Sources/BurroCore/\($0).swift"), encoding: .utf8)
         } + ["Stores/ActivityTracker", "Support/ActivitySampler", "Views/Today/TodayActivity", "Views/Today/TodayDayView", "Views/Home/HomeActivity"].map {
             try String(contentsOf: root.appendingPathComponent("Sources/Burro/\($0).swift"), encoding: .utf8)

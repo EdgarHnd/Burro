@@ -1,4 +1,5 @@
-// Home's cover, bench cards, notes and scratchpad.
+// Home's cover (greeting, live chips and the plain-language summary), the flat project and machine
+// cards whose only colour is their live counts, and the notes and scratchpad cards.
 import AppKit
 import ImageIO
 import SwiftUI
@@ -48,7 +49,8 @@ struct CoverBackdrop: View {
     }
 }
 
-/// The cover's content: the butter, a greeting and live chips, sitting on the backdrop.
+/// The cover's content: the butter, a greeting, live chips and the summary sentence, sitting on the
+/// backdrop. "Need you" (amber) and "to read" (neutral) chips show only when there is something.
 struct HomeCover: View {
     var store: AppStore
     var summary: HomeSummary
@@ -68,16 +70,21 @@ struct HomeCover: View {
                     Text(greeting).font(.system(size: 40, weight: .bold, design: .rounded)).foregroundStyle(AppAppearance.text)
                         .shadow(color: AppAppearance.background.opacity(0.9), radius: 12)
                     HStack(spacing: 8) {
-                        CoverChip(symbol: "waveform.path", text: "\(summary.counts.running)", help: "Agents running") {
-                            store.filter = .working; store.page = .worktrees
+                        CoverChip(symbol: "waveform.path", text: "\(summary.counts.running)", help: "Agents running: open Chats") { store.page = .remote }
+                        if summary.counts.waiting > 0 {
+                            CoverChip(symbol: "hand.raised", text: "\(summary.counts.waiting) need\(summary.counts.waiting == 1 ? "s" : "") you",
+                                      color: AppAppearance.amber, help: "Chats that need you: open Chats") { store.page = .remote }
                         }
-                        CoverChip(symbol: "tray", text: "\(summary.counts.waiting + summary.counts.done)", help: "Need you or ready to read") { store.page = .remote }
+                        if summary.counts.done > 0 {
+                            CoverChip(symbol: "tray", text: "\(summary.counts.done) to read", help: "Results ready to read: open Chats") { store.page = .remote }
+                        }
                         CoverChip(symbol: "server.rack", text: "\(summary.machines.count) machine\(summary.machines.count == 1 ? "" : "s")", help: "Machines") { store.page = .machines }
                         if let line = usageLine { CoverChip(symbol: "gauge.with.dots.needle.33percent", text: line, help: "Usage") { store.page = .usage } }
                         if let activity = store.projectActivity, activity.tokens > 0 {
                             CoverChip(symbol: "chart.bar", text: HomeFormat.tokens(activity.tokens) + " today", help: "Tokens today on this Mac") { store.page = .usage }
                         }
                     }
+                    summaryLine
                 }
             }
             .padding(.bottom, 6)
@@ -96,10 +103,25 @@ struct HomeCover: View {
                 Button("Use Desktop Picture") { coverPath = ""; styleRaw = CoverField.Style.photo.rawValue }
                     .disabled(coverPath.isEmpty && style == .photo)
             } label: {
-                Image(systemName: style == .photo ? "photo" : "sparkles").font(.system(size: 13, weight: .medium)).foregroundStyle(AppAppearance.secondary)
+                Image(systemName: "photo.on.rectangle").font(.system(size: 13, weight: .medium)).foregroundStyle(AppAppearance.secondary)
                     .frame(width: 32, height: 32).background(.thinMaterial, in: Circle())
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(.top, 4).help("Change the cover")
+        }
+    }
+    /// The plain-language summary, with when the agents were last checked and a way to check now.
+    private var summaryLine: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(store.didCheckAgents ? summary.sentence : "Checking on your agents…")
+                .font(.system(size: 15)).lineSpacing(3).foregroundStyle(AppAppearance.secondary)
+                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 680, alignment: .leading)
+                .textSelection(.enabled)
+            HStack(spacing: 6) {
+                Image(systemName: "clock")
+                Text(store.agentActivity.sampledAt == .distantPast ? "Waiting for the first check" : "Updated \(HomeFormat.ago(store.agentActivity.sampledAt))")
+                Button { Task { await store.refreshAgents() } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).help("Check agents now").accessibilityLabel("Check agents now")
+            }.font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
         }
     }
     private var greeting: String {
@@ -125,6 +147,7 @@ struct HomeCover: View {
 private struct CoverChip: View {
     var symbol: String
     var text: String
+    var color: Color = AppAppearance.text
     var help: String
     var action: () -> Void
     @State private var hovering = false
@@ -134,7 +157,7 @@ private struct CoverChip: View {
                 Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
                 Text(text).font(.system(size: 13, weight: .semibold)).monospacedDigit()
             }
-            .foregroundStyle(AppAppearance.text).padding(.horizontal, 12).padding(.vertical, 6)
+            .foregroundStyle(color).padding(.horizontal, 12).padding(.vertical, 6)
             .background(.thinMaterial, in: Capsule())
             .background(AppAppearance.text.opacity(hovering ? 0.1 : 0), in: Capsule())
             .overlay(Capsule().strokeBorder(AppAppearance.separator))
@@ -161,11 +184,13 @@ enum CoverImage {
 
 // MARK: Bench cards
 
-/// A project or machine as a card: a glossy gradient tile, the name, and live counts or "Quiet".
+/// A project or machine as a flat card: a quiet tile, the name, and live counts or "Quiet". Colour
+/// comes only from the count pills.
 struct BenchCard: View {
     var title: String
     var symbol: String?
-    var tint: Color
+    /// Greys the tile, for a machine that isn't reachable.
+    var dimmed = false
     var counts: HomeCounts
     var quiet: String
     var help: String
@@ -173,9 +198,10 @@ struct BenchCard: View {
     @State private var hovering = false
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: HomeStyle.cardRadius, style: .continuous)
         Button(action: action) {
             HStack(spacing: 16) {
-                GradientTile(initial: symbol == nil ? String(title.prefix(1)).uppercased() : nil, symbol: symbol, tint: tint, size: 58)
+                FlatTile(initial: symbol == nil ? String(title.prefix(1)).uppercased() : nil, symbol: symbol, size: 46, dimmed: dimmed)
                 VStack(alignment: .leading, spacing: 7) {
                     Text(title).font(.system(size: 16, weight: .semibold)).lineLimit(1).foregroundStyle(AppAppearance.text)
                     if counts.isQuiet {
@@ -190,23 +216,33 @@ struct BenchCard: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 22).padding(.vertical, 22)
+            .padding(.horizontal, 20).padding(.vertical, 18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                RoundedRectangle(cornerRadius: 22, style: .continuous).fill(AppAppearance.surface)
-                    .shadow(color: AppAppearance.shadow, radius: hovering ? 18 : 12, y: hovering ? 7 : 4)
-            }
-            .background(alignment: .top) {
-                // A second card peeking out behind, like a stack.
-                RoundedRectangle(cornerRadius: 20, style: .continuous).fill(AppAppearance.surface.opacity(0.7))
-                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(AppAppearance.separator))
-                    .padding(.horizontal, 18).offset(y: -7).frame(height: 40)
-            }
-            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(hovering ? AppAppearance.hairline : AppAppearance.separator))
-            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(AppAppearance.surface, in: shape)
+            .background(hovering ? AppAppearance.hover : .clear, in: shape)
+            .overlay(shape.strokeBorder(hovering ? AppAppearance.hairline : AppAppearance.separator))
+            .contentShape(shape)
             .animation(.easeOut(duration: 0.15), value: hovering)
         }
         .buttonStyle(PressableStyle()).onHover { hovering = $0 }.help(help)
+    }
+}
+
+/// A flat, monochrome tile: an initial or glyph in secondary grey on the raised fill.
+struct FlatTile: View {
+    var initial: String?
+    var symbol: String?
+    var size: CGFloat
+    var dimmed = false
+    var body: some View {
+        Group {
+            if let symbol { Image(systemName: symbol).font(.system(size: size * 0.4, weight: .medium)) }
+            else { Text(initial ?? "?").font(.system(size: size * 0.42, weight: .semibold, design: .rounded)) }
+        }
+        .foregroundStyle(dimmed ? AppAppearance.tertiary : AppAppearance.secondary)
+        .frame(width: size, height: size)
+        .background(AppAppearance.raised, in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous))
+        .accessibilityHidden(true)
     }
 }
 
@@ -216,6 +252,7 @@ struct PressableStyle: ButtonStyle {
     }
 }
 
+/// A bench's chosen colour as a tile, used by the bench editor to preview the pick.
 struct GradientTile: View {
     var initial: String?
     var symbol: String?
@@ -257,12 +294,7 @@ private struct CountPill: View {
 
 // MARK: Notes and scratchpad
 
-enum NoteStyle {
-    static let header = AppAppearance.adaptive(light: (0.98, 0.88, 0.45, 1), dark: (0.42, 0.35, 0.10, 1))
-    static let headerText = AppAppearance.adaptive(light: (0.40, 0.30, 0.02, 1), dark: (0.98, 0.88, 0.55, 1))
-    static let wash = AppAppearance.adaptive(light: (1, 0.98, 0.90, 1), dark: (0.20, 0.19, 0.15, 1))
-}
-
+/// Notes and Scratchpad share a plain card with the quiet section-header treatment.
 private struct NoteCardShell<Content: View>: View {
     var title: String
     var symbol: String
@@ -271,22 +303,19 @@ private struct NoteCardShell<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
-                Text(title.uppercased()).font(.system(size: 12, weight: .bold)).tracking(1)
-                Spacer()
-                if let count, count > 0 { Text("\(count)").font(.system(size: 12, weight: .semibold)).monospacedDigit().opacity(0.7) }
-                if let add {
-                    Button(action: add) { Image(systemName: "plus").font(.system(size: 12, weight: .bold)) }
-                        .buttonStyle(.plain).help("New note").padding(.leading, 6)
+            HomeSectionHeader(title: title) {
+                HStack(spacing: 10) {
+                    if let count, count > 0 { Text("\(count)").monospacedDigit().foregroundStyle(AppAppearance.tertiary) }
+                    if let add {
+                        Button(action: add) { Image(systemName: "plus").font(.system(size: 11, weight: .semibold)).frame(width: 18, height: 18).contentShape(Rectangle()) }
+                            .help("New note").accessibilityLabel("New note")
+                    }
                 }
             }
-            .foregroundStyle(NoteStyle.headerText).padding(.horizontal, 16).padding(.vertical, 11)
-            .background(NoteStyle.header)
-            content().frame(maxWidth: .infinity, alignment: .leading).background(NoteStyle.wash)
+            .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 4)
+            content().frame(maxWidth: .infinity, alignment: .leading)
         }
-        .clipShape(RoundedRectangle(cornerRadius: HomeStyle.cardRadius, style: .continuous))
-        .modifier(SoftSurface(radius: HomeStyle.cardRadius))
+        .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
     }
 }
 

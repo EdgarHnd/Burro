@@ -1,4 +1,6 @@
 // A compact attention queue keeps live status separate from stable pointer and keyboard targets.
+// Collapsed, the notch shows running (or scheduled) agents on the left and chats that need you or
+// are ready to read on the right; a side with a zero count is left empty.
 import SwiftUI
 import BurroCore
 
@@ -103,11 +105,16 @@ struct NotchView: View {
                 .frame(maxWidth: .infinity)
         }.padding(.horizontal, 8)
     }
-    private func statusCount(_ number: Int, symbol: String, color: Color) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: symbol).font(.system(size: 8, weight: .medium))
-            Text(store.didCheckAgents ? "\(number)" : "–").font(.system(size: 10, weight: .medium)).monospacedDigit()
-        }.foregroundStyle(color).fixedSize()
+    /// One side of the compact notch; a side with nothing to count stays empty.
+    @ViewBuilder private func statusCount(_ number: Int, symbol: String, color: Color) -> some View {
+        if !store.didCheckAgents || number > 0 {
+            HStack(spacing: 4) {
+                Image(systemName: symbol).font(.system(size: 10, weight: .medium))
+                Text(store.didCheckAgents ? "\(number)" : "–").font(.system(size: 11, weight: .semibold)).monospacedDigit()
+            }.foregroundStyle(color).fixedSize()
+        } else {
+            Color.clear.frame(height: 1) // keeps both sides centred around the camera
+        }
     }
     private var expandedHeader: some View {
         HStack(spacing: 0) {
@@ -167,7 +174,7 @@ struct NotchView: View {
                     Button("Monitoring details") { onSelectPage(.agents); showingHealth = true }
                 } label: { Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold)) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .accessibilityLabel("Notch options")
+                    .accessibilityLabel("Notch options").help("Notch options")
             }.font(.system(size: 10, weight: .medium)).frame(height: 32).padding(.horizontal, 22)
             Rectangle().fill(.white.opacity(0.07)).frame(height: 1).padding(.horizontal, 22)
             if showingUsage {

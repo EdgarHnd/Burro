@@ -1,6 +1,7 @@
 // The Orchestrator's own page: one focused conversation in the middle (each question, the steps
-// it took, its answer) and, on the right, the agents it oversees across your machines with their
-// subagents, live.
+// it took, its answer, and any reply or chat it proposed as a card to send or discard) and, on the
+// right, the agents it oversees across your machines with their subagents, live. The header picks
+// its model and effort for the next message.
 import SwiftUI
 import BurroCore
 
@@ -28,6 +29,13 @@ struct ConversationTurn: Identifiable, Equatable {
     /// Its final reply (or the reply being written).
     var answer: ChatMessage?
 
+    /// Proposals its reply_chat and start_chat steps recorded, by the id their results lead with.
+    var proposalIDs: [String] {
+        steps.filter { $0.kind == .tool && ($0.tool == "reply_chat" || $0.tool == "start_chat") }.compactMap { step in
+            step.output?.firstMatch(of: /^Proposal ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/).map { String($0.1) }
+        }
+    }
+
     static func turns(_ messages: [ChatMessage]) -> [ConversationTurn] {
         var turns: [ConversationTurn] = []
         for message in messages {
@@ -51,17 +59,34 @@ private struct OrchestratorConversation: View {
         let orchestrator = store.orchestrator
         let messages = orchestrator.messages
         let turns = ConversationTurn.turns(messages)
+        let actions = orchestrator.actions
+        let anchored = Set(turns.flatMap(\.proposalIDs))
+        // Proposals no visible turn shows (an earlier conversation, or history that was cut) still wait here.
+        let loose = actions.filter { !anchored.contains($0.id) && $0.status == .pending }
         VStack(spacing: 0) {
             header(orchestrator, empty: messages.isEmpty)
-            if messages.isEmpty {
+            if messages.isEmpty && loose.isEmpty {
                 emptyState
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 34) {
                             ForEach(turns) { turn in
+                                let ids = turn.proposalIDs
                                 TurnView(turn: turn, live: orchestrator.running && turn.id == turns.last?.id,
-                                         activity: orchestrator.activity, title: chatTitle)
+                                         activity: orchestrator.activity, title: chatTitle) {
+                                    ForEach(ids.compactMap { id in actions.first { $0.id == id } }) { action in
+                                        OrchestratorActionCard(store: store, action: action)
+                                    }
+                                }
+                            }
+                            if !loose.isEmpty {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("PROPOSED EARLIER").font(.system(size: 10.5, weight: .semibold)).tracking(0.7)
+                                        .foregroundStyle(AppAppearance.tertiary)
+                                    ForEach(loose) { action in OrchestratorActionCard(store: store, action: action) }
+                                }
+                                .padding(.leading, 38)
                             }
                             Color.clear.frame(height: 1).id("bottom")
                         }
@@ -69,6 +94,7 @@ private struct OrchestratorConversation: View {
                         .frame(maxWidth: 780).frame(maxWidth: .infinity)
                     }
                     .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                    .onChange(of: actions.count) { _, _ in withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) } }
                     .onChange(of: messages.count) { _, _ in withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) } }
                     .onChange(of: messages.last?.text.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
                 }
@@ -94,7 +120,7 @@ private struct OrchestratorConversation: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     Text("Orchestrator").font(.system(size: 20, weight: .bold, design: .rounded))
-                    Text(Orchestrator.modelTitle.uppercased()).font(.system(size: 10, weight: .bold)).tracking(0.8)
+                    Text(Orchestrator.modelTitle(orchestrator.model).uppercased()).font(.system(size: 10, weight: .bold)).tracking(0.8)
                         .foregroundStyle(OrchestratorStyle.ink)
                         .padding(.horizontal, 7).padding(.vertical, 3).background(OrchestratorStyle.tint.opacity(0.2), in: Capsule())
                 }
@@ -104,6 +130,25 @@ private struct OrchestratorConversation: View {
                 }
             }
             Spacer()
+            Menu {
+                Picker("Model", selection: Bindable(orchestrator).model) {
+                    ForEach(Orchestrator.models) { model in
+                        Text(model.id == Orchestrator.model ? "\(model.title) (default)" : model.title).tag(model.id)
+                    }
+                }
+                .pickerStyle(.inline).labelsHidden()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "cpu").font(.system(size: 11, weight: .semibold))
+                    Text(Orchestrator.modelTitle(orchestrator.model)).font(.system(size: 12.5, weight: .medium))
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.6)
+                }
+                .foregroundStyle(AppAppearance.secondary)
+                .padding(.horizontal, 12).frame(height: 30)
+                .background(AppAppearance.raised.opacity(0.6), in: Capsule())
+            }
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+            .help("Which Claude model the orchestrator runs on; applies from your next message.")
             Menu {
                 Picker("Effort", selection: Bindable(orchestrator).effort) {
                     ForEach(Orchestrator.efforts, id: \.self) { Text(Orchestrator.effortTitle($0)).tag($0) }
@@ -142,7 +187,7 @@ private struct OrchestratorConversation: View {
             OrchestratorAvatar(size: 76)
             VStack(spacing: 8) {
                 Text("What should we get done?").font(.system(size: 26, weight: .bold, design: .rounded))
-                Text("I see every Codex and Claude chat on your machines, read them when I need detail, and start new ones on this Mac. Ask what needs you, where a project stands, or to get something going.")
+                Text("I see every Codex and Claude chat on your machines and read them when I need detail. I can draft replies and new chats for you to send. Ask what needs you, where a project stands, or to get something going.")
                     .font(.system(size: 13.5)).foregroundStyle(AppAppearance.secondary).multilineTextAlignment(.center).frame(maxWidth: 500)
             }
             let suggestions: [(String, String)] = [
@@ -189,11 +234,13 @@ private struct SuggestionCard: View {
     }
 }
 
-private struct TurnView: View {
+private struct TurnView<Proposals: View>: View {
     var turn: ConversationTurn
     var live: Bool
     var activity: String?
     var title: (String) -> String?
+    /// Cards for what this turn proposed.
+    @ViewBuilder var proposals: () -> Proposals
     /// A tool call is in flight, and its own row already shows a spinner.
     private var stepRunning: Bool { turn.steps.last.map { $0.kind == .tool && $0.output == nil } ?? false }
     var body: some View {
@@ -224,6 +271,7 @@ private struct TurnView: View {
                             Text(activity ?? "Thinking…").font(.system(size: 13)).foregroundStyle(AppAppearance.tertiary)
                         }.padding(.top, 3)
                     }
+                    proposals()
                 }
                 .padding(.top, 2)
             }
@@ -285,7 +333,8 @@ private struct StepsView: View {
         case "list_chats": return ("bubble.left.and.bubble.right", "Listed chats")
         case "read_chat": return ("text.bubble", title(detail).map { "Read “\($0)”" } ?? "Read a chat")
         case "list_worktrees": return ("arrow.triangle.branch", "Checked worktrees")
-        case "start_chat": return ("plus.bubble", detail.isEmpty ? "Started a chat" : "Started a chat: \(detail)")
+        case "start_chat": return ("plus.bubble", detail.isEmpty ? "Proposed a chat" : "Proposed a chat: \(detail)")
+        case "reply_chat": return ("arrowshape.turn.up.left", title(detail).map { "Proposed a reply to “\($0)”" } ?? "Proposed a reply")
         case "Read": return ("doc.text", detail.isEmpty ? "Read a file" : "Read \(URL(fileURLWithPath: detail).lastPathComponent)")
         case "Grep": return ("magnifyingglass", detail.isEmpty ? "Searched files" : "Searched for \(detail)")
         case "Glob": return ("magnifyingglass", detail.isEmpty ? "Looked for files" : "Looked for \(detail)")
@@ -359,7 +408,7 @@ struct OrchestratorAgentsPanel: View {
                     Text("What the orchestrator is watching, live").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
                 }
                 machines
-                if !started.isEmpty { section("Started by the orchestrator", OrchestratorStyle.tint, started, sessions) }
+                if !started.isEmpty { section("Started from its proposals", OrchestratorStyle.tint, started, sessions) }
                 if !needs.isEmpty { section("Needs you", AppAppearance.amber, needs, sessions) }
                 if !working.isEmpty { section("Working", AppAppearance.green, working, sessions) }
                 if !unread.isEmpty { section("Ready to read", AppAppearance.blue, unread, sessions) }

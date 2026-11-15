@@ -18,7 +18,7 @@ struct HomeMainProject: View {
                 .sorted { $0.updatedAt > $1.updatedAt }
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .center, spacing: 16) {
-                    GradientTile(initial: String(main.name.prefix(1)).uppercased(), symbol: nil, tint: HomeStyle.tint(for: main.name), size: 64)
+                    FlatTile(initial: String(main.name.prefix(1)).uppercased(), symbol: nil, size: 56)
                     VStack(alignment: .leading, spacing: 6) {
                         Text("MAIN PROJECT").font(.system(size: 10, weight: .bold)).tracking(0.8).foregroundStyle(AppAppearance.tertiary)
                         Text(main.name).font(.system(size: 22, weight: .bold, design: .rounded)).lineLimit(1).truncationMode(.middle)

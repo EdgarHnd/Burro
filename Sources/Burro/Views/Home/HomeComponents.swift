@@ -227,73 +227,6 @@ struct HomeEmptyCard<Actions: View>: View {
 
 // MARK: Right column
 
-struct HomeInbox: View {
-    var store: AppStore
-    var summary: HomeSummary
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if summary.needsYou.isEmpty && summary.unread.isEmpty {
-                HStack(spacing: 10) {
-                    Image(systemName: "checkmark.circle").font(.system(size: 16)).foregroundStyle(AppAppearance.green)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Inbox clear").font(.system(size: 13, weight: .semibold))
-                        Text("Nothing needs you right now.").font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
-                    }
-                }
-            } else {
-                if !summary.needsYou.isEmpty { section("Needs you", summary.needsYou, color: AppAppearance.amber) }
-                if !summary.unread.isEmpty { section("Ready to read", summary.unread, color: AppAppearance.blue) }
-            }
-        }
-        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
-    }
-    private func section(_ title: String, _ sessions: [AgentSession], color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(title).font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Text("\(sessions.count)").font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(color)
-            }.padding(.bottom, 4)
-            ForEach(sessions.prefix(4)) { session in HomeInboxRow(session: session, place: place(session)) { store.showChat(session) } }
-            if sessions.count > 4 {
-                Text("and \(sessions.count - 4) more in the notch").font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).padding(.top, 2)
-            }
-        }
-    }
-    private func place(_ session: AgentSession) -> String {
-        let folder = URL(fileURLWithPath: store.workspacePath(for: session)).lastPathComponent
-        return [session.remote?.hostName, folder.isEmpty ? nil : folder].compactMap { $0 }.joined(separator: " · ")
-    }
-}
-
-private struct HomeInboxRow: View {
-    var session: AgentSession
-    var place: String
-    var action: () -> Void
-    @State private var hovering = false
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                AgentAvatar(session: session, active: false, size: 22)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(session.title).font(.system(size: 12, weight: .medium)).lineLimit(1).foregroundStyle(AppAppearance.text)
-                    Text(place).font(.system(size: 11)).lineLimit(1).foregroundStyle(AppAppearance.tertiary)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "arrow.up.right").font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(AppAppearance.tertiary).opacity(hovering ? 1 : 0)
-            }
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(hovering ? AppAppearance.hover : .clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain).padding(.horizontal, -8)
-        .onHover { hovering = $0 }
-        .help("Read this chat")
-    }
-}
-
 struct HomeUsageTile: View {
     @Bindable var store: AppStore
     var body: some View {
@@ -390,7 +323,8 @@ struct HomeMacTile: View {
 
 // MARK: Dock
 
-/// Floating strip of live agents (click to open the chat), machines, New chat and a few tools.
+/// Floating strip of live agents in three groups (running, needs you in amber, to read in blue;
+/// click an avatar to open the chat), New chat and a few tools.
 struct HomeDock: View {
     var store: AppStore
     var summary: HomeSummary
@@ -404,26 +338,13 @@ struct HomeDock: View {
                         .foregroundStyle(AppAppearance.secondary)
                 } else {
                     group(summary.running, symbol: "arrow.triangle.2.circlepath", color: AppAppearance.green, label: "Running")
-                    group(summary.needsYou + summary.unread, symbol: "exclamationmark.bubble", color: AppAppearance.amber, label: "Needs you")
+                    group(summary.needsYou, symbol: "hand.raised", color: AppAppearance.amber, label: "Needs you")
+                    group(summary.unread, symbol: "tray", color: AppAppearance.blue, label: "To read")
                 }
             }
             .padding(.horizontal, 14).frame(height: 48)
             .modifier(FloatingSurface())
             Spacer(minLength: 0)
-            HStack(spacing: 4) {
-                ForEach(summary.machines) { machine in
-                    Button { store.page = machine.connection == .local ? .health : .machines } label: {
-                        ZStack(alignment: .bottomTrailing) {
-                            Image(systemName: machine.connection == .local ? "laptopcomputer" : "desktopcomputer")
-                                .font(.system(size: 14, weight: .medium)).frame(width: 34, height: 34)
-                            Circle().fill(machine.connection == .local || machine.connection == .online ? AppAppearance.green : AppAppearance.tertiary)
-                                .frame(width: 7, height: 7).overlay(Circle().strokeBorder(AppAppearance.surface, lineWidth: 1.5)).offset(x: -5, y: -6)
-                        }
-                    }.buttonStyle(HomeDockButtonStyle()).help("\(machine.name): \(machine.counts.running) running")
-                }
-            }
-            .padding(.horizontal, 6).frame(height: 48)
-            .modifier(FloatingSurface())
             Button { store.newChatPresented = true } label: {
                 Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 48, height: 48)
@@ -432,8 +353,8 @@ struct HomeDock: View {
             }.buttonStyle(PressableStyle()).help("New chat (⌘N)").accessibilityLabel("New chat")
             HStack(spacing: 2) {
                 action("rectangle.topthird.inset.filled", "Show agent notch (⇧⌘B)") { notch.show() }
-                action("calendar", "Today (⌘2)") { store.page = .today }
-                action("arrow.clockwise", "Refresh everything") { Task { await store.refreshCurrentPage() } }
+                action(AppPage.today.icon, AppPage.today.help) { store.page = .today }
+                action("arrow.clockwise", "Refresh Home (⌘R)") { Task { await store.refreshCurrentPage() } }
                 SettingsLink { Image(systemName: "slider.horizontal.3").frame(width: 34, height: 34).contentShape(Rectangle()) }
                     .buttonStyle(HomeDockButtonStyle()).help("Settings").accessibilityLabel("Settings")
             }

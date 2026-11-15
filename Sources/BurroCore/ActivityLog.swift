@@ -3,6 +3,8 @@
 // a second, and a span (or a piece of one split at midnight) that would round to no time at all
 // isn't written. Reads skip symlinks,
 // non-regular files and bad or truncated lines; files are capped at 4 MiB and kept 365 days.
+// Each day may also have a `.coverage` sidecar saying when Burro was recording
+// (ActivityCoverage.swift), pruned and deleted with it.
 // Spans imported from another tracker (ActivityImport.swift) also carry a `source` and may carry
 // their own `category`; live spans never do. Nothing here touches the network, logs, or the
 // orchestrator's snapshot.
@@ -123,16 +125,21 @@ public struct ActivityLog: Sendable {
         }
     }
 
-    /// Day files older than the retention window. Only `yyyy-MM-dd.jsonl` names are touched.
+    /// Day files (and their coverage sidecars) older than the retention window. Only
+    /// `yyyy-MM-dd.jsonl` and `yyyy-MM-dd.coverage` names are touched.
     public func prune(now: Date = Date(), keepDays: Int = ActivityLog.retentionDays, calendar: Calendar = .current) {
         guard let cutoff = calendar.date(byAdding: .day, value: -(keepDays - 1), to: calendar.startOfDay(for: now)) else { return }
         let cutoffKey = TodoDay.key(cutoff, calendar: calendar)
-        for name in dayFiles() where String(name.prefix(10)) < cutoffKey { unlink(folder.appendingPathComponent(name).path) }
+        for name in dayFiles() + coverageFiles() where String(name.prefix(10)) < cutoffKey { unlink(folder.appendingPathComponent(name).path) }
     }
 
-    public func deleteDay(_ day: Date, calendar: Calendar = .current) { unlink(url(for: day, calendar: calendar).path) }
-    /// Every day file; your category rules stay.
-    public func deleteAll() { for name in dayFiles() { unlink(folder.appendingPathComponent(name).path) } }
+    /// The day's spans and its coverage sidecar.
+    public func deleteDay(_ day: Date, calendar: Calendar = .current) {
+        unlink(url(for: day, calendar: calendar).path)
+        deleteCoverage(day, calendar: calendar)
+    }
+    /// Every day file and coverage sidecar; your category rules stay.
+    public func deleteAll() { for name in dayFiles() + coverageFiles() { unlink(folder.appendingPathComponent(name).path) } }
 
     /// Rewrites stored days so a host marked private keeps no title and reads as "Private".
     public func scrub(host: String) {

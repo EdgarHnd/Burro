@@ -41,6 +41,21 @@ final class AgentRefreshCoordinatorTests: XCTestCase {
         XCTAssertEqual(AgentRefreshCoordinator.interval(states: [], warnings: true, watching: true), 3)
         XCTAssertEqual(AgentRefreshCoordinator.interval(states: [], warnings: false, watching: false), 3)
     }
+    @MainActor func testReadStateWarningsAreShownButDoNotForceFastSampling() {
+        var readState = ProviderReadState(); readState.warnings = ["Claude unread status could not be read; Done badges may be missing."]
+        let quiet = AgentActivitySnapshot(sessions: [], warnings: [], readState: readState, sampledAt: Date())
+        XCTAssertEqual(quiet.warnings, readState.warnings)
+        XCTAssertEqual(quiet.samplingInterval(watching: true), 15)
+        XCTAssertEqual(quiet.samplingInterval(watching: false), 3)
+        let uncertain = AgentActivitySnapshot(sessions: [], warnings: ["Process list was truncated."], readState: readState, sampledAt: Date())
+        XCTAssertEqual(uncertain.warnings.count, 2)
+        XCTAssertEqual(uncertain.samplingInterval(watching: true), 3)
+        let working = AgentActivitySnapshot(sessions: [AgentSession(id: "w", provider: .codex, title: "W", cwd: "/w", state: .working, updatedAt: Date(), evidence: "Fixture")], warnings: [],
+                                            readState: readState, sampledAt: Date())
+        XCTAssertEqual(working.samplingInterval(watching: true), 3)
+        // Snapshots built without a read state treat every warning as uncertainty.
+        XCTAssertEqual(AgentActivitySnapshot(sessions: [], warnings: ["x"], sampledAt: Date()).samplingInterval(watching: true), 3)
+    }
     func testRecursiveFileNotification() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("burro-watch-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

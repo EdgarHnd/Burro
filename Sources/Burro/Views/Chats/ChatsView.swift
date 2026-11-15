@@ -10,19 +10,15 @@ struct ChatsView: View {
         let sessions = ChatsModel.sessions(store: store, query: query)
         HStack(spacing: 0) {
             VStack(spacing: 0) {
+                PageHeader(title: "Chats", subtitle: "\(sessions.count) chat\(sessions.count == 1 ? "" : "s")", inset: 20) { EmptyView() }
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("Chats").font(.system(size: 28, weight: .bold, design: .rounded))
-                        Text("\(sessions.count)").font(.system(size: 13, weight: .semibold)).monospacedDigit().foregroundStyle(AppAppearance.tertiary)
-                        Spacer()
-                    }
                     HStack(spacing: 6) {
                         Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
                         TextField("Search chats, projects, machines", text: $query).textFieldStyle(.plain).font(.system(size: 13))
                     }
                     .padding(.horizontal, 10).frame(height: 32)
                     .background(AppAppearance.surface, in: Capsule()).overlay(Capsule().strokeBorder(AppAppearance.separator))
-                }.padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 12)
+                }.padding(.horizontal, 20).padding(.bottom, 12)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
                         ForEach(ChatsModel.groups(sessions), id: \.title) { group in

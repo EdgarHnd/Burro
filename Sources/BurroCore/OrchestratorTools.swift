@@ -1,6 +1,8 @@
 // Burro's tools for the orchestrator, served over MCP (stdio, newline-delimited JSON-RPC) by
 // `burro-mcp`. Everything reads Burro's latest snapshot, except `read_chat` (reads one
-// transcript on demand, this Mac or over SSH) and `start_chat` (starts a chat on this Mac).
+// transcript on demand, this Mac or over SSH). `reply_chat` and `start_chat` never send or
+// launch anything: they record a proposal in the actions file next to the snapshot, which the
+// user sends (or discards) from Burro.
 import Foundation
 
 public struct OrchestratorTools {
@@ -10,11 +12,16 @@ public struct OrchestratorTools {
     var readChat: (String, [RemoteHost], [UsageProvider: String], Int) throws -> ChatTranscript = { id, hosts, profiles, limit in
         try ChatTranscripts.load(chatID: id, hosts: hosts, profiles: profiles, limit: limit)
     }
-    var launch: (LaunchRequest) throws -> LaunchResult = { request in
-        request.provider == .codex ? try CodexLaunch.start(request) : try ClaudeLaunch.start(request)
-    }
+    /// Where proposals go: `actions.json` beside the snapshot.
+    public var actions: OrchestratorActionStore
+    /// The orchestrator conversation, recorded on each proposal.
+    public var conversation: String?
 
-    public init(stateURL: URL) { self.stateURL = stateURL }
+    public init(stateURL: URL, conversation: String? = nil) {
+        self.stateURL = stateURL
+        self.conversation = conversation
+        actions = OrchestratorActionStore(url: stateURL.deletingLastPathComponent().appendingPathComponent("actions.json"))
+    }
 
     // MARK: JSON-RPC
 
@@ -44,6 +51,7 @@ public struct OrchestratorTools {
 
     public func call(_ name: String, _ arguments: [String: Any]) -> (String, Bool) {
         if name == "start_chat" { return startChat(arguments) }
+        if name == "reply_chat" { return replyChat(arguments) }
         guard let state = Orchestrator.readState(from: stateURL) else {
             return ("Burro hasn't shared a snapshot yet. Open Burro and try again.", true)
         }
@@ -73,7 +81,11 @@ public struct OrchestratorTools {
         tool("list_worktrees", "A project's git worktrees: branch, uncommitted and unpushed work, activity, and whether Burro considers it safe to clean.", [
             "project": ["type": "string", "description": "Project name or path. Default: the main project."],
         ]),
-        tool("start_chat", "Start a new chat on this Mac in a project folder. Returns its id. The agent runs in the background; check on it with read_chat.", [
+        tool("reply_chat", "Propose a reply to a chat on any machine, usually one that needs the user. This does not send it: the user reviews, edits and sends it (or discards it) in Burro.", [
+            "id": ["type": "string", "description": "A chat id from overview or list_chats."],
+            "message": ["type": "string", "description": "The reply, written as the user would send it."],
+        ], required: ["id", "message"]),
+        tool("start_chat", "Propose a new chat on this Mac in a project folder. This does not start it: the user reviews, edits and sends it (or discards it) in Burro.", [
             "agent": ["type": "string", "enum": ["claude", "codex"]],
             "folder": ["type": "string", "description": "Project name or absolute folder path."],
             "prompt": ["type": "string", "description": "A self-contained task: goal, context, what done looks like."],
@@ -224,13 +236,41 @@ public struct OrchestratorTools {
         let access = (arguments["access"] as? String).flatMap(LaunchAccess.init(rawValue:)) ?? .ask
         let model = (arguments["model"] as? String)?.trimmingCharacters(in: .whitespaces)
         let effort = (arguments["effort"] as? String)?.trimmingCharacters(in: .whitespaces).lowercased()
+        let action = OrchestratorAction(kind: .start, createdAt: now(), text: prompt, agent: agent.rawValue, folder: folder,
+                                        model: model?.isEmpty == false ? model : nil, effort: effort?.isEmpty == false ? effort : nil,
+                                        access: access.rawValue, conversation: conversation)
+        return propose(action, summary: "Start \(agent.title) in \(folder) (\(access.title.lowercased()))")
+    }
+
+    func replyChat(_ arguments: [String: Any]) -> (String, Bool) {
+        guard let raw = (arguments["id"] as? String)?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return ("Pass a chat id.", true) }
+        let message = (arguments["message"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return ("Write the reply.", true) }
+        guard message.count <= 100_000 else { return ("That reply is too long.", true) }
+        guard let state = Orchestrator.readState(from: stateURL) else {
+            return ("Burro hasn't shared a snapshot yet. Open Burro and try again.", true)
+        }
+        guard let chat = state.chats.first(where: { $0.id == raw }) ?? state.chats.first(where: { $0.id.hasSuffix(":" + raw.lowercased()) }),
+              ChatTranscripts.identity(of: chat) != nil else {
+            return ("No chat with the id \"\(raw)\". Use an id from overview or list_chats.", true)
+        }
+        let action = OrchestratorAction(kind: .reply, createdAt: now(), text: message, chatID: chat.id, chatTitle: chat.title,
+                                        machine: machineName(chat), conversation: conversation)
+        var summary = "Reply to \"\(chat.title)\" (\(agent(chat)) on \(machineName(chat)))"
+        if !needsYou(chat) { summary += ". Note: that chat is \(stateText(chat)) right now, not waiting for a reply" }
+        return propose(action, summary: summary)
+    }
+
+    /// Records the proposal and tells the model, plainly, that nothing was sent.
+    private func propose(_ action: OrchestratorAction, summary: String) -> (String, Bool) {
         do {
-            let result = try launch(LaunchRequest(provider: agent, prompt: prompt, folder: folder, model: model?.isEmpty == false ? model : nil,
-                                                  effort: effort?.isEmpty == false ? effort : nil, access: access))
-            let id = (agent == .codex ? "codex:" : "claude:") + result.sessionID.lowercased()
-            return ("Started \(agent.title) in \(folder) (\(access.title.lowercased())). Chat id: \(id). It shows in Burro within a few seconds; use read_chat to follow it.", false)
+            let (saved, duplicate) = try actions.propose(action, now: now())
+            let what = action.kind == .reply ? "Nothing has been sent" : "Nothing has started"
+            return ("Proposal \(saved.id)\(duplicate ? " (already waiting; not added twice)" : ""): \(summary). "
+                    + "\(what). It is waiting for the user's approval in Burro, where they can edit it and send it, or discard it. "
+                    + "Tell the user it is waiting for them; don't say it was sent or started.", false)
         } catch {
-            return ((error as? LocalizedError)?.errorDescription ?? "Couldn't start the chat.", true)
+            return ("Couldn't record the proposal: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)", true)
         }
     }
 

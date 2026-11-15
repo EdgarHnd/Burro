@@ -1,4 +1,5 @@
-// Explicit repository and comparison-branch preferences persist only in Burro's defaults.
+// Explicit repository and comparison-branch preferences persist only in Burro's defaults; so do the
+// notification, activity and Shipped toggles (AppSettingsSections.swift).
 import SwiftUI
 import BurroCore
 
@@ -31,6 +32,7 @@ struct SettingsView: View {
                 Text("Hover to expand and move away to collapse. Use the pin button to keep it open. Agent status refreshes about every 3 seconds. Automatic placement prefers a display with a camera notch.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            NotificationSettingsSection(notifier: store.chatNotifier)
             KeepAwakeSettingsSection(keepAwake: store.keepAwake)
             Section("Usage limits") {
                 Toggle("Show usage limits", isOn: $store.usageEnabled)
@@ -39,6 +41,8 @@ struct SettingsView: View {
                 Button("Connect Claude", action: store.connectClaudeUsage).disabled(store.checkingUsage || !store.usageEnabled)
             }
             RemoteHostsSection(store: store)
+            ActivityBrowserSettingsSection(tracker: store.activityTracker)
+            ShippedSummarySettingsSection()
             Section("Discovery") {
                 Toggle("Discover repositories automatically", isOn: $store.discover)
                 Text("Reads Codex projects, Claude Code sessions, ~/Dev (two levels), and Codex worktree folders. Add repositories stored elsewhere below.")

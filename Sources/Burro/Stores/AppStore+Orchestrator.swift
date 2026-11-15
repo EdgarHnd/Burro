@@ -1,5 +1,7 @@
 // What the orchestrator sees: Burro's current picture of machines, chats, projects, worktrees
 // and to-dos, flattened for the tool server. Built on demand, in memory, from state Burro holds.
+// Also sends a proposal the orchestrator made, only when you click Send on its card: a reply goes
+// through the same path as the Chats composer, a new chat through the same launch as New chat.
 import Foundation
 import BurroCore
 
@@ -43,6 +45,45 @@ extension AppStore {
         case .connecting: "connecting"
         case .paused: "paused in Burro"
         }
+    }
+
+    /// The live chat a reply proposal targets, and its machine.
+    func orchestratorTarget(_ action: OrchestratorAction) -> (session: AgentSession, host: RemoteHost?)? {
+        guard action.kind == .reply, let id = action.chatID?.lowercased() else { return nil }
+        guard let session = notchChatSessions.first(where: { $0.id.lowercased() == id }) else { return nil }
+        return (session, remoteHosts.first { $0.id == session.remote?.hostID })
+    }
+
+    /// Sends one proposal, with the text as edited on its card. Only called from its Send button.
+    func sendOrchestratorAction(_ action: OrchestratorAction, text: String) async {
+        let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty, orchestrator.beginSending(action.id) else { return }
+        let outcome: Result<(message: String, chatID: String?), Error>
+        switch action.kind {
+        case .reply:
+            if let (session, host) = orchestratorTarget(action) {
+                let request = ReplyRequest(text: message)
+                let sent = await Task.detached(priority: .userInitiated) { Result { try ChatReply.send(request, to: session, host: host) } }.value
+                outcome = sent.map { (message: $0, chatID: nil) }
+            } else {
+                outcome = .failure(LaunchError.failed("Burro can't see that chat right now, so it can't send the reply."))
+            }
+        case .start:
+            guard let provider = action.provider, let folder = action.folder else {
+                outcome = .failure(LaunchError.failed("This proposal is missing its agent or folder."))
+                break
+            }
+            let request = LaunchRequest(provider: provider, prompt: message, folder: folder, model: action.model, effort: action.effort,
+                                        access: action.launchAccess)
+            do {
+                let result = try await startChat(request, openWhenStarted: false)
+                let id = (provider == .codex ? "codex:" : "claude:") + result.sessionID.lowercased()
+                outcome = .success((message: "Started \(provider.title) in \(URL(fileURLWithPath: folder).lastPathComponent).", chatID: id))
+            } catch {
+                outcome = .failure(error)
+            }
+        }
+        orchestrator.finishSending(action.id, text: message, outcome: outcome)
     }
 
     func askOrchestrator(_ text: String) { orchestrator.send(text) }

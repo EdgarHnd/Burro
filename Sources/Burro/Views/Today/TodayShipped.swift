@@ -2,30 +2,26 @@
 // through the GitHub CLI. One plain sentence on top (who merged how much, what went to
 // production) and a few written lines on what the work was, per person (by a small Claude model,
 // cached per day), then Production, Merged into staging and Pushed, each grouped by person.
-// On today it also offers yesterday, and opens on yesterday until something ships today.
+// It always shows the page's day; on today, until something ships, that is one quiet line with
+// yesterday's recap under it.
 import AppKit
 import SwiftUI
 import BurroCore
 
 struct TodayShippedSection: View {
     @Bindable var store: AppStore
-    @State private var pick: Pick?
     @State private var copied = false
-
-    enum Pick: Hashable { case today, yesterday }
 
     var body: some View {
         let today = store.today, shipped = store.shipped
-        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: today.day) ?? today.day
-        let showing: Pick = today.isToday ? (pick ?? automatic(shipped.state(today.day))) : .today
-        let day = showing == .yesterday ? yesterday : today.day
+        let day = today.day
         let state = shipped.state(day)
-        let recap = recapRows(for: day, isToday: today.isToday && showing == .today)
+        let recap = recapRows(for: day, isToday: today.isToday)
         VStack(alignment: .leading, spacing: 12) {
-            header(state: state, today: today, yesterday: yesterday, showing: showing, recap: recap)
+            header(state: state, recap: recap)
             switch state {
             case .loaded(let value):
-                ShippedDayView(day: value, live: today.isToday && showing == .today, summary: shipped.summary(day), recap: recap,
+                ShippedDayView(day: value, live: today.isToday, summary: shipped.summary(day), recap: recap,
                                retry: { shipped.retrySummary(day) }, open: open)
             case .failed(let failure):
                 HomeEmptyCard(symbol: "exclamationmark.triangle", title: failure.title, detail: failure.detail) {
@@ -46,7 +42,6 @@ struct TodayShippedSection: View {
         // Again once the main project is known (the first scan may still be running).
         .task(id: "\(day.timeIntervalSince1970)|\(store.mainProject?.path ?? "")") { shipped.refresh(day) }
         .task(id: "recap|\(day.timeIntervalSince1970)|\(shipped.digestVersion)|\(shipped.repository ?? "")") { shipped.refreshRecap(day) }
-        .onChange(of: today.day) { _, _ in pick = nil }
     }
 
     /// The day before, the week so far and the week before, each as written lines.
@@ -80,19 +75,13 @@ struct TodayShippedSection: View {
     private func open(_ target: RecapRow.Target) {
         switch target {
         case .day(let date):
-            if store.today.isToday, Calendar.current.isDateInYesterday(date) { pick = .yesterday } else { store.today.show(date) }
+            store.today.show(date)
         case .timeline:
             store.page = .timeline
         }
     }
 
-    /// Today once anything has merged or gone out today; until then, yesterday's recap.
-    private func automatic(_ state: ShippedStore.State?) -> Pick {
-        if case .loaded(let value) = state, value.merged.isEmpty, value.production.isEmpty { return .yesterday }
-        return .today
-    }
-
-    private func header(state: ShippedStore.State?, today: TodayStore, yesterday: Date, showing: Pick, recap: [RecapRow]) -> some View {
+    private func header(state: ShippedStore.State?, recap: [RecapRow]) -> some View {
         HStack(alignment: .center, spacing: 8) {
             Text("SHIPPED").font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(AppAppearance.tertiary)
             if case .loaded(let value) = state {
@@ -132,19 +121,8 @@ struct TodayShippedSection: View {
                 }
                 .buttonStyle(.plain).help("Copy this summary as text, for a chat or a standup")
             }
-            if today.isToday {
-                CapsulePicker(options: [(Pick.today, title("Today", store.shipped.shipped(today.day))),
-                                        (Pick.yesterday, title("Yesterday", store.shipped.shipped(yesterday)))],
-                              selection: Binding(get: { showing }, set: { pick = $0 }))
-            }
         }
         .padding(.horizontal, 2)
-    }
-
-    private func title(_ label: String, _ day: ShippedDay?) -> String {
-        guard let day else { return label }
-        let count = day.merged.count + day.production.count
-        return count > 0 ? "\(label) · \(count)" : label
     }
 }
 
@@ -234,8 +212,8 @@ private struct ShippedDayView: View {
         let digest = ShippedDigest(day)
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(day.isEmpty ? (live ? "Nothing on GitHub yet today." : "Nothing reached GitHub that day.") : (brief?.headline ?? day.headline))
-                    .font(.system(size: 15, weight: .medium)).foregroundStyle(AppAppearance.text)
+                Text(day.isEmpty ? (live ? "Nothing reached GitHub yet today" : "Nothing reached GitHub that day.") : (brief?.headline ?? day.headline))
+                    .font(.system(size: 15, weight: .medium)).foregroundStyle(day.isEmpty ? AppAppearance.secondary : AppAppearance.text)
                     .fixedSize(horizontal: false, vertical: true)
                     .opacity(summary?.current == false && brief != nil ? 0.55 : 1)
                 Spacer(minLength: 8)

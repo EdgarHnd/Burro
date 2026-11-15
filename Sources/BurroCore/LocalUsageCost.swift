@@ -140,13 +140,14 @@ public enum LocalUsageScanner {
             recordCount: records.count, pricedCount: priced, partial: partial, scannedAt: now)
     }
 }
-// Standard short-context reference rates checked 2026-09-29. These are token values, never subscription bills.
+// Standard short-context reference rates checked 2026-09-29 (Fable and Mythos 5.2 added 2026-11-14). These are token values, never subscription bills.
 // Sources: platform.claude.com/docs/en/about-claude/pricing and developers.openai.com/api/docs/pricing.
 public enum ReferenceTokenPrices {
     public static func value(_ record: LocalUsageRecord) -> Double? {
         let model = record.model.lowercased()
         let rate: (Double, Double, Double)?
         switch model {
+        case "claude-fable-5-2", "claude-mythos-5-2": rate = (8, 40, 0.2)
         case "claude-fable-5-1", "claude-mythos-5-1": rate = (10, 50, 0.25)
         case "claude-fable-5", "claude-mythos-5": rate = (10, 50, 1)
         case "claude-opus-5-5": rate = (4, 20, 0.2)

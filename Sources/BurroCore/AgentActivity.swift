@@ -1,4 +1,6 @@
 // Fast, read-only agent snapshots and presentation ordering, independent of expensive Git scans.
+// Every warning is shown to the user, but only process and lifecycle uncertainty keeps the
+// sampler on its fast cadence; an unreadable provider read-state does not.
 import Foundation
 
 public enum AgentAttention: Sendable { case none, done, waiting }
@@ -8,6 +10,9 @@ public struct AgentActivitySnapshot: Sendable {
     public var warnings: [String]
     public var sampledAt: Date
     public var readState: ProviderReadState = .empty
+    /// Warnings about process or session evidence, which keep sampling frequent. Read-state
+    /// warnings are in `warnings` for display but not here.
+    public var samplingWarnings: [String]
     private struct Counts: Sendable {
         var working = 0, scheduled = 0, waiting = 0, idle = 0, done = 0
         init(_ sessions: [AgentSession]) {
@@ -24,7 +29,17 @@ public struct AgentActivitySnapshot: Sendable {
     private var counts: Counts
     public init(sessions: [AgentSession], warnings: [String], sampledAt: Date) {
         self.sessions = sessions; self.warnings = warnings; self.sampledAt = sampledAt
+        samplingWarnings = warnings
         counts = Counts(sessions)
+    }
+    public init(sessions: [AgentSession], warnings: [String], readState: ProviderReadState, sampledAt: Date) {
+        self.init(sessions: sessions, warnings: Array(Set(warnings + readState.warnings)).sorted(), sampledAt: sampledAt)
+        samplingWarnings = Array(Set(warnings)).sorted()
+        self.readState = readState
+    }
+    /// Seconds until the next local sample, from session states and evidence uncertainty.
+    public func samplingInterval(watching: Bool) -> TimeInterval {
+        AgentRefreshCoordinator.interval(states: sessions.map(\.state), warnings: !samplingWarnings.isEmpty, watching: watching)
     }
     public static var empty: Self { .init(sessions: [], warnings: [], sampledAt: .distantPast) }
     private var uniqueSessions: [AgentSession] {
@@ -71,9 +86,7 @@ public struct AgentMonitor: Sendable {
         let now = Date(), processes = ProcessReader.snapshot()
         let readState = ProviderReadState.read(home: home)
         let inventory = AgentReader().read(home: home, processes: processes, now: now, readState: readState, live: true)
-        var result = AgentActivitySnapshot(sessions: inventory.sessions,
-            warnings: Array(Set(processes.warnings + inventory.warnings + readState.warnings)).sorted(), sampledAt: Date())
-        result.readState = readState
-        return result
+        return AgentActivitySnapshot(sessions: inventory.sessions, warnings: processes.warnings + inventory.warnings,
+            readState: readState, sampledAt: Date())
     }
 }

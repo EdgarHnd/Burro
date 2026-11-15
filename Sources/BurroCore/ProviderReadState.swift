@@ -1,6 +1,33 @@
-// Mirror provider-owned unread markers; Burro never writes or acknowledges them.
+// Mirror provider-owned unread markers; Burro never writes or acknowledges them. Codex's
+// markers are reused while its state file and thread database (with its WAL) are unchanged.
 import Foundation
 import CryptoKit
+
+/// Reuses the Codex unread set, or its failure, while `.codex-global-state.json` and every
+/// `state_*.sqlite` file with its `-wal` keep the same stat stamps.
+final class CodexReadStateCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entry: (codex: String, stamps: [FileStamp], result: Result<Set<String>, Error>)?
+    private(set) var loads = 0
+
+    func value(codex: URL, load: () throws -> Set<String>) throws -> Set<String> {
+        lock.lock(); defer { lock.unlock() }
+        guard let before = try? stamps(codex) else { entry = nil; loads += 1; return try load() }
+        if let entry, entry.codex == codex.path, entry.stamps == before { return try entry.result.get() }
+        loads += 1
+        let result = Result { try load() }
+        // Files that moved during the read are read again next time rather than cached.
+        entry = before == (try? stamps(codex)) ? (codex.path, before, result) : nil
+        return try result.get()
+    }
+
+    private func stamps(_ codex: URL) throws -> [FileStamp] {
+        let names = try FileManager.default.contentsOfDirectory(atPath: codex.path).filter {
+            $0 == ".codex-global-state.json" || ($0.hasPrefix("state_") && ($0.hasSuffix(".sqlite") || $0.hasSuffix(".sqlite-wal")))
+        }.sorted()
+        return try names.compactMap { try FileStamp.of(codex.appendingPathComponent($0).path, name: $0) }
+    }
+}
 
 public struct ProviderReadState: Sendable {
     public var codexUnread: Set<String> = []
@@ -50,20 +77,8 @@ public struct ProviderReadState: Sendable {
         let codex = root.appendingPathComponent(".codex")
         let stateURL = codex.appendingPathComponent(".codex-global-state.json")
         if fm.fileExists(atPath: stateURL.path) {
-            do {
-                // Creator IDs are non-secret identity metadata. Prefer the newest attributed
-                // chat, because old accounts remain in the persisted read-state dictionary.
-                let dbURL = try fm.contentsOfDirectory(at: codex, includingPropertiesForKeys: nil)
-                    .filter { $0.lastPathComponent.hasPrefix("state_") && $0.pathExtension == "sqlite" }
-                    .sorted { $0.lastPathComponent.compare($1.lastPathComponent, options: .numeric) == .orderedDescending }.first
-                var identity: String?
-                if let dbURL, let db = try? SQLiteReader(path: dbURL.path),
-                   let row = try? db.rows("SELECT creator_account_id,creator_user_id FROM threads WHERE creator_account_id IS NOT NULL AND creator_user_id IS NOT NULL ORDER BY created_at DESC LIMIT 1").first,
-                   let account = row["creator_account_id"], let user = row["creator_user_id"] {
-                    identity = codexIdentity(account: account, user: user)
-                }
-                result.codexUnread = try codexIDs(data: Data(ChromiumReadState.read(stateURL)), identity: identity)
-            } catch { result.warnings.append("Codex unread status could not be read; Done badges may be missing.") }
+            do { result.codexUnread = try codexCache.value(codex: codex) { try codexUnread(codex: codex, stateURL: stateURL) } }
+            catch { result.warnings.append("Codex unread status could not be read; Done badges may be missing.") }
         }
         let claude = root.appendingPathComponent("Library/Application Support/Claude/Local Storage/leveldb")
         if fm.fileExists(atPath: claude.appendingPathComponent("CURRENT").path) {
@@ -74,6 +89,21 @@ public struct ProviderReadState: Sendable {
             } catch { result.warnings.append("Claude unread status could not be read; Done badges may be missing.") }
         }
         return result
+    }
+    static let codexCache = CodexReadStateCache()
+    static func codexUnread(codex: URL, stateURL: URL) throws -> Set<String> {
+        // Creator IDs are non-secret identity metadata. Prefer the newest attributed
+        // chat, because old accounts remain in the persisted read-state dictionary.
+        let dbURL = try FileManager.default.contentsOfDirectory(at: codex, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("state_") && $0.pathExtension == "sqlite" }
+            .sorted { $0.lastPathComponent.compare($1.lastPathComponent, options: .numeric) == .orderedDescending }.first
+        var identity: String?
+        if let dbURL, let db = try? SQLiteReader(path: dbURL.path),
+           let row = try? db.rows("SELECT creator_account_id,creator_user_id FROM threads WHERE creator_account_id IS NOT NULL AND creator_user_id IS NOT NULL ORDER BY created_at DESC LIMIT 1").first,
+           let account = row["creator_account_id"], let user = row["creator_user_id"] {
+            identity = codexIdentity(account: account, user: user)
+        }
+        return try codexIDs(data: Data(ChromiumReadState.read(stateURL)), identity: identity)
     }
 
     static func claudeCompletedSessions(home: String) -> Set<String> {

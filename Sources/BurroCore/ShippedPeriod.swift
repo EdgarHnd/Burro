@@ -84,7 +84,7 @@ public struct ShippedPeriodReport: Sendable, Equatable {
 
     /// `entries` is the summary cache; `live` overrides it for days the app has just read.
     public init(period: ShippedPeriod, repository: String, entries: [String: ShippedSummary.Entry], live: [Date: ShippedDigest] = [:],
-                through last: Date = Date(), calendar: Calendar = .current) {
+                through last: Date = Date(), now: Date = Date(), calendar: Calendar = .current) {
         self.period = period
         self.repository = repository
         let prefix = repository + " "
@@ -134,7 +134,7 @@ public struct ShippedPeriodReport: Sendable, Equatable {
             let a = $0.merged * 10 + $0.pushes, b = $1.merged * 10 + $1.pushes
             return a != b ? a > b : $0.person.name < $1.person.name
         }
-        summary = cached(entries, calendar: calendar).flatMap { $0.text.isEmpty ? nil : $0.text }
+        summary = cached(entries, now: now, calendar: calendar).flatMap { $0.text.isEmpty ? nil : $0.text }
     }
 
     public var digests: [ShippedDigest] { days.compactMap(\.digest) }
@@ -225,7 +225,10 @@ public struct ShippedPeriodReport: Sendable, Equatable {
 
     /// Where this report's summary is cached: the period's own id, or, for part of a period (a
     /// week so far), that id with its last day ("… week 2026-11-09 to 2026-11-11").
-    public var cacheID: String { Self.cacheID(period: period, repository: repository, through: days.last?.day ?? period.start) }
+    public var cacheID: String { cacheID() }
+    public func cacheID(now: Date = Date(), calendar: Calendar = .current) -> String {
+        Self.cacheID(period: period, repository: repository, through: days.last?.day ?? period.start, now: now, calendar: calendar)
+    }
 
     /// Up to today (the period is still open) it's the period's own id, rewritten as days arrive.
     public static func cacheID(period: ShippedPeriod, repository: String, through: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
@@ -243,8 +246,8 @@ public struct ShippedPeriodReport: Sendable, Equatable {
     }
 
     /// The cached summary for this period when it's still good: final, or written from these exact days.
-    public func cached(_ entries: [String: ShippedSummary.Entry], calendar: Calendar = .current) -> ShippedSummary.Entry? {
-        guard let entry = entries[cacheID] else { return nil }
+    public func cached(_ entries: [String: ShippedSummary.Entry], now: Date = Date(), calendar: Calendar = .current) -> ShippedSummary.Entry? {
+        guard let entry = entries[cacheID(now: now, calendar: calendar)] else { return nil }
         return entry.isSettled || entry.key == key ? entry : nil
     }
 
