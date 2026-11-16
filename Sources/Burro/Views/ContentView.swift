@@ -44,18 +44,6 @@ struct ContentView: View {
         .onChange(of: store.search) { _, _ in store.reconcileSelection() }
         .modifier(AppTheme())
     }
-    private var worktrees: some View {
-        NavigationSplitView {
-            SidebarView(store: store).navigationSplitViewColumnWidth(min: 180, ideal: Layout.sidebar, max: 260)
-        } content: {
-            WorktreeListView(store: store).background(AppAppearance.background)
-                .navigationSplitViewColumnWidth(min: 440, ideal: 650)
-                .toolbar(removing: .sidebarToggle)
-        } detail: {
-            if store.selectedWorktrees.count > 1 { WorktreeSelectionView(store: store) }
-            else if let tree = store.selected { WorktreeDetailView(store: store, tree: tree) }
-            else { AppEmptyState("Select a worktree", symbol: "arrow.triangle.branch", detail: "Agent activity and cleanup checks appear here.") }
-        }
-    }
+    private var worktrees: some View { WorktreeListView(store: store) }
     private var remote: some View { ChatsView(store: store) }
 }

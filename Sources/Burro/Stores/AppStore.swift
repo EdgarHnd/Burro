@@ -19,6 +19,8 @@ import BurroCore
     var cleaningWorktree = false
     var cleanupDetailsPresented = false
     let cleanupBatch: CleanupBatchStore
+    /// Worktree sizes, repository health and confirmed git gc runs for the Worktrees page.
+    let worktreeInsights = WorktreeInsightsStore()
     typealias Scan = @Sendable (ScanConfiguration) async -> ScanSnapshot
     @ObservationIgnored private let scan: Scan
     @ObservationIgnored private let scanLog = Logger(subsystem: "local.burro.worktrees", category: "GitScan")
@@ -93,6 +95,8 @@ import BurroCore
     var remoteSelection: String?
     /// When each remote Mac is next probed (cadence and per-host backoff).
     @ObservationIgnored private var remoteSchedule = RemotePollSchedule()
+    /// When each working chat's turn began, as Burro saw it (Home's working cards).
+    @ObservationIgnored private(set) var turnClock = TurnClock()
     /// Whether the notch is open; wired to the notch's presentation at launch.
     @ObservationIgnored var notchExpanded: @MainActor () -> Bool = { false }
     private var localActivity = AgentActivitySnapshot.empty
@@ -118,6 +122,8 @@ import BurroCore
     @ObservationIgnored private var activityScan: Task<Void, Never>?
     let todos: TodoStore
     let today: TodayStore
+    /// A tab the Orchestrator page should show next (Settings' "Open Orchestrator memory"); the page clears it.
+    var orchestratorTabRequest: OrchestratorTab?
     /// Burro's own on-device activity tracker (off by default).
     let activityTracker: ActivityTracker
     /// Open at login; macOS's login-item status, read live and never saved here.
@@ -192,7 +198,10 @@ import BurroCore
         orchestrator.applyLocal = { [weak self] in self?.applyOrchestratorTodo($0) ?? "Burro isn't ready to change to-dos." }
         orchestrator.undoLocal = { [weak self] in self?.undoOrchestratorTodo($0) ?? "Burro isn't ready to change to-dos." }
         shipped.project = { [weak self] in self?.mainProject?.path }
+        health.chats = { [weak self] in self?.agentActivity.sessions ?? [] }
+        health.openChat = { [weak self] id in if let self, let chat = agentActivity.sessions.first(where: { $0.id == id }) { showChat(chat) } }
         wireBrief()
+        usage.app = self
     }
     func matches(_ filter: WorktreeFilter, tree: Worktree) -> Bool {
         if filter == .candidates { return cleanupEligibility(tree).allowed }
@@ -575,6 +584,7 @@ import BurroCore
         ReplyQueueModel.shared.update(sessions: sessions, hosts: remoteHosts)
         let next = AgentActivitySnapshot(sessions: sessions, warnings: warnings, sampledAt: localActivity.sampledAt)
         // Re-render Today, Home and the notch only when something they show changed.
+        turnClock.update(sessions, now: Date())
         if agentActivity.shouldPublish(next) { agentActivity = next }
         chatNotifier.update(copies.attention)
         brief.update(copies.attention)

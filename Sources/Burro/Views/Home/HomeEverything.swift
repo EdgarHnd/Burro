@@ -1,4 +1,4 @@
-// Home's cover (greeting, live chips and the plain-language summary), the flat project and machine
+// Home's backdrop and cover (the greeting and one summary sentence), the flat project and bench
 // cards whose only colour is their live counts, and the notes and scratchpad cards.
 import AppKit
 import ImageIO
@@ -49,47 +49,28 @@ struct CoverBackdrop: View {
     }
 }
 
-/// The cover's content: the butter, a greeting, live chips and the summary sentence, sitting on the
-/// backdrop. "Need you" (amber) and "to read" (neutral) chips show only when there is something.
+/// The top of the page, on the backdrop: the greeting and one summary sentence (HomeBoard.sentence),
+/// with the cover-style menu at the trailing edge. The counts themselves live in the sections below.
 struct HomeCover: View {
-    var store: AppStore
-    var summary: HomeSummary
+    var sentence: String
+    /// Before the first agent check.
+    var checking = false
+    var now: Date = .now
     @AppStorage("home.cover") private var coverPath = ""
     @AppStorage("home.coverStyle") private var styleRaw = CoverField.Style.aquarium.rawValue
 
     private var style: CoverField.Style { CoverField.Style(rawValue: styleRaw) ?? .aquarium }
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            Color.clear.frame(maxWidth: .infinity).frame(height: 230)
-            HStack(alignment: .bottom, spacing: 16) {
-                BurroMark(active: true, working: summary.counts.running > 0, tint: HomeStyle.butter)
-                    .frame(width: 64, height: 64)
-                    .shadow(color: HomeStyle.butter.opacity(0.35), radius: 14)
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(greeting).font(.system(size: 40, weight: .bold, design: .rounded)).foregroundStyle(AppAppearance.text)
-                        .shadow(color: AppAppearance.background.opacity(0.9), radius: 12)
-                    HStack(spacing: 8) {
-                        CoverChip(symbol: "waveform.path", text: "\(summary.counts.running)", help: "Agents running: open Chats") { store.page = .remote }
-                        if summary.counts.waiting > 0 {
-                            CoverChip(symbol: "hand.raised", text: "\(summary.counts.waiting) need\(summary.counts.waiting == 1 ? "s" : "") you",
-                                      color: AppAppearance.amber, help: "Chats that need you: open Chats") { store.page = .remote }
-                        }
-                        if summary.counts.done > 0 {
-                            CoverChip(symbol: "tray", text: "\(summary.counts.done) to read", help: "Results ready to read: open Chats") { store.page = .remote }
-                        }
-                        CoverChip(symbol: "server.rack", text: "\(summary.machines.count) machine\(summary.machines.count == 1 ? "" : "s")", help: "Machines") { store.page = .machines }
-                        if let line = usageLine { CoverChip(symbol: "gauge.with.dots.needle.33percent", text: line, help: "Usage") { store.page = .usage } }
-                        if let activity = store.projectActivity, activity.tokens > 0 {
-                            CoverChip(symbol: "chart.bar", text: HomeFormat.tokens(activity.tokens) + " today", help: "Tokens today on this Mac") { store.page = .usage }
-                        }
-                    }
-                    summaryLine
-                }
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(greeting).font(.system(size: 30, weight: .bold)).tracking(-0.4).foregroundStyle(AppAppearance.text)
+                Text(checking ? "Checking on your agents…" : sentence)
+                    .font(.system(size: 15)).foregroundStyle(AppAppearance.secondary)
+                    .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 680, alignment: .leading)
+                    .textSelection(.enabled)
             }
-            .padding(.bottom, 6)
-        }
-        .overlay(alignment: .topTrailing) {
+            Spacer(minLength: 8)
             Menu {
                 Picker("Cover", selection: $styleRaw) {
                     Label("Aquarium", systemImage: "fish").tag(CoverField.Style.aquarium.rawValue)
@@ -103,65 +84,22 @@ struct HomeCover: View {
                 Button("Use Desktop Picture") { coverPath = ""; styleRaw = CoverField.Style.photo.rawValue }
                     .disabled(coverPath.isEmpty && style == .photo)
             } label: {
-                Image(systemName: "photo.on.rectangle").font(.system(size: 13, weight: .medium)).foregroundStyle(AppAppearance.secondary)
-                    .frame(width: 32, height: 32).background(.thinMaterial, in: Circle())
+                Image(systemName: "photo.on.rectangle").font(.system(size: 12, weight: .medium)).foregroundStyle(AppAppearance.tertiary)
+                    .frame(width: 28, height: 28)
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(.top, 4).help("Change the cover")
-        }
-    }
-    /// The plain-language summary, with when the agents were last checked and a way to check now.
-    private var summaryLine: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(store.didCheckAgents ? summary.sentence : "Checking on your agents…")
-                .font(.system(size: 15)).lineSpacing(3).foregroundStyle(AppAppearance.secondary)
-                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 680, alignment: .leading)
-                .textSelection(.enabled)
-            HStack(spacing: 6) {
-                Image(systemName: "clock")
-                Text(store.agentActivity.sampledAt == .distantPast ? "Waiting for the first check" : "Updated \(HomeFormat.ago(store.agentActivity.sampledAt))")
-                Button { Task { await store.refreshAgents() } } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain).help("Check agents now").accessibilityLabel("Check agents now")
-            }.font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .help("Change the backdrop").accessibilityLabel("Change the backdrop")
         }
     }
     private var greeting: String {
-        switch Calendar.current.component(.hour, from: .now) {
+        switch Calendar.current.component(.hour, from: now) {
         case 5..<12: "Good morning"; case 12..<18: "Good afternoon"; case 18..<23: "Good evening"; default: "Working late"
         }
-    }
-    private var usageLine: String? {
-        let rows = store.providerUsage.providers.compactMap { provider -> (String, Double)? in
-            guard provider.issue == nil, let remaining = provider.windows.compactMap(\.remainingPercent).min() else { return nil }
-            return (provider.title, remaining)
-        }
-        guard let tightest = rows.min(by: { $0.1 < $1.1 }) else { return nil }
-        return "\(tightest.0) \(Int(tightest.1.rounded()))% left"
     }
     private func choose() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]; panel.canChooseDirectories = false; panel.prompt = "Use Image"
         if panel.runModal() == .OK, let url = panel.url { coverPath = url.path; styleRaw = CoverField.Style.photo.rawValue }
-    }
-}
-
-private struct CoverChip: View {
-    var symbol: String
-    var text: String
-    var color: Color = AppAppearance.text
-    var help: String
-    var action: () -> Void
-    @State private var hovering = false
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
-                Text(text).font(.system(size: 13, weight: .semibold)).monospacedDigit()
-            }
-            .foregroundStyle(color).padding(.horizontal, 12).padding(.vertical, 6)
-            .background(.thinMaterial, in: Capsule())
-            .background(AppAppearance.text.opacity(hovering ? 0.1 : 0), in: Capsule())
-            .overlay(Capsule().strokeBorder(AppAppearance.separator))
-        }.buttonStyle(.plain).onHover { hovering = $0 }.help(help)
     }
 }
 

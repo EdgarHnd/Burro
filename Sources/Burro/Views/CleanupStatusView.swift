@@ -1,4 +1,5 @@
-// Nonmodal progress keeps browsing usable; detailed receipts are opened only on demand.
+// Nonmodal cleanup progress on the Worktrees page keeps browsing usable; detailed receipts
+// (Trash location, kept branch, full commit) open only on demand.
 import AppKit
 import SwiftUI
 import BurroCore
@@ -70,31 +71,5 @@ struct CleanupResultsView: View {
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
         }.padding(24).frame(width: 520).modifier(AppTheme())
-    }
-}
-struct WorktreeSelectionView: View {
-    var store: AppStore
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Layout.inset) {
-                Label("\(store.selectedWorktrees.count) worktrees selected", systemImage: "square.stack.3d.up")
-                    .font(AppAppearance.sectionTitle)
-                Text("\(store.selectedReadyCount) ready to remove").foregroundStyle(AppAppearance.green)
-                Text("Unavailable worktrees stay in place. Branches and commits are kept.").font(.callout).foregroundStyle(.secondary)
-                Button("Move \(store.selectedReadyCount) to Trash…", systemImage: "trash") {
-                    store.reviewCleanup(store.selectedWorktrees)
-                }.disabled(store.selectedReadyCount == 0 || store.cleaningWorktree)
-                Divider()
-                ForEach(store.selectedWorktrees) { tree in
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(URL(fileURLWithPath: tree.path).lastPathComponent).font(.callout.weight(.medium))
-                        CleanupBadge(status: store.cleanupEligibility(tree).status)
-                        if !store.cleanupEligibility(tree).allowed {
-                            Text(store.cleanupEligibility(tree).summary).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(Layout.inset)
-        }.background(AppAppearance.surface).frame(minWidth: 280, idealWidth: Layout.inspector)
     }
 }

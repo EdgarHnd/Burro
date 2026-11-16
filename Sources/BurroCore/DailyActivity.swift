@@ -1,6 +1,11 @@
 // One day of agent activity (from the Rust history worker), plus the small rollups the Today
-// page shows, including each hour's main category from Burro's own activity tracker. Nothing
-// here is persisted.
+// page shows, including each hour's main category from Burro's own activity tracker. Per chat it
+// carries when the agent was active that day (`Chat.active`, from transcript events; nil when the
+// worker didn't say, e.g. an older worker binary or past the answer's bound, so it never reads as
+// idle). Nothing here is persisted. DayScanCache decides when a cached day is due again (today
+// after a short age; a past day until a scan was taken after the day ended, plus 5 minutes, so a
+// scan just before midnight is redone) and which cached days to drop (today, the day shown and the
+// five most recently used others are kept).
 import Foundation
 
 struct DailyActivityRequest: Encodable, Sendable, Equatable {
@@ -21,6 +26,8 @@ struct DailyActivityBatch: Decodable, Sendable {
         let lastAt: Double
         let title: String?
         let preview: String?
+        /// `[start, end]` pairs inside the day, sorted and apart. Absent from older workers.
+        var active: [[Double]]? = nil
     }
     let turnsByHour: [Int]
     let repliesByHour: [Int]
@@ -46,6 +53,15 @@ struct DailyActivityBatch: Decodable, Sendable {
                   [session.turns, session.replies, session.questions].allSatisfy({ $0 >= 0 }), inDay(session.lastAt),
                   (session.preview?.count ?? 0) <= 160, (session.title?.count ?? 0) <= 120,
                   request.previews || session.preview == nil else { return false }
+            if let active = session.active {
+                guard active.count <= 300 else { return false }
+                var previous = -Double.infinity
+                for pair in active {
+                    guard pair.count == 2, pair.allSatisfy(\.isFinite), pair[0] <= pair[1], pair[0] >= request.since,
+                          pair[1] <= request.until, pair[0] > previous else { return false }
+                    previous = pair[1]
+                }
+            }
         }
         return true
     }
@@ -63,6 +79,10 @@ public struct DailyActivity: Sendable, Equatable {
         public var lastAt: Date
         public var title: String?
         public var preview: String?
+        /// When the agent was active that day, sorted and apart; nil when unknown.
+        public var active: [DateInterval]? = nil
+        /// Seconds the agent was active that day, when known.
+        public var activeSeconds: TimeInterval? { active?.reduce(0) { $0 + $1.duration } }
     }
     public var day: Date
     public var turnsByHour: [Int]
@@ -99,9 +119,37 @@ public enum DailyActivityScanner {
             chats: batch.sessions.map { s in
                 DailyActivity.Chat(id: "\(s.provider):\(s.id)", provider: s.provider == "codex" ? .codex : .claude, folder: s.cwd,
                                    turns: s.turns, replies: s.replies, questions: s.questions,
-                                   lastAt: Date(timeIntervalSince1970: s.lastAt), title: s.title, preview: s.preview)
+                                   lastAt: Date(timeIntervalSince1970: s.lastAt), title: s.title, preview: s.preview,
+                                   active: s.active?.map { DateInterval(start: Date(timeIntervalSince1970: $0[0]), end: Date(timeIntervalSince1970: $0[1])) })
             },
             partial: batch.partial)
+    }
+}
+
+// MARK: Cache policy
+
+public enum DayScanCache {
+    /// A scan of a past day taken before the day ended plus this is redone.
+    public static let settle: TimeInterval = 5 * 60
+    /// Cached days kept besides today and the day shown.
+    public static let extraDays = 5
+
+    /// Whether a cached scan of `day`, taken at `takenAt`, is due at `now`: for today (or a later day)
+    /// once older than `maxAge`; for a past day while it was taken before the day's end plus
+    /// `settle` (and is older than `maxAge`, so it isn't redone on every refresh).
+    public static func due(takenAt: Date, day: Date, now: Date, maxAge: TimeInterval, calendar: Calendar) -> Bool {
+        let start = calendar.startOfDay(for: day)
+        let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+        let old = now.timeIntervalSince(takenAt) > maxAge
+        if now < end { return old }
+        return old && takenAt < end.addingTimeInterval(settle)
+    }
+
+    /// The cached days to drop: everything but `keep` and the `extraDays` most recently used others.
+    /// `used` maps each cached day to a counter that grows with each use.
+    public static func evictions(used: [Date: Int], keep: Set<Date>, extraDays: Int = extraDays) -> [Date] {
+        let others = used.filter { !keep.contains($0.key) }.sorted { $0.value > $1.value }
+        return others.dropFirst(max(0, extraDays)).map(\.key)
     }
 }
 

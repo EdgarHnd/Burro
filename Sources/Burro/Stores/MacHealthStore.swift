@@ -1,4 +1,7 @@
 // Samples Mac resources and leftovers only while a Mac view is on screen; stopping anything needs explicit confirmation.
+// Each sample also goes into a short in-memory history for the page's sparklines (no extra sampling: it records only
+// what the on-screen views already asked for), and each process scan is matched to this Mac's agent chats for the
+// "Top by agents" card and a leftover's chat link, from the process tree the scan already read.
 import AppKit
 import Foundation
 import Observation
@@ -18,6 +21,16 @@ import BurroCore
     var acting: Set<String> = []
     /// Processes that ignored a normal quit request; the next action offers Force Quit.
     var stubborn: Set<String> = []
+    /// The last hour of samples taken while a Mac view was on screen; bounded, never persisted.
+    var history = MacHealthHistory()
+    /// Processes under this Mac's agent chats, from the last process scan.
+    var agents = AgentProcessSummary.empty
+    /// The chat each leftover belongs to, by leftover id, when Burro can tell.
+    var leftoverChats: [String: AgentChatRef] = [:]
+    /// This Mac's chats, from AppStore; read once per process scan.
+    @ObservationIgnored var chats: () -> [AgentSession] = { [] }
+    /// Shows a chat in Burro, by chat id.
+    @ObservationIgnored var openChat: (String) -> Void = { _ in }
     var ignored: Set<String> { didSet { defaults.set(Array(ignored).sorted(), forKey: "macHealthIgnored") } }
     @ObservationIgnored private var ticks: CPUTicks?
     @ObservationIgnored private var inventory: ProcessInventory?
@@ -58,21 +71,33 @@ import BurroCore
         let scan = force || inventory.map { now.timeIntervalSince($0.sampledAt) >= (scans < 2 ? 3 : Self.scanInterval) } ?? true
         let readStorage = force || storageRead.map { now.timeIntervalSince($0) >= Self.storageInterval } ?? true
         let previousTicks = ticks, previousInventory = inventory, ignored = ignored, home = home
+        let chats = scan ? self.chats().filter { $0.remote == nil }.map { AgentChatRef(id: $0.id, title: $0.title, pid: $0.pid) } : []
         let result = await Task.detached(priority: .utility) {
             let (snapshot, ticks) = MacHealthSampler.sample(previous: previousTicks, storage: readStorage)
-            guard scan else { return (snapshot, ticks, nil as (ProcessInventory, LeftoverReport)?) }
+            guard scan else { return (snapshot, ticks, nil as MacHealthScan?) }
             let inventory = ProcessInventory.read()
-            let report = LeftoverPolicy.report(inventory, cpu: inventory.cpuPercent(since: previousInventory), home: home,
+            let cpu = inventory.cpuPercent(since: previousInventory)
+            let report = LeftoverPolicy.report(inventory, cpu: cpu, home: home,
                 ignored: ignored, deviceName: { LeftoverPolicy.simulatorName(udid: $0, home: home) })
-            return (snapshot, ticks, (inventory, report))
+            var links: [String: AgentChatRef] = [:]
+            for leftover in report.leftovers {
+                links[leftover.id] = AgentProcessAttribution.chat(for: leftover, inventory: inventory, chats: chats)
+            }
+            return (snapshot, ticks, MacHealthScan(inventory: inventory, report: report,
+                agents: AgentProcessAttribution.summarize(inventory, cpu: cpu, chats: chats), links: links))
         }.value
         var sample = result.0
         if readStorage { storageRead = now } else { sample.storage = snapshot?.storage }
         snapshot = sample; ticks = result.1
-        if let (inventory, report) = result.2 {
-            self.inventory = inventory; scans += 1
+        history.append(MacHealthPoint(sample))
+        if let scanned = result.2 {
+            self.inventory = scanned.inventory; scans += 1
             // The first pass has no CPU deltas; keep the previous list until busy processes can be judged.
-            if (previousInventory != nil || self.report.leftovers.isEmpty) && self.report != report { self.report = report }
+            if previousInventory != nil || self.report.leftovers.isEmpty {
+                if self.report != scanned.report { self.report = scanned.report }
+                if leftoverChats != scanned.links { leftoverChats = scanned.links }
+            }
+            if (previousInventory != nil || agents.top.isEmpty) && agents != scanned.agents { agents = scanned.agents }
         }
         stubborn.formIntersection(Set(report.leftovers.map(\.id)))
         sampling = false; refreshing = false
@@ -131,4 +156,12 @@ import BurroCore
         guard let pid = leftover.pid else { return }
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString("\(pid)", forType: .string)
     }
+}
+
+/// One process scan's results, carried back from the background read.
+private struct MacHealthScan: Sendable {
+    var inventory: ProcessInventory
+    var report: LeftoverReport
+    var agents: AgentProcessSummary
+    var links: [String: AgentChatRef]
 }

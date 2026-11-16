@@ -1,4 +1,5 @@
-// Keep Awake controls: a card on Mac Health, a menu-bar submenu, a Settings section and a notch line.
+// Keep Awake controls: a card on Mac Health (status, a segmented control of the options, linger and permission),
+// a group in Settings → Machines and a notch line.
 import SwiftUI
 import BurroCore
 
@@ -6,41 +7,49 @@ extension KeepAwakeStore {
     var symbol: String { awake ? "cup.and.saucer.fill" : "moon.zzz" }
 }
 
-/// The Mac Health card: what's keeping the Mac awake, the manual and agent controls, and the one-time permission.
+/// The Mac Health card: whether the Mac is kept awake and why, a segmented control for the existing options
+/// (a duration, until you stop, or while agents work), the linger after agents, and the one-time permission.
 struct KeepAwakeCard: View {
     @Bindable var keepAwake: KeepAwakeStore
+    /// The last duration picked here and when, so its segment stays on only while that request is still the one running.
+    @AppStorage("macHealth.keepAwakePick") private var picked: Double = 0
+    @AppStorage("macHealth.keepAwakePickedAt") private var pickedAt: Double = 0
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                ProviderBadge(symbol: keepAwake.symbol, color: keepAwake.awake ? AppAppearance.green : AppAppearance.secondary, size: 28)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 8) {
-                        Text("Keep awake").font(AppAppearance.sectionTitle)
-                        if keepAwake.lidClosedActive {
-                            Text("Lid closed").font(.caption.weight(.semibold)).foregroundStyle(AppAppearance.secondary)
-                                .padding(.horizontal, 7).padding(.vertical, 2).background(AppAppearance.raised, in: Capsule())
-                                .help("pmset disablesleep is on; Burro's watchdog turns it back off")
-                        }
-                    }
-                    Text(keepAwake.headline).font(.callout)
-                    if let coverage = keepAwake.coverage { Text(coverage).font(.caption).foregroundStyle(.secondary) }
+            HStack(spacing: 8) {
+                Image(systemName: keepAwake.symbol).foregroundStyle(keepAwake.awake ? AppAppearance.green : AppAppearance.tertiary)
+                    .accessibilityHidden(true)
+                MacHealthLabel("Keep awake")
+                if keepAwake.lidClosedActive {
+                    Text("Lid closed").font(.caption.weight(.semibold)).foregroundStyle(AppAppearance.secondary)
+                        .padding(.horizontal, 7).padding(.vertical, 2).background(AppAppearance.raised, in: Capsule())
+                        .help("pmset disablesleep is on; Burro's watchdog turns it back off")
                 }
                 Spacer(minLength: 8)
                 if keepAwake.busy { ProgressView().controlSize(.small).accessibilityLabel("Working") }
+                Text(keepAwake.awake ? "On" : "Off").font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(keepAwake.awake ? AppAppearance.green : AppAppearance.tertiary)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(keepAwake.awake || keepAwake.decision.reason != .off ? keepAwake.headline : "The Mac sleeps as usual").fontWeight(.semibold).fixedSize(horizontal: false, vertical: true)
+                    if let coverage = keepAwake.coverage {
+                        Text(coverage).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 8)
                 if keepAwake.manualActive {
                     Button("Stop") { keepAwake.stopManual() }
+                        .help(keepAwake.agentsMode ? "Stop this request; “While agents work” stays on" : "Let the Mac sleep as usual")
                 }
-                Menu(keepAwake.manualActive ? "Change" : "Keep awake") { KeepAwakeDurations(keepAwake: keepAwake) }
-                    .fixedSize().disabled(keepAwake.busy)
             }
-            Divider()
-            HStack(spacing: 12) {
-                Toggle("While agents work on this Mac", isOn: $keepAwake.agentsMode).toggleStyle(.switch).controlSize(.small)
-                Spacer(minLength: 8)
-                if keepAwake.agentsMode {
-                    Text("then stay").font(.caption).foregroundStyle(.secondary)
-                    CapsulePicker(options: KeepAwakePolicy.lingerChoices.map { ($0, "\($0) min") },
+            KeepAwakeSegments(selected: selected) { choose($0) }.disabled(keepAwake.busy)
+            if keepAwake.agentsMode {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("After the last chat finishes, stay awake for").font(.caption).foregroundStyle(AppAppearance.secondary)
+                    CapsulePicker(options: KeepAwakePolicy.lingerChoices.map { ($0, $0 == 0 ? "None" : "\($0) min") },
                                   selection: $keepAwake.lingerMinutes)
+                        .fixedSize()
                         .help("How long to stay awake after the last agent finishes, in case another turn starts")
                 }
             }
@@ -71,71 +80,104 @@ struct KeepAwakeCard: View {
                 HStack(alignment: .firstTextBaseline) {
                     Label(message, systemImage: "info.circle").font(.callout).fixedSize(horizontal: false, vertical: true)
                     Spacer()
-                    Button { keepAwake.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("Dismiss")
+                    Button { keepAwake.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+                        .accessibilityLabel("Dismiss").help("Dismiss")
                 }
             }
-            Text("Sleep comes back on when you stop, when the agents are done, 30 seconds after Burro quits, if Burro stops responding for 15 minutes, or below \(KeepAwakePolicy.lowBatteryPercent)% battery.")
-                .font(.caption).foregroundStyle(.secondary)
+            Text(footnote).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).fixedSize(horizontal: false, vertical: true)
+                .help("Sleep comes back on when you stop, when the agents are done, 30 seconds after Burro quits, if Burro stops responding for 15 minutes, or below \(KeepAwakePolicy.lowBatteryPercent)% battery.")
         }
-        .padding(16).frame(maxWidth: .infinity, alignment: .leading).modifier(AppCardSurface())
+        .padding(.horizontal, 18).padding(.vertical, 16).frame(maxWidth: .infinity, alignment: .leading).modifier(AppCardSurface())
+    }
+    private var selected: KeepAwakeChoice? {
+        KeepAwakeChoice.selected(manualUntil: keepAwake.manualUntil, agentsMode: keepAwake.agentsMode, picked: picked > 0 ? picked : nil,
+                                 pickedAt: pickedAt > 0 ? Date(timeIntervalSince1970: pickedAt) : nil, now: Date())
+    }
+    private var footnote: String {
+        if keepAwake.agentsMode && !keepAwake.manualActive {
+            return keepAwake.lingerMinutes == 0 ? "Sleeps again as soon as the last chat finishes." : "Sleeps again \(keepAwake.lingerMinutes) min after the last chat finishes."
+        }
+        return "Sleep comes back on when you stop, Burro quits, or the battery drops below \(KeepAwakePolicy.lowBatteryPercent)%."
+    }
+    /// A duration starts a request (the standing agent mode is left as it is); "While agents work" turns that mode on
+    /// and ends a running request, and turns the mode off when it is already the one on.
+    private func choose(_ choice: KeepAwakeChoice) {
+        switch choice {
+        case .agents:
+            if selected == .agents { keepAwake.agentsMode = false; return }
+            if keepAwake.manualActive { keepAwake.stopManual() }
+            keepAwake.agentsMode = true
+        case .duration, .untilStopped:
+            guard choice != selected else { return }
+            picked = choice.seconds ?? 0; pickedAt = Date().timeIntervalSince1970
+            keepAwake.keepAwake(for: choice.seconds)
+        }
     }
     private func notice<Action: View>(_ symbol: String, _ text: String, @ViewBuilder action: () -> Action) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: symbol).foregroundStyle(.secondary)
-            Text(text).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Image(systemName: symbol).foregroundStyle(AppAppearance.secondary)
+            Text(text).font(.callout).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             action()
         }
     }
 }
 
-/// The duration choices, shared by the card's menu and the menu bar.
-struct KeepAwakeDurations: View {
-    var keepAwake: KeepAwakeStore
+/// The Keep awake choices as one segmented control that wraps onto a second line in a narrow column.
+struct KeepAwakeSegments: View {
+    var selected: KeepAwakeChoice?
+    var choose: (KeepAwakeChoice) -> Void
     var body: some View {
-        ForEach(KeepAwakePolicy.durations, id: \.title) { choice in
-            Button(choice.seconds == nil ? choice.title : "For \(choice.title)") { keepAwake.keepAwake(for: choice.seconds) }
+        FlowLayout(spacing: 4) {
+            ForEach(KeepAwakeChoice.all, id: \.self) { choice in
+                let on = choice == selected
+                Button { choose(choice) } label: {
+                    Text(choice.title).font(.system(size: 12, weight: on ? .semibold : .regular))
+                        .foregroundStyle(on ? AppAppearance.text : AppAppearance.secondary)
+                        .padding(.horizontal, 10).frame(height: 26)
+                        .background(on ? AppAppearance.raised : .clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+                .help(choice == .agents ? (on ? "On: stays awake while a chat on this Mac works. Click to turn off." : "Stay awake whenever a chat on this Mac is working")
+                      : (choice == .untilStopped ? "Stay awake until you click Stop" : "Stay awake for \(choice.title)"))
+            }
         }
+        .padding(3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppAppearance.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(AppAppearance.separator))
+        .accessibilityElement(children: .contain).accessibilityLabel("Keep awake for")
     }
 }
 
-/// The Burro menu-bar submenu.
-struct KeepAwakeMenu: View {
+/// Settings → Machines: the agent mode, its linger and the lid-closed permission.
+struct KeepAwakeSettingsGroup: View {
     @Bindable var keepAwake: KeepAwakeStore
     var body: some View {
-        Menu(keepAwake.awake ? "Keep Awake · On" : "Keep Awake") {
-            Text(keepAwake.headline + (keepAwake.lidClosedActive ? " · lid closed" : ""))
-            Divider()
-            KeepAwakeDurations(keepAwake: keepAwake).disabled(keepAwake.busy)
-            if keepAwake.manualActive { Button("Stop Keeping Awake") { keepAwake.stopManual() } }
-            Divider()
-            Toggle("While Agents Work", isOn: $keepAwake.agentsMode)
-        }
-    }
-}
-
-/// Settings: the agent mode, its linger and the lid-closed permission.
-struct KeepAwakeSettingsSection: View {
-    @Bindable var keepAwake: KeepAwakeStore
-    var body: some View {
-        Section("Keep awake") {
-            Toggle("Keep the Mac awake while agents work on it", isOn: $keepAwake.agentsMode)
-            Picker("Then stay awake for", selection: $keepAwake.lingerMinutes) {
-                ForEach(KeepAwakePolicy.lingerChoices, id: \.self) { Text($0 == 0 ? "No extra time" : "\($0) minutes").tag($0) }
-            }.disabled(!keepAwake.agentsMode)
+        SettingsGroup(title: "Keep this Mac awake while agents work on it",
+                      note: "An open lid stays awake with no password. Burro's watchdog turns sleep back on when you stop, when the agents are done, 30 seconds after Burro quits, after 15 minutes without word from Burro, or below \(KeepAwakePolicy.lowBatteryPercent)% battery.",
+                      isOn: $keepAwake.agentsMode) {
+            SettingsRow(title: "Then stay awake for") {
+                SettingsMenuPicker(label: "Then stay awake for", selection: $keepAwake.lingerMinutes,
+                                   options: KeepAwakePolicy.lingerChoices.map { ($0, $0 == 0 ? "No extra time" : "\($0) minutes") })
+                    .disabled(!keepAwake.agentsMode)
+            }
             if keepAwake.passwordless {
-                LabeledContent("Closed lid", value: "Allowed without a password")
-                if keepAwake.ruleInstalled {
-                    Button("Remove Permission…") { keepAwake.removePermission() }
-                        .disabled(keepAwake.busy || keepAwake.lidClosedActive)
-                        .help(keepAwake.lidClosedActive ? "Stop keeping awake first: the watchdog needs this permission to turn sleep back on." : "")
+                SettingsRow(title: "Closed lid", detail: "Allowed without a password") {
+                    if keepAwake.ruleInstalled {
+                        Button("Remove Permission…") { keepAwake.removePermission() }
+                            .disabled(keepAwake.busy || keepAwake.lidClosedActive)
+                            .help(keepAwake.lidClosedActive ? "Stop keeping awake first: the watchdog needs this permission to turn sleep back on." : "")
+                    }
                 }
             } else {
-                LabeledContent("Closed lid", value: "Asks for an administrator password")
-                Button("Allow Without a Password…") { keepAwake.allowWithoutPassword() }.disabled(keepAwake.busy)
+                SettingsRow(title: "Closed lid", detail: "Asks for an administrator password") {
+                    Button("Allow Without a Password…") { keepAwake.allowWithoutPassword() }.disabled(keepAwake.busy)
+                }
             }
-            Text("An open lid stays awake with no password. A closed lid needs “pmset -a disablesleep 1”; allowing it once adds a sudoers rule for exactly “pmset -a disablesleep 0” and “… 1” (\(KeepAwakeScript.rulePath)). Burro's watchdog turns sleep back on when you stop, when the agents are done, 30 seconds after Burro quits, after 15 minutes without word from Burro, or below \(KeepAwakePolicy.lowBatteryPercent)% battery.")
-                .font(.caption).foregroundStyle(.secondary)
+            SettingsNote("A closed lid needs “pmset -a disablesleep 1”; allowing it once adds a sudoers rule for exactly “pmset -a disablesleep 0” and “… 1” (\(KeepAwakeScript.rulePath)).")
         }
     }
 }

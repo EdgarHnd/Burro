@@ -1,27 +1,414 @@
-// The Orchestrator's own page: today's conversation in the middle (each question, the steps it
-// took, its answer, any reply or chat it proposed as a card to send or discard, and any to-do it
-// changed as a line with Undo; replies triage drafted wait below under their own heading, the same
-// cards the Brief on Home shows inline) and, on the right, the agents it oversees across your machines with
-// their subagents, live. The header picks its model and effort for the next message, switches to
-// the Memory and Runs tabs, reads back an earlier day's conversation, and holds its settings
-// (whether it may read your notes).
+// The Orchestrator's own page. Under the title, a line with what the Brief holds and when triage
+// last ran, and "Run triage now", which looks through the newest chats waiting on you or unread and
+// triages up to five not triaged since they last changed, at once, through the Brief's own gate
+// (off, the caps or Claude's limits queue nothing and say why; "Nothing new to triage" when so);
+// then the Brief · Memory · Runs tabs. The Brief tab has three columns: the Brief queue on the left
+// (OrchestratorBriefQueue.swift); today's conversation in the middle (each question, the steps it
+// took, its answer, the reply or chat it proposed as a card to send or discard, and any to-do it
+// changed as a line with Undo; proposals no visible turn shows wait under their own heading), with
+// the composer, its model and effort menus and the reminder that proposals wait for you; and the
+// Memory and Budget cards on the right (OrchestratorSideCards.swift). Below about 1180 points the
+// side cards move under the queue, and below about 860 everything stacks in one scrolling column.
+// The conversation card's header reads back an earlier day ("Earlier days") and holds New
+// conversation and whether it may read your notes.
 import SwiftUI
 import BurroCore
 
 struct OrchestratorPage: View {
     @Bindable var store: AppStore
     var body: some View {
-        HStack(spacing: 0) {
-            OrchestratorConversation(store: store).frame(maxWidth: .infinity, maxHeight: .infinity)
-            Rectangle().fill(AppAppearance.separator).frame(width: 1)
-            OrchestratorAgentsPanel(store: store).frame(width: 340)
+        // Ages and "last triage" move on by the minute while the page is open.
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            OrchestratorPageLayout(store: store, budget: budget, now: context.date)
         }
         .background(AppAppearance.background)
         .task { await store.orchestrator.loadHistory() }
+        .onAppear { store.orchestrator.reloadMemory(); store.orchestrator.reloadRuns() }
+    }
+
+    /// The Budget card from the Brief, today's runs and Claude's usage windows (nil when unknown).
+    private var budget: OrchestratorBudget {
+        let brief = store.brief
+        let claude = store.usage.enabled ? store.usage.snapshot.providers.first { $0.id == .claude && $0.issue == nil } : nil
+        return OrchestratorBudget(runsToday: brief.runsToday, cap: brief.dailyCap, runs: store.orchestrator.runsToday,
+                                  claude: claude?.windows, enabled: brief.autoTriage, gate: brief.gate,
+                                  budget: TriageBudget(dailyCap: brief.dailyCap))
     }
 }
 
-// MARK: Conversation
+enum OrchestratorTab: String, CaseIterable, Identifiable {
+    case brief = "Brief", memory = "Memory", runs = "Runs"
+    var id: String { rawValue }
+}
+
+/// The page with everything it shows passed in, so it can also be drawn offscreen with sample data.
+struct OrchestratorPageLayout: View {
+    @Bindable var store: AppStore
+    var budget: OrchestratorBudget
+    var now: Date
+    @State private var tab = OrchestratorTab.brief
+    @State private var triageNote: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header.padding(.horizontal, 28).padding(.top, 22)
+            switch tab {
+            case .brief: briefTab
+            case .memory: OrchestratorMemoryView(store: store)
+            case .runs: OrchestratorRunsView(store: store)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear(perform: takeTabRequest)
+        .onChange(of: store.orchestratorTabRequest) { _, _ in takeTabRequest() }
+    }
+
+    /// Settings can ask for a tab (Memory); show it once and clear the request.
+    private func takeTabRequest() {
+        guard let request = store.orchestratorTabRequest else { return }
+        tab = request
+        store.orchestratorTabRequest = nil
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        let brief = store.brief
+        let summary = OrchestratorPageSummary.line(needs: brief.needsYou.count, finished: brief.finished.count, stuck: brief.stuck.count,
+                                                   lastTriage: brief.lastRunAt, triaging: brief.triaging, now: now)
+        let gate = brief.gate
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Orchestrator").font(.system(size: 28, weight: .bold, design: .rounded)).foregroundStyle(AppAppearance.text)
+                    .fixedSize()
+                Text(summary).font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 8)
+                if let triageNote {
+                    Text(triageNote).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
+                }
+                Button(brief.checkingNow ? "Looking…" : "Run triage now") { runTriage() }
+                    .buttonStyle(OrchButtonStyle(kind: .ghost, large: true)).fixedSize()
+                    .disabled(!gate.allowsRun || brief.triaging > 0 || brief.checkingNow)
+                    .help(gate == .off ? "Automatic triage is off: turn it on in Budget first."
+                          : gate.reason ?? (brief.triaging > 0 ? "Triage is reading chats now."
+                          : "Triage up to five of the newest chats waiting on you or unread that haven't been triaged since they last changed, now (counted toward today's cap)."))
+            }
+            HStack(spacing: 4) {
+                ForEach(OrchestratorTab.allCases) { item in
+                    Button { tab = item } label: {
+                        Text(item.rawValue).font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(tab == item ? AppAppearance.text : AppAppearance.secondary)
+                            .padding(.horizontal, 12).frame(height: 34)
+                            .overlay(alignment: .bottom) {
+                                Rectangle().fill(tab == item ? AppAppearance.text : .clear).frame(height: 2)
+                            }
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(tab == item ? .isSelected : [])
+                }
+                Spacer()
+            }
+            .overlay(alignment: .bottom) { Rectangle().fill(AppAppearance.separator).frame(height: 1) }
+        }
+    }
+
+    private func runTriage() {
+        Task {
+            let outcome = await store.brief.runNow()
+            triageNote = outcome.message
+            try? await Task.sleep(for: .seconds(6))
+            if triageNote == outcome.message { triageNote = nil }
+        }
+    }
+
+    // MARK: Brief tab
+
+    private var briefTab: some View {
+        GeometryReader { proxy in
+            let columns = OrchestratorPageColumns.count(width: Double(proxy.size.width))
+            let openMemory = { tab = .memory }
+            Group {
+                switch columns {
+                case 3:
+                    HStack(alignment: .top, spacing: 20) {
+                        ScrollView { OrchestratorBriefQueue(store: store, now: now).padding(.bottom, 24) }
+                            .scrollIndicators(.never).frame(width: 350)
+                        OrchestratorTodayCard(store: store, now: now).padding(.bottom, 24)
+                        ScrollView { sideCards(openMemory).padding(.bottom, 24) }
+                            .scrollIndicators(.never).frame(width: 290)
+                    }
+                case 2:
+                    HStack(alignment: .top, spacing: 20) {
+                        ScrollView {
+                            VStack(spacing: 18) { OrchestratorBriefQueue(store: store, now: now); sideCards(openMemory) }.padding(.bottom, 24)
+                        }
+                        .scrollIndicators(.never).frame(width: 330)
+                        OrchestratorTodayCard(store: store, now: now).padding(.bottom, 24)
+                    }
+                default:
+                    ScrollView {
+                        VStack(spacing: 18) {
+                            OrchestratorBriefQueue(store: store, now: now)
+                            OrchestratorTodayCard(store: store, now: now).frame(height: 620)
+                            sideCards(openMemory)
+                        }
+                        .padding(.bottom, 24)
+                    }
+                }
+            }
+            .padding(.horizontal, 28).padding(.top, 18)
+        }
+    }
+
+    private func sideCards(_ openMemory: @escaping () -> Void) -> some View {
+        VStack(spacing: 14) {
+            OrchestratorMemoryCard(store: store, openMemory: openMemory)
+            OrchestratorBudgetCard(budget: budget, enabled: Bindable(store.brief).autoTriage, now: now)
+        }
+    }
+}
+
+// MARK: Today's conversation
+
+/// The middle card: today's conversation (or an earlier day's), then the composer.
+struct OrchestratorTodayCard: View {
+    @Bindable var store: AppStore
+    var now: Date
+
+    var body: some View {
+        let orchestrator = store.orchestrator
+        VStack(spacing: 0) {
+            cardHeader(orchestrator)
+            Rectangle().fill(AppAppearance.separator).frame(height: 1)
+            conversation(orchestrator).frame(maxHeight: .infinity)
+            Rectangle().fill(AppAppearance.separator).frame(height: 1)
+            OrchestratorAskBox(orchestrator: orchestrator)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .modifier(OrchCard())
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func cardHeader(_ orchestrator: OrchestratorStore) -> some View {
+        HStack(spacing: 8) {
+            if let viewing = orchestrator.viewing {
+                Image(systemName: "clock.arrow.circlepath").font(.system(size: 12, weight: .medium)).foregroundStyle(AppAppearance.secondary)
+                    .accessibilityHidden(true)
+                Text(OrchestratorSessions.title(day: viewing.day, today: now)).font(.system(size: 15, weight: .semibold))
+                Spacer(minLength: 6)
+                Button("Back to today") { Task { await orchestrator.show(nil) } }
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
+            } else {
+                Text("Today").font(.system(size: 15, weight: .semibold))
+                Text(now.formatted(.dateTime.weekday(.wide).day().month(.wide))).font(.system(size: 13)).foregroundStyle(AppAppearance.tertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                earlierMenu(orchestrator)
+            }
+            moreMenu(orchestrator)
+        }
+        .padding(.horizontal, 16).frame(height: 46)
+    }
+
+    private func earlierMenu(_ orchestrator: OrchestratorStore) -> some View {
+        let earlier = orchestrator.earlierSessions
+        return Menu {
+            ForEach(earlier.prefix(30)) { session in
+                Button(OrchestratorSessions.title(day: session.day, today: now) + (session.startedAt.map { ", started " + $0.formatted(date: .omitted, time: .shortened) } ?? "")) {
+                    Task { await orchestrator.show(session) }
+                }
+            }
+        } label: {
+            Text("Earlier days").font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .disabled(earlier.isEmpty || orchestrator.running)
+        .help(earlier.isEmpty ? "No earlier conversations yet" : "Read back an earlier day's conversation")
+    }
+
+    private func moreMenu(_ orchestrator: OrchestratorStore) -> some View {
+        Menu {
+            Button("New conversation") { orchestrator.newConversation() }
+                .disabled(orchestrator.running || orchestrator.messages.isEmpty || orchestrator.viewing != nil)
+            Section("Settings") {
+                Toggle("Let it read my notes", isOn: Bindable(orchestrator).notesAccess)
+            }
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(AppAppearance.secondary)
+                .frame(width: 26, height: 26).contentShape(Rectangle())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .disabled(orchestrator.running)
+        .help("New conversation, and whether the orchestrator may read your notes")
+        .accessibilityLabel("Conversation options")
+    }
+
+    @ViewBuilder private func conversation(_ orchestrator: OrchestratorStore) -> some View {
+        let messages = orchestrator.messages
+        let turns = ConversationTurn.turns(messages)
+        let actions = orchestrator.actions
+        let anchored = Set(turns.flatMap(\.proposalIDs))
+        // Triage drafts the queue shows inline aren't listed again here.
+        let inline = store.brief.shownInline(actions, now: now)
+        let loose = actions.filter { !anchored.contains($0.id) && !inline.contains($0.id) && ($0.status == .pending || $0.status == .unconfirmed) && !$0.isLocal }
+        if messages.isEmpty && loose.isEmpty {
+            emptyState
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 26) {
+                        ForEach(turns) { turn in
+                            let ids = turn.proposalIDs
+                            TurnView(turn: turn, live: orchestrator.running && turn.id == turns.last?.id,
+                                     activity: orchestrator.activity, title: chatTitle) {
+                                ForEach(ids.compactMap { id in actions.first { $0.id == id } }) { action in
+                                    if action.isLocal {
+                                        OrchestratorLocalActionCard(store: store, action: action)
+                                    } else {
+                                        OrchestratorActionCard(store: store, action: action)
+                                    }
+                                }
+                            }
+                        }
+                        let drafts = loose.filter { $0.conversation == BriefDrafts.triageConversation }
+                        let earlier = loose.filter { $0.conversation != BriefDrafts.triageConversation }
+                        ForEach([("Drafted by triage", drafts), ("Proposed earlier", earlier)], id: \.0) { title, group in
+                            if !group.isEmpty {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    OrchSectionLabel(title: title, dot: nil)
+                                    ForEach(group) { action in OrchestratorActionCard(store: store, action: action) }
+                                }
+                            }
+                        }
+                        Color.clear.frame(height: 1).id("bottom")
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 18)
+                }
+                .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: actions.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: messages.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: messages.last?.text.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 14) {
+            Spacer(minLength: 12)
+            Text("What should we get done?").font(.system(size: 20, weight: .bold))
+            Text("It sees every Codex and Claude chat on your machines and reads them when it needs detail. It can draft replies and new chats for you to send. Ask what needs you, where a project stands, or to get something going.")
+                .font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).multilineTextAlignment(.center).frame(maxWidth: 460)
+                .fixedSize(horizontal: false, vertical: true)
+            let suggestions: [(String, String)] = [
+                ("hand.raised", "What needs me right now?"),
+                ("flag", "Where is \(store.mainProject?.name ?? "my main project") at?"),
+                ("sun.max", "Plan my day from my to-dos and chats"),
+                ("arrow.triangle.branch", "Which worktrees can I clean up?"),
+            ]
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                ForEach(suggestions, id: \.1) { item in SuggestionCard(symbol: item.0, text: item.1) { store.askOrchestrator(item.1) } }
+            }
+            .frame(maxWidth: 520).padding(.top, 4)
+            Spacer(minLength: 12)
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func chatTitle(_ id: String) -> String? {
+        let key = id.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !key.isEmpty else { return nil }
+        return store.notchChatSessions.first { $0.id.lowercased() == key || $0.id.lowercased().hasSuffix(":" + key) }?.title
+    }
+}
+
+/// The composer under the conversation: the message, model and effort menus, and Ask (Stop while
+/// it answers). Return sends what you typed or changed (an untouched "Ask the Orchestrator about
+/// this chat" prefill goes only by Ask); ⌥Return adds a line. Text put in the field from elsewhere
+/// takes focus.
+struct OrchestratorAskBox: View {
+    @Bindable var orchestrator: OrchestratorStore
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let empty = orchestrator.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        VStack(alignment: .leading, spacing: 8) {
+            if let error = orchestrator.error, !orchestrator.running {
+                Label(error, systemImage: "exclamationmark.bubble").font(.system(size: 12)).foregroundStyle(AppAppearance.amber).lineLimit(4)
+            }
+            if let problem = orchestrator.setupProblem {
+                Label(problem, systemImage: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(AppAppearance.amber)
+            }
+            Text("Ask, or tell it what to start").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
+            TextField("What did the agents finish while I was away?", text: $orchestrator.draft, axis: .vertical)
+                .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(2...6)
+                .focused($focused).onSubmit { orchestrator.submitFromReturn() }
+                // A question put here from elsewhere ("Ask the Orchestrator about this chat", the
+                // palette) gets the cursor, ready to edit or Ask; nothing is sent.
+                .onAppear { focusIfPrefilled() }
+                .onChange(of: orchestrator.draft) { _, _ in focusIfPrefilled() }
+                .modifier(OrchField())
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(focused ? AppAppearance.hairline : .clear))
+                .accessibilityLabel("Ask, or tell it what to start")
+            HStack(spacing: 6) {
+                chip(title: "Claude · " + Orchestrator.modelTitle(orchestrator.model),
+                     help: "Which Claude model the orchestrator runs on; applies from your next message.") {
+                    Picker("Model", selection: $orchestrator.model) {
+                        ForEach(Orchestrator.models) { model in
+                            Text(model.id == Orchestrator.model ? "\(model.title) (default)" : model.title).tag(model.id)
+                        }
+                    }
+                    .pickerStyle(.inline).labelsHidden()
+                }
+                chip(title: Orchestrator.effortTitle(orchestrator.effort) + " effort",
+                     help: "How hard the orchestrator thinks. Higher is more careful and slower; applies from your next message.") {
+                    Picker("Effort", selection: $orchestrator.effort) {
+                        ForEach(Orchestrator.efforts, id: \.self) { Text(Orchestrator.effortTitle($0)).tag($0) }
+                    }
+                    .pickerStyle(.inline).labelsHidden()
+                }
+                Spacer(minLength: 6)
+                Text("Proposals wait for you before anything starts").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
+                    .lineLimit(1).truncationMode(.tail)
+                if orchestrator.running {
+                    Button("Stop") { orchestrator.stop() }.buttonStyle(OrchButtonStyle(kind: .bordered, large: true))
+                        .help("Stop this answer")
+                } else {
+                    Button("Ask", action: send).buttonStyle(OrchButtonStyle(kind: .primary, large: true)).disabled(empty)
+                        .help("Send to the orchestrator (Return sends what you typed or changed)")
+                }
+            }
+        }
+        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 14)
+    }
+
+    private func send() { orchestrator.send(orchestrator.draft) }
+
+    private func focusIfPrefilled() {
+        guard !focused, !orchestrator.draft.isEmpty else { return }
+        DispatchQueue.main.async { focused = true }
+    }
+
+    private func chip<Content: View>(title: String, help: String, @ViewBuilder content: () -> Content) -> some View {
+        Menu { content() } label: {
+            HStack(spacing: 6) {
+                Text(title).font(.system(size: 12)).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).accessibilityHidden(true)
+            }
+            .foregroundStyle(AppAppearance.secondary)
+            .padding(.horizontal, 10).frame(height: 26)
+            .background(Capsule().fill(AppAppearance.raised.opacity(0.6)))
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .disabled(orchestrator.running)
+        .help(help)
+    }
+}
+
+// MARK: Turns
 
 /// One question and everything the orchestrator did for it.
 struct ConversationTurn: Identifiable, Equatable {
@@ -58,242 +445,6 @@ struct ConversationTurn: Identifiable, Equatable {
     }
 }
 
-enum OrchestratorTab: String, CaseIterable, Identifiable {
-    case conversation = "Conversation", memory = "Memory", runs = "Runs"
-    var id: String { rawValue }
-}
-
-private struct OrchestratorConversation: View {
-    @Bindable var store: AppStore
-    @State private var tab = OrchestratorTab.conversation
-    var body: some View {
-        let orchestrator = store.orchestrator
-        VStack(spacing: 0) {
-            header(orchestrator, empty: orchestrator.messages.isEmpty)
-            switch tab {
-            case .conversation: conversation(orchestrator)
-            case .memory: OrchestratorMemoryView(store: store)
-            case .runs: OrchestratorRunsView(store: store)
-            }
-        }
-    }
-
-    @ViewBuilder private func conversation(_ orchestrator: OrchestratorStore) -> some View {
-        let messages = orchestrator.messages
-        let turns = ConversationTurn.turns(messages)
-        let actions = orchestrator.actions
-        let anchored = Set(turns.flatMap(\.proposalIDs))
-        // Proposals no visible turn shows (an earlier conversation, or history that was cut) still wait here.
-        let loose = actions.filter { !anchored.contains($0.id) && $0.status == .pending && !$0.isLocal }
-        VStack(spacing: 0) {
-            if let viewing = orchestrator.viewing {
-                HStack(spacing: 8) {
-                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 11, weight: .medium))
-                    Text("Conversation from \(OrchestratorSessions.title(day: viewing.day))").font(.system(size: 12.5))
-                    Spacer()
-                    Button("Back to today") { Task { await orchestrator.show(nil) } }
-                        .buttonStyle(.plain).font(.system(size: 12.5, weight: .medium))
-                }
-                .foregroundStyle(AppAppearance.secondary)
-                .padding(.horizontal, 14).frame(height: 32)
-                .background(AppAppearance.raised.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .frame(maxWidth: 780).frame(maxWidth: .infinity).padding(.horizontal, 36).padding(.bottom, 6)
-            }
-            if messages.isEmpty && loose.isEmpty {
-                emptyState
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 34) {
-                            ForEach(turns) { turn in
-                                let ids = turn.proposalIDs
-                                TurnView(turn: turn, live: orchestrator.running && turn.id == turns.last?.id,
-                                         activity: orchestrator.activity, title: chatTitle) {
-                                    ForEach(ids.compactMap { id in actions.first { $0.id == id } }) { action in
-                                        if action.isLocal {
-                                            OrchestratorLocalActionCard(store: store, action: action)
-                                        } else {
-                                            OrchestratorActionCard(store: store, action: action)
-                                        }
-                                    }
-                                }
-                            }
-                            let drafts = loose.filter { $0.conversation == BriefDrafts.triageConversation }
-                            let earlier = loose.filter { $0.conversation != BriefDrafts.triageConversation }
-                            ForEach([("DRAFTED BY TRIAGE", drafts), ("PROPOSED EARLIER", earlier)], id: \.0) { title, group in
-                                if !group.isEmpty {
-                                    VStack(alignment: .leading, spacing: 10) {
-                                        Text(title).font(.system(size: 10.5, weight: .semibold)).tracking(0.7)
-                                            .foregroundStyle(AppAppearance.tertiary)
-                                        ForEach(group) { action in OrchestratorActionCard(store: store, action: action) }
-                                    }
-                                    .padding(.leading, 38)
-                                }
-                            }
-                            Color.clear.frame(height: 1).id("bottom")
-                        }
-                        .padding(.horizontal, 36).padding(.top, 8).padding(.bottom, 24)
-                        .frame(maxWidth: 780).frame(maxWidth: .infinity)
-                    }
-                    .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
-                    .onChange(of: actions.count) { _, _ in withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) } }
-                    .onChange(of: messages.count) { _, _ in withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) } }
-                    .onChange(of: messages.last?.text.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-                }
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                if let error = orchestrator.error, !orchestrator.running {
-                    Label(error, systemImage: "exclamationmark.bubble").font(.system(size: 12)).foregroundStyle(AppAppearance.amber).lineLimit(4)
-                }
-                if let problem = orchestrator.setupProblem {
-                    Label(problem, systemImage: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(AppAppearance.amber)
-                }
-                OrchestratorComposer(orchestrator: orchestrator, placeholder: messages.isEmpty ? "Ask anything about your agents, or have it start work…" : "Reply to the orchestrator…")
-                    .shadow(color: AppAppearance.shadow, radius: 10, y: 3)
-            }
-            .frame(maxWidth: 780).frame(maxWidth: .infinity)
-            .padding(.horizontal, 36).padding(.top, 6).padding(.bottom, 22)
-        }
-    }
-
-    private func header(_ orchestrator: OrchestratorStore, empty: Bool) -> some View {
-        HStack(spacing: 14) {
-            OrchestratorAvatar(size: 44, working: orchestrator.running)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
-                    Text("Orchestrator").font(.system(size: 20, weight: .bold, design: .rounded))
-                    Text(Orchestrator.modelTitle(orchestrator.model).uppercased()).font(.system(size: 10, weight: .bold)).tracking(0.8)
-                        .foregroundStyle(OrchestratorStyle.ink)
-                        .padding(.horizontal, 7).padding(.vertical, 3).background(OrchestratorStyle.tint.opacity(0.2), in: Capsule())
-                }
-                HStack(spacing: 6) {
-                    Circle().fill(orchestrator.running ? OrchestratorStyle.tint : AppAppearance.green).frame(width: 6, height: 6)
-                    Text(orchestrator.activity ?? status).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).lineLimit(1)
-                }
-            }
-            Spacer()
-            Menu {
-                Picker("Model", selection: Bindable(orchestrator).model) {
-                    ForEach(Orchestrator.models) { model in
-                        Text(model.id == Orchestrator.model ? "\(model.title) (default)" : model.title).tag(model.id)
-                    }
-                }
-                .pickerStyle(.inline).labelsHidden()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "cpu").font(.system(size: 11, weight: .semibold))
-                    Text(Orchestrator.modelTitle(orchestrator.model)).font(.system(size: 12.5, weight: .medium))
-                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.6)
-                }
-                .foregroundStyle(AppAppearance.secondary)
-                .padding(.horizontal, 12).frame(height: 30)
-                .background(AppAppearance.raised.opacity(0.6), in: Capsule())
-            }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-            .help("Which Claude model the orchestrator runs on; applies from your next message.")
-            Menu {
-                Picker("Effort", selection: Bindable(orchestrator).effort) {
-                    ForEach(Orchestrator.efforts, id: \.self) { Text(Orchestrator.effortTitle($0)).tag($0) }
-                }
-                .pickerStyle(.inline).labelsHidden()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "brain").font(.system(size: 11, weight: .semibold))
-                    Text(Orchestrator.effortTitle(orchestrator.effort)).font(.system(size: 12.5, weight: .medium))
-                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.6)
-                }
-                .foregroundStyle(AppAppearance.secondary)
-                .padding(.horizontal, 12).frame(height: 30)
-                .background(AppAppearance.raised.opacity(0.6), in: Capsule())
-            }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-            .help("How hard the orchestrator thinks. Higher is more careful and slower; applies from your next message.")
-            settingsMenu(orchestrator)
-            if tab == .conversation && !empty && !orchestrator.running && orchestrator.viewing == nil {
-                PillButton(title: "New conversation", symbol: "square.and.pencil") { orchestrator.newConversation() }
-            }
-        }
-        .padding(.horizontal, 28).padding(.top, 18).padding(.bottom, 10)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            HStack(spacing: 4) {
-                ForEach(OrchestratorTab.allCases) { item in
-                    Button { tab = item } label: {
-                        Text(item.rawValue).font(.system(size: 12.5, weight: tab == item ? .semibold : .regular))
-                            .foregroundStyle(tab == item ? AppAppearance.text : AppAppearance.secondary)
-                            .padding(.horizontal, 12).frame(height: 26)
-                            .background(tab == item ? AppAppearance.raised.opacity(0.7) : .clear, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 28).padding(.bottom, 10)
-        }
-    }
-
-    /// Earlier days' conversations and whether it may read notes.
-    private func settingsMenu(_ orchestrator: OrchestratorStore) -> some View {
-        Menu {
-            let earlier = orchestrator.earlierSessions
-            if !earlier.isEmpty {
-                Section("Earlier conversations") {
-                    ForEach(earlier.prefix(30)) { session in
-                        Button(OrchestratorSessions.title(day: session.day) + (session.startedAt.map { ", started " + $0.formatted(date: .omitted, time: .shortened) } ?? "")) { tab = .conversation; Task { await orchestrator.show(session) } }
-                    }
-                }
-            }
-            Section("Settings") {
-                Toggle("Let it read my notes", isOn: Bindable(orchestrator).notesAccess)
-            }
-        } label: {
-            Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(AppAppearance.secondary)
-                .frame(width: 30, height: 30).background(AppAppearance.raised.opacity(0.6), in: Circle())
-        }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-        .disabled(orchestrator.running)
-        .help("Earlier days' conversations, and whether the orchestrator may read your notes")
-    }
-
-    private var status: String {
-        let counts = store.homeSummary.counts
-        let machines = 1 + store.remoteHosts.filter(\.enabled).count
-        var parts = ["Ready", "watching \(machines == 1 ? "this Mac" : "\(machines) machines")", "\(counts.running) running"]
-        if counts.waiting > 0 { parts.append("\(counts.waiting) need you") }
-        return parts.joined(separator: " · ")
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 18) {
-            Spacer(minLength: 20)
-            OrchestratorAvatar(size: 76)
-            VStack(spacing: 8) {
-                Text("What should we get done?").font(.system(size: 26, weight: .bold, design: .rounded))
-                Text("I see every Codex and Claude chat on your machines and read them when I need detail. I can draft replies and new chats for you to send. Ask what needs you, where a project stands, or to get something going.")
-                    .font(.system(size: 13.5)).foregroundStyle(AppAppearance.secondary).multilineTextAlignment(.center).frame(maxWidth: 500)
-            }
-            let suggestions: [(String, String)] = [
-                ("hand.raised", "What needs me right now?"),
-                ("flag", "Where is \(store.mainProject?.name ?? "my main project") at?"),
-                ("sun.max", "Plan my day from my to-dos and chats"),
-                ("arrow.triangle.branch", "Which worktrees can I clean up?"),
-            ]
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                ForEach(suggestions, id: \.1) { item in SuggestionCard(symbol: item.0, text: item.1) { store.askOrchestrator(item.1) } }
-            }
-            .frame(maxWidth: 560).padding(.top, 6)
-            Spacer(minLength: 20)
-        }
-        .padding(.horizontal, 36)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func chatTitle(_ id: String) -> String? {
-        let key = id.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !key.isEmpty else { return nil }
-        return store.notchChatSessions.first { $0.id.lowercased() == key || $0.id.lowercased().hasSuffix(":" + key) }?.title
-    }
-}
-
 private struct SuggestionCard: View {
     var symbol: String
     var text: String
@@ -302,7 +453,7 @@ private struct SuggestionCard: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: symbol).font(.system(size: 13, weight: .medium)).foregroundStyle(OrchestratorStyle.ink).frame(width: 18)
+                Image(systemName: symbol).font(.system(size: 13, weight: .medium)).foregroundStyle(AppAppearance.secondary).frame(width: 18)
                 Text(text).font(.system(size: 13)).foregroundStyle(AppAppearance.text).multilineTextAlignment(.leading).lineLimit(2)
                 Spacer(minLength: 0)
             }
@@ -328,34 +479,33 @@ private struct TurnView<Proposals: View>: View {
         VStack(alignment: .leading, spacing: 14) {
             if let question = turn.question {
                 HStack {
-                    Spacer(minLength: 120)
+                    Spacer(minLength: 80)
                     VStack(alignment: .trailing, spacing: 4) {
-                        Text(question.text).font(.system(size: 14)).textSelection(.enabled)
-                            .padding(.horizontal, 15).padding(.vertical, 10)
-                            .background(OrchestratorStyle.tint.opacity(0.22), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        Text(question.text).font(.system(size: 13)).textSelection(.enabled)
+                            .padding(.horizontal, 14).padding(.vertical, 10)
+                            .background(AppAppearance.raised, in: UnevenRoundedRectangle(topLeadingRadius: 14, bottomLeadingRadius: 14,
+                                                                                          bottomTrailingRadius: 4, topTrailingRadius: 14, style: .continuous))
                         if let at = question.at {
                             Text(Calendar.current.isDateInToday(at) ? at.formatted(date: .omitted, time: .shortened) : at.formatted(date: .abbreviated, time: .shortened))
                                 .font(.system(size: 10.5)).foregroundStyle(AppAppearance.tertiary).padding(.trailing, 6)
                         }
                     }
+                    .frame(maxWidth: 560, alignment: .trailing)
                 }
             }
-            HStack(alignment: .top, spacing: 12) {
-                OrchestratorAvatar(size: 26, working: live)
-                VStack(alignment: .leading, spacing: 12) {
-                    if !turn.steps.isEmpty { StepsView(steps: turn.steps, live: live, title: title) }
-                    if let answer = turn.answer {
-                        MarkdownBlock(text: answer.text, size: 14.5)
-                    } else if live && !stepRunning {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text(activity ?? "Thinking…").font(.system(size: 13)).foregroundStyle(AppAppearance.tertiary)
-                        }.padding(.top, 3)
-                    }
-                    proposals()
+            VStack(alignment: .leading, spacing: 10) {
+                if !turn.steps.isEmpty { StepsView(steps: turn.steps, live: live, title: title) }
+                if let answer = turn.answer {
+                    MarkdownBlock(text: answer.text, size: 13.5)
+                } else if live && !stepRunning {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(activity ?? "Thinking…").font(.system(size: 13)).foregroundStyle(AppAppearance.tertiary)
+                    }.padding(.top, 3)
                 }
-                .padding(.top, 2)
+                proposals()
             }
+            .frame(maxWidth: 640, alignment: .leading)
         }
     }
 }
@@ -374,7 +524,7 @@ private struct StepsView: View {
                     HStack(spacing: -5) {
                         ForEach(Array(tools.prefix(4).enumerated()), id: \.offset) { _, step in
                             Image(systemName: Self.describe(step, title: title).symbol).font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(OrchestratorStyle.ink).frame(width: 20, height: 20)
+                                .foregroundStyle(AppAppearance.secondary).frame(width: 20, height: 20)
                                 .background(Circle().fill(AppAppearance.surface)).overlay(Circle().strokeBorder(AppAppearance.separator))
                         }
                     }
@@ -392,7 +542,7 @@ private struct StepsView: View {
                 }
                 .padding(.leading, 9).padding(.top, 10)
                 .overlay(alignment: .leading) {
-                    Rectangle().fill(OrchestratorStyle.tint.opacity(0.5)).frame(width: 1.5).padding(.top, 12).padding(.bottom, 4)
+                    Rectangle().fill(AppAppearance.hairline).frame(width: 1.5).padding(.top, 12).padding(.bottom, 4)
                 }
             }
         }
@@ -450,7 +600,7 @@ private struct StepRow: View {
                 Button { if step.output?.isEmpty == false { withAnimation(.easeOut(duration: 0.15)) { showOutput.toggle() } } } label: {
                     HStack(spacing: 8) {
                         Circle().fill(AppAppearance.background).frame(width: 9, height: 9)
-                            .overlay(Circle().strokeBorder(OrchestratorStyle.ink.opacity(0.7), lineWidth: 1.5))
+                            .overlay(Circle().strokeBorder(AppAppearance.tertiary, lineWidth: 1.5))
                             .offset(x: -4)
                         if live && step.output == nil {
                             ProgressView().controlSize(.mini).frame(width: 14)
@@ -477,153 +627,3 @@ private struct StepRow: View {
     }
 }
 
-// MARK: Agents panel
-
-/// The agents the orchestrator oversees: chats it started, then everything that needs you, is
-/// working or has a result, with their subagents. Live from Burro's monitoring.
-struct OrchestratorAgentsPanel: View {
-    @Bindable var store: AppStore
-    var body: some View {
-        let sessions = unique(store.notchChatSessions)
-        let roots = sessions.filter { $0.isSubagent != true }
-        let started = store.orchestrator.startedChatIDs.compactMap { id in roots.first { $0.id == id || $0.id.hasSuffix(":" + id) } }
-        let startedIDs = Set(started.map(\.id))
-        let rest = roots.filter { !startedIDs.contains($0.id) }
-        let needs = rest.filter { $0.state == .waiting && $0.remote?.stale != true }
-        let working = rest.filter { $0.state == .working || $0.state == .scheduled }
-        let unread = rest.filter(\.isDone)
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Agents").font(.system(size: 18, weight: .bold, design: .rounded))
-                    Text("What the orchestrator is watching, live").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                }
-                machines
-                if !started.isEmpty { section("Started from its proposals", OrchestratorStyle.tint, started, sessions) }
-                if !needs.isEmpty { section("Needs you", AppAppearance.amber, needs, sessions) }
-                if !working.isEmpty { section("Working", AppAppearance.green, working, sessions) }
-                if !unread.isEmpty { section("Ready to read", AppAppearance.blue, unread, sessions) }
-                if started.isEmpty && needs.isEmpty && working.isEmpty && unread.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "moon.zzz").font(.system(size: 22)).foregroundStyle(AppAppearance.tertiary)
-                        Text("All quiet. Nothing is running on your machines.").font(.system(size: 12.5)).foregroundStyle(AppAppearance.tertiary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity).padding(.vertical, 30)
-                }
-            }
-            .padding(.horizontal, 18).padding(.vertical, 20)
-        }
-        .background(AppAppearance.raised.opacity(0.22))
-    }
-
-    private var machines: some View {
-        VStack(spacing: 6) {
-            ForEach(store.homeSummary.machines) { machine in
-                HStack(spacing: 8) {
-                    Circle().fill(color(machine.connection)).frame(width: 7, height: 7)
-                    Text(machine.name).font(.system(size: 12.5, weight: .medium)).lineLimit(1)
-                    Spacer(minLength: 6)
-                    if machine.counts.running > 0 {
-                        Label("\(machine.counts.running)", systemImage: "waveform.path").font(.system(size: 11.5, weight: .medium)).monospacedDigit()
-                            .foregroundStyle(AppAppearance.green)
-                    }
-                    if machine.counts.waiting > 0 {
-                        Label("\(machine.counts.waiting)", systemImage: "hand.raised").font(.system(size: 11.5, weight: .medium)).monospacedDigit()
-                            .foregroundStyle(AppAppearance.amber)
-                    }
-                    if machine.counts.running + machine.counts.waiting == 0 {
-                        Text(machine.connection == .offline ? "Offline" : "Quiet").font(.system(size: 11.5)).foregroundStyle(AppAppearance.tertiary)
-                    }
-                }
-                .padding(.horizontal, 12).frame(height: 34)
-                .background(AppAppearance.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(AppAppearance.separator))
-            }
-        }
-    }
-
-    private func section(_ title: String, _ color: Color, _ chats: [AgentSession], _ all: [AgentSession]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Circle().fill(color).frame(width: 6, height: 6)
-                Text(title.uppercased()).font(.system(size: 10.5, weight: .semibold)).tracking(0.7)
-                Text("\(chats.count)").font(.system(size: 10.5)).monospacedDigit().opacity(0.6)
-            }
-            .foregroundStyle(AppAppearance.tertiary).padding(.leading, 4).padding(.bottom, 4)
-            ForEach(chats.sorted { $0.updatedAt > $1.updatedAt }) { chat in
-                AgentPanelRow(session: chat, place: ChatsModel.place(chat, store: store), subagents: subagents(of: chat, in: all),
-                              open: { store.showChat(chat) },
-                              ask: { store.orchestrator.draft = "What's the latest on “\(chat.title)” (\(chat.remote?.hostName ?? "This Mac"))?" })
-            }
-        }
-    }
-
-    private func subagents(of chat: AgentSession, in all: [AgentSession]) -> [AgentSession] {
-        all.filter { child in
-            guard child.isSubagent == true, let parent = child.parentSessionID else { return false }
-            return parent == chat.id || chat.id.hasSuffix(":" + parent) || parent.hasSuffix(chat.id)
-        }
-        .sorted { ($0.state == .working ? 0 : 1, $1.updatedAt) < ($1.state == .working ? 0 : 1, $0.updatedAt) }
-    }
-    private func unique(_ sessions: [AgentSession]) -> [AgentSession] {
-        var seen = Set<String>()
-        return sessions.filter { seen.insert($0.id).inserted }
-    }
-    private func color(_ connection: HomeMachine.Connection) -> Color {
-        switch connection {
-        case .local, .online: AppAppearance.green
-        case .stale, .connecting: AppAppearance.amber
-        case .offline, .paused: AppAppearance.tertiary
-        }
-    }
-}
-
-private struct AgentPanelRow: View {
-    var session: AgentSession
-    var place: String
-    var subagents: [AgentSession]
-    var open: () -> Void
-    var ask: () -> Void
-    @State private var hovering = false
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 10) {
-                AgentAvatar(session: session, active: hovering, working: session.state == .working, size: 26)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(1).foregroundStyle(AppAppearance.text)
-                    Text(place).font(.system(size: 11)).lineLimit(1).foregroundStyle(AppAppearance.tertiary)
-                }
-                Spacer(minLength: 4)
-                if hovering {
-                    Button(action: ask) {
-                        Image(systemName: "sparkles").font(.system(size: 10, weight: .semibold)).foregroundStyle(OrchestratorStyle.onGold)
-                            .frame(width: 22, height: 22).background(Circle().fill(OrchestratorStyle.gradient))
-                    }
-                    .buttonStyle(.plain).help("Ask the orchestrator about this chat")
-                } else {
-                    Text(HomeFormat.ago(session.updatedAt)).font(.system(size: 10.5)).monospacedDigit().foregroundStyle(AppAppearance.tertiary)
-                }
-            }
-            ForEach(subagents.prefix(4)) { child in
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.turn.down.right").font(.system(size: 8.5, weight: .semibold)).foregroundStyle(AppAppearance.tertiary)
-                    Circle().fill(child.state == .working ? AppAppearance.green : AppAppearance.tertiary.opacity(0.5)).frame(width: 5, height: 5)
-                    Text(child.title).font(.system(size: 11.5)).lineLimit(1).foregroundStyle(AppAppearance.secondary)
-                    Spacer(minLength: 4)
-                    Text(child.state == .working ? "working" : "idle").font(.system(size: 10.5)).foregroundStyle(AppAppearance.tertiary)
-                }
-                .padding(.leading, 40)
-            }
-            if subagents.count > 4 {
-                Text("+\(subagents.count - 4) more subagents").font(.system(size: 10.5)).foregroundStyle(AppAppearance.tertiary).padding(.leading, 54)
-            }
-        }
-        .padding(.horizontal, 8).padding(.vertical, 7)
-        .background(hovering ? AppAppearance.surface : .clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .contentShape(Rectangle())
-        .onTapGesture(perform: open)
-        .onHover { hovering = $0 }
-        .help("Open this chat")
-    }
-}

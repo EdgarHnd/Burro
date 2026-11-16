@@ -16,7 +16,8 @@
 # status, state done/failed/stopped); those don't count as open.
 # Claude's output goes to a private temp file, never a pipe, with stdin /dev/null and its own session:
 # a Claude daemon that `--bg` starts can't hold this script (or the SSH channel) open.
-# Prints {"ok", "output"|"error"} as JSON. Nothing else is accepted.
+# Prints {"ok", "output"|"error"} as JSON (a resume that ran but didn't finish in time adds
+# "code": "notConfirmed"). Nothing else is accepted.
 import base64, json, os, re, shutil, subprocess, sys, tempfile, time
 
 UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -141,7 +142,7 @@ def problem(row):
         handle = str(row.get("id", ""))
         hint = (" (claude attach " + handle + ")") if HANDLE.match(handle) else ""
         return "This chat is still open as a background session on this machine. Attach to it there to reply" + hint + "."
-    return "This chat is open in Claude Code (a terminal or the Claude app). Reply there: a reply from Burro would start a separate copy."
+    return "A reply from Burro would start a separate copy, so reply in the Claude app or terminal that has this chat open."
 
 def main():
     req = json.loads(base64.b64decode(REQUEST_B64))  # noqa: F821 (prepended by Burro)
@@ -201,7 +202,8 @@ def main():
     if check is not None: done(True, output="")
     code, output = run([claude] + args, env, folder, RESUME, keep=2000)
     if code is None:
-        done(False, error="Claude didn't start in time.")
+        # It ran and may have taken the message: Burro reports it as not confirmed, never "not sent".
+        done(False, error="Claude didn't finish continuing the chat in time.", code="notConfirmed")
     if code != 0:
         lines = [l for l in output.splitlines() if l.strip()]
         reason = "Claude didn't continue: " + (lines[-1] if lines else "unknown error")

@@ -79,10 +79,18 @@ final class PendingLaunchTests: XCTestCase {
 
     // MARK: Chat list, open target, palette
 
-    func testPlaceTagsShowOnlyWhereTheyChange() {
-        XCTAssertEqual(ChatListPresentation.showsPlace([]), [])
-        XCTAssertEqual(ChatListPresentation.showsPlace(["This Mac · a", "This Mac · a", "Studio · a", "This Mac · a", "This Mac · a"]),
-                       [true, false, true, true, false])
+    func testPreviewIsPlainText() {
+        XCTAssertEqual(ChatListPresentation.preview("The [redesign session](#local_4f35f387-59ab) is merged."), "The redesign session is merged.")
+        XCTAssertEqual(ChatListPresentation.preview("The [redesign session](#local_4f35f387-59…"), "The redesign session",
+                       "A link the scan cut off keeps its text")
+        XCTAssertEqual(ChatListPresentation.preview("**Done**: `swift test` passes __now__."), "Done: swift test passes now.")
+        XCTAssertEqual(ChatListPresentation.preview("## Summary\nmore"), "Summary")
+        XCTAssertEqual(ChatListPresentation.preview("> - Merged *both* PRs"), "Merged both PRs")
+        XCTAssertEqual(ChatListPresentation.preview("1. Ran the tests"), "Ran the tests")
+        XCTAssertEqual(ChatListPresentation.preview("- [x] Shipped 2.2.24"), "Shipped 2.2.24")
+        XCTAssertEqual(ChatListPresentation.preview("![shot](/tmp/a.png) attached"), "shot attached")
+        XCTAssertEqual(ChatListPresentation.preview("snake_case_name and 3 * 4 = 12"), "snake_case_name and 3 * 4 = 12", "Underscores and maths inside text stay")
+        XCTAssertNil(ChatListPresentation.preview("**  **\n`` "))
     }
 
     func testPreviewIsTheFirstLineCollapsedAndShortened() {

@@ -1,5 +1,6 @@
-// Today's to-dos on Home: tick, type to add, double-click to edit; the context menu can open the
-// New chat sheet prefilled with a to-do (it never starts the chat by itself). Shared with Maurice through
+// Today's to-dos on Home: tick, type to add, double-click to edit; hovering an open to-do shows
+// "Start chat" (also in its context menu), which opens the New chat sheet prefilled with it (it
+// never starts the chat by itself). Shared with Maurice through
 // Convex when sync is set up; otherwise kept on this Mac until it is.
 import SwiftUI
 import BurroCore
@@ -37,8 +38,8 @@ struct HomeTodayCard: View {
             }
             syncFooter
         }
-        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
+        .padding(.horizontal, 16).padding(.vertical, 14).frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(HomeCardSurface())
     }
 
     private func row(_ item: TodoItem) -> some View {
@@ -148,6 +149,15 @@ private struct HomeTodoRow: View {
         .padding(.vertical, 5).padding(.horizontal, 6)
         .background(hovering ? AppAppearance.hover : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .padding(.horizontal, -6)
+        // On hover, "Start chat" sits over the end of the row instead of taking room from the text.
+        .overlay(alignment: .trailing) {
+            if let startChat, hovering, !item.done, !editing {
+                Button("Start chat", action: startChat)
+                    .buttonStyle(HomeButtonStyle(weight: .secondary, compact: true))
+                    .padding(.trailing, 16)
+                    .help("Open the New chat sheet with this to-do as the prompt")
+            }
+        }
         .onHover { hovering = $0 }
         .contextMenu {
             Button(item.done ? "Mark Not Done" : "Mark Done", action: toggle)
@@ -158,44 +168,6 @@ private struct HomeTodoRow: View {
             }
             Divider()
             Button("Delete", role: .destructive, action: remove)
-        }
-    }
-}
-
-/// Settings → To-dos: connect Burro to Maurice's Convex backend.
-struct TodoSyncSection: View {
-    @Bindable var todos: TodoStore
-    @State private var url = ""
-    @State private var token = ""
-    @State private var working = false
-    var body: some View {
-        Section("To-dos") {
-            if let config = todos.config {
-                LabeledContent("Synced with", value: config.url.host ?? "Convex")
-                HStack {
-                    Button("Sync Now") { todos.sync() }
-                    Button("Disconnect", role: .destructive) { todos.disconnect() }
-                }
-            } else {
-                Button(working ? "Connecting…" : "Import from Maurice") {
-                    working = true
-                    Task { _ = await todos.importFromMaurice(); working = false }
-                }.disabled(working)
-                Text("Reads CONVEX_URL and EDGAR_API_TOKEN from ~/Dev/maurice-app/Config/Secrets.xcconfig once, checks them, and stores them in your Keychain.")
-                    .font(.caption).foregroundStyle(.secondary)
-                DisclosureGroup("Enter manually") {
-                    TextField("Deployment URL", text: $url, prompt: Text("https://example.convex.cloud"))
-                    SecureField("Owner token", text: $token)
-                    Button("Connect") {
-                        guard let valid = ConvexConfig.validURL(url) else { todos.message = "Use your https://….convex.cloud URL."; return }
-                        working = true
-                        Task { if await todos.connect(ConvexConfig(url: valid, token: token)) { token = "" }; working = false }
-                    }.disabled(working || url.isEmpty || token.count < 16)
-                }
-            }
-            if let message = todos.message { Text(message).font(.caption).foregroundStyle(AppAppearance.amber) }
-            Text("To-dos live in Maurice's Convex backend (the todos table) so the Maurice app can show them. Without sync they stay on this Mac and upload once you connect.")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }

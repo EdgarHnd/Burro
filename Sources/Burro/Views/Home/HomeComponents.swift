@@ -1,4 +1,5 @@
-// Quiet building blocks for Burro Home: cards, chips, tiles and the agent dock.
+// Quiet building blocks for Burro Home: cards, chips and tiles. Token counts read "500K", "1.2M"
+// in every language (`TokenCount`).
 import SwiftUI
 import BurroCore
 
@@ -18,7 +19,8 @@ enum HomeStyle {
 }
 
 enum HomeFormat {
-    static func tokens(_ value: Double) -> String { value.formatted(.number.notation(.compactName).precision(.fractionLength(0...1))) }
+    /// "500K", "1.2M" in every language (`TokenCount`).
+    static func tokens(_ value: Double) -> String { TokenCount.compact(value) }
     static func money(_ value: Double) -> String { value.formatted(.currency(code: "USD").precision(.fractionLength(0))) }
     static func ago(_ date: Date, now: Date = .now) -> String {
         let seconds = max(0, now.timeIntervalSince(date))
@@ -318,106 +320,5 @@ struct HomeMacTile: View {
             }
             HealthBar(fraction: fraction, level: level)
         }
-    }
-}
-
-// MARK: Dock
-
-/// Floating strip of live agents in three groups (running, needs you in amber, to read in blue;
-/// click an avatar to open the chat), New chat and a few tools.
-struct HomeDock: View {
-    var store: AppStore
-    var summary: HomeSummary
-    var notch: NotchController
-    var body: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 14) {
-                if summary.running.isEmpty && summary.needsYou.isEmpty && summary.unread.isEmpty {
-                    BurroMark(active: false, working: false, tint: AppAppearance.tertiary).frame(width: 18, height: 18)
-                    Text(store.didCheckAgents ? "No agents running" : "Checking…").font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(AppAppearance.secondary)
-                } else {
-                    group(summary.running, symbol: "arrow.triangle.2.circlepath", color: AppAppearance.green, label: "Running")
-                    group(summary.needsYou, symbol: "hand.raised", color: AppAppearance.amber, label: "Needs you")
-                    group(summary.unread, symbol: "tray", color: AppAppearance.blue, label: "To read")
-                }
-            }
-            .padding(.horizontal, 14).frame(height: 48)
-            .modifier(FloatingSurface())
-            Spacer(minLength: 0)
-            Button { store.newChatPresented = true } label: {
-                Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 48, height: 48)
-                    .background { Circle().fill(Color(white: 0.12)).shadow(color: .black.opacity(0.25), radius: 10, y: 4) }
-                    .overlay(Circle().strokeBorder(.white.opacity(0.12)))
-            }.buttonStyle(PressableStyle()).help("New chat (⌘N)").accessibilityLabel("New chat")
-            HStack(spacing: 2) {
-                action("rectangle.topthird.inset.filled", "Show agent notch (⇧⌘B)") { notch.show() }
-                action(AppPage.today.icon, AppPage.today.help) { store.page = .today }
-                action("arrow.clockwise", "Refresh Home (⌘R)") { Task { await store.refreshCurrentPage() } }
-                SettingsLink { Image(systemName: "slider.horizontal.3").frame(width: 34, height: 34).contentShape(Rectangle()) }
-                    .buttonStyle(HomeDockButtonStyle()).help("Settings").accessibilityLabel("Settings")
-            }
-            .padding(.horizontal, 6).frame(height: 48)
-            .modifier(FloatingSurface())
-        }
-    }
-    @ViewBuilder private func group(_ sessions: [AgentSession], symbol: String, color: Color, label: String) -> some View {
-        if !sessions.isEmpty {
-            HStack(spacing: 8) {
-                Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).foregroundStyle(color)
-                    .help("\(sessions.count) \(label.lowercased())")
-                HStack(spacing: -7) {
-                    ForEach(sessions.prefix(6)) { session in
-                        Button { store.showChat(session) } label: {
-                            AgentAvatar(session: session, active: true, working: session.state == .working, size: 26)
-                                .padding(2).background(AppAppearance.surface, in: Circle())
-                                .overlay(Circle().strokeBorder(AppAppearance.separator))
-                        }.buttonStyle(.plain).help("\(label): \(session.title)")
-                    }
-                }
-                if sessions.count > 6 {
-                    Text("+\(sessions.count - 6)").font(.system(size: 11, weight: .semibold)).monospacedDigit().foregroundStyle(AppAppearance.secondary)
-                }
-            }
-        }
-    }
-    private func action(_ symbol: String, _ help: String, _ perform: @escaping () -> Void) -> some View {
-        Button(action: perform) { Image(systemName: symbol).frame(width: 34, height: 34).contentShape(Rectangle()) }
-            .buttonStyle(HomeDockButtonStyle()).help(help).accessibilityLabel(help)
-    }
-}
-
-private struct HomeDockButtonStyle: ButtonStyle {
-    @State private var hovering = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(hovering ? AppAppearance.text : AppAppearance.secondary)
-            .background(hovering ? AppAppearance.hover : .clear, in: Circle())
-            .scaleEffect(configuration.isPressed ? 0.92 : 1)
-            .onHover { hovering = $0 }
-    }
-}
-
-/// Liquid Glass on macOS 26 builds; a frosted material with a hairline elsewhere.
-struct FloatingSurface: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder func body(content: Content) -> some View {
-        #if compiler(>=6.2)
-        if #available(macOS 26.0, *), !reduceTransparency {
-            content.glassEffect(.regular, in: Capsule())
-        } else { frosted(content) }
-        #else
-        frosted(content)
-        #endif
-    }
-    private func frosted(_ content: Content) -> some View {
-        content
-            .background {
-                Capsule().fill(reduceTransparency ? AnyShapeStyle(AppAppearance.surface) : AnyShapeStyle(.regularMaterial))
-                    .shadow(color: AppAppearance.shadow, radius: 16, y: 6)
-            }
-            .overlay(Capsule().strokeBorder(AppAppearance.separator))
     }
 }

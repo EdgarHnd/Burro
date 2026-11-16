@@ -1,8 +1,12 @@
-// The chat page's side panel, like the Claude app's: where the chat works, which model and effort,
-// how full its context is, what it has changed, and subagents still running. Changes come from a
-// read-only `git diff --shortstat` against where the branch left its base, on this Mac only. The
-// Folder row names the worktree's branch with its uncommitted/unpushed counts, and offers Open
-// worktree (Burro's Worktrees page on it) and Review cleanup… (the usual confirmation sheet).
+// The chat page's side panel: where the chat works (the worktree's branch with its uncommitted and
+// unpushed counts, Open worktree for Burro's Worktrees page on it and Review cleanup… for the usual
+// confirmation sheet), what it has changed file by file, how full its context is, what it has cost
+// so far at API list prices, when it started, and subagents still running. Changes come from a
+// read-only `git diff --numstat` against where the branch left its base (`ChatChanges`) and cost
+// from the chat's transcript (`ChatCost`), both on this Mac only and off the main thread. Both are
+// cached per folder / chat in `ChatDetailsCache`, so reopening a chat shows them at once, and read
+// again when the panel appears and as the chat writes (at most once a minute) — the panel only
+// exists while the Chats page shows this chat. Layout: `ChatInspectorPanel`.
 import SwiftUI
 import BurroCore
 
@@ -10,8 +14,7 @@ struct ChatInspector: View {
     var store: AppStore
     var session: AgentSession
     var transcript: ChatTranscript?
-    @State private var diff: DiffStat?
-    @State private var diffChecked = false
+    private var cache: ChatDetailsCache { .shared }
 
     struct DiffStat: Equatable, Sendable {
         var files = 0, added = 0, removed = 0
@@ -19,61 +22,35 @@ struct ChatInspector: View {
 
     var body: some View {
         let tree = worktree
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                row("Folder") {
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text(URL(fileURLWithPath: transcript?.folder ?? session.cwd).lastPathComponent).lineLimit(1).truncationMode(.middle)
-                        if let tree, !tree.branch.isEmpty { Text(tree.branch).font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).lineLimit(1) }
-                        if let tree, let pending = Self.pending(tree.facts) {
-                            Text(pending).font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
-                        }
-                        if let tree {
-                            HStack(spacing: 10) {
-                                Button("Open worktree") { openWorktree(tree) }
-                                if !tree.isPrimary { Button("Review cleanup…") { store.reviewCleanup([tree]) }.disabled(store.cleaningWorktree) }
-                            }
-                            .buttonStyle(.plain).font(.system(size: 11.5, weight: .medium)).foregroundStyle(AppAppearance.blue).padding(.top, 3)
-                        }
-                    }
-                    .help(transcript?.folder ?? session.cwd)
-                }
-                row("Machine") { Text(session.remote?.hostName ?? "This Mac").lineLimit(1) }
-                row("Model") {
-                    Text([AquariumFish.modelName(session.model) ?? (session.provider == .codex ? "Codex" : "Claude Code"),
-                          session.effort.map(Self.effortTitle)].compactMap { $0 }.joined(separator: " · ")).lineLimit(1)
-                }
-                if let tokens = transcript?.contextTokens, tokens > 0 { contextRow(tokens: tokens, window: transcript?.contextWindow) }
-                changesRow(tree)
-                if let started = session.startedAt { row("Started") { Text(started, style: .relative) + Text(" ago") } }
-                let tasks = runningTasks
-                if !tasks.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Background tasks").font(.system(size: 12.5, weight: .medium)).foregroundStyle(AppAppearance.secondary)
-                        ForEach(tasks) { task in
-                            HStack(spacing: 8) {
-                                Image(systemName: "person.2").font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
-                                Text(task.note ?? task.text).font(.system(size: 12.5)).lineLimit(2)
-                                Spacer(minLength: 4)
-                                if let at = task.at {
-                                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                                        Text(Self.duration(context.date.timeIntervalSince(at))).font(.system(size: 11.5)).monospacedDigit()
-                                            .foregroundStyle(AppAppearance.tertiary)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 18).padding(.vertical, 14)
-                }
+        let folderPath = tree?.path ?? transcript?.folder ?? session.cwd
+        ChatInspectorPanel(values: values(tree: tree, folderPath: folderPath), cleaning: store.cleaningWorktree,
+                           openWorktree: { if let tree { openWorktree(tree) } },
+                           reviewCleanup: { if let tree { store.reviewCleanup([tree]) } })
+            // Again as the chat writes, at most once a minute.
+            .task(id: "\(session.id)|\(folderPath)|\(Int((transcript?.modified?.timeIntervalSince1970 ?? 0) / 60))") {
+                guard session.remote == nil else { return }
+                await cache.refreshChanges(path: folderPath, base: tree?.facts.base)
+                await cache.refreshCost(session, profiles: store.usage.preferences.profiles)
             }
+    }
+
+    private func values(tree: Worktree?, folderPath: String) -> ChatInspectorValues {
+        let folder = transcript?.folder ?? session.cwd
+        let changes: ChatInspectorValues.Changes
+        if let host = session.remote?.hostName {
+            changes = .remote(host)
+        } else if let known = cache.changes[folderPath] {
+            changes = known.map { .files($0) } ?? .notGit
+        } else {
+            changes = .loading
         }
-        .frame(width: 270)
-        .background(AppAppearance.surface.opacity(0.35))
-        .overlay(alignment: .leading) { Rectangle().fill(AppAppearance.separator).frame(width: 1) }
-        // Again as the chat writes, at most once a minute.
-        .task(id: "\(session.cwd)|\(Int((transcript?.modified?.timeIntervalSince1970 ?? 0) / 60))") { await loadDiff(tree) }
-        .onChange(of: session.id) { _, _ in diff = nil; diffChecked = false }
+        let cost = cache.cost[session.id]
+        return ChatInspectorValues(
+            folder: .init(name: URL(fileURLWithPath: folder).lastPathComponent, path: folder,
+                          branch: tree.flatMap { $0.branch.isEmpty ? nil : $0.branch }, pending: tree.flatMap { Self.pending($0.facts) },
+                          worktree: tree != nil, primary: tree?.isPrimary ?? true),
+            changes: changes, contextTokens: transcript?.contextTokens, contextWindow: transcript?.contextWindow,
+            cost: cost ?? nil, costKnown: session.remote != nil || cost != nil, started: session.startedAt, tasks: runningTasks)
     }
 
     /// The scanned worktree holding this chat's folder (the deepest match), on this Mac.
@@ -86,56 +63,7 @@ struct ChatInspector: View {
     /// Subagents it started that haven't reported back, while it works.
     private var runningTasks: [ChatMessage] {
         guard session.state == .working || session.state == .waiting, let messages = transcript?.messages else { return [] }
-        return messages.filter { $0.kind == .tool && StepKind($0) == .delegated && $0.output == nil }.suffix(6)
-    }
-
-    private func row<Value: View>(_ label: String, @ViewBuilder value: () -> Value) -> some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(label).font(.system(size: 12.5, weight: .medium)).foregroundStyle(AppAppearance.secondary)
-                Spacer(minLength: 8)
-                value().font(.system(size: 12.5)).foregroundStyle(AppAppearance.text).multilineTextAlignment(.trailing)
-            }
-            .padding(.horizontal, 18).padding(.vertical, 13)
-            Rectangle().fill(AppAppearance.separator).frame(height: 1).padding(.horizontal, 18)
-        }
-    }
-
-    private func contextRow(tokens: Int, window: Int?) -> some View {
-        row("Context") {
-            HStack(spacing: 8) {
-                if let window, window > 0 {
-                    let share = min(1, Double(tokens) / Double(window))
-                    Text("\(Int((share * 100).rounded()))%").monospacedDigit()
-                    Capsule().fill(AppAppearance.raised).frame(width: 46, height: 5)
-                        .overlay(alignment: .leading) {
-                            Capsule().fill(share > 0.8 ? AppAppearance.amber : AppAppearance.blue).frame(width: max(4, 46 * share), height: 5)
-                        }
-                        .help("\(HomeFormat.tokens(Double(tokens))) of \(HomeFormat.tokens(Double(window))) tokens")
-                } else {
-                    Text("\(HomeFormat.tokens(Double(tokens))) tokens").monospacedDigit()
-                }
-            }
-        }
-    }
-
-    private func changesRow(_ tree: Worktree?) -> some View {
-        row("Changes") {
-            VStack(alignment: .trailing, spacing: 3) {
-                if let diff, diff.files > 0 {
-                    HStack(spacing: 6) {
-                        Text("+\(diff.added.formatted())").foregroundStyle(AppAppearance.green)
-                        Text("−\(diff.removed.formatted())").foregroundStyle(Color(red: 0.92, green: 0.36, blue: 0.36))
-                    }
-                    .monospacedDigit()
-                    Text("\(diff.files) file\(diff.files == 1 ? "" : "s")").font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
-                } else if session.remote != nil {
-                    Text("On \(session.remote?.hostName ?? "another machine")").foregroundStyle(AppAppearance.tertiary)
-                } else {
-                    Text(diff == nil && !diffChecked ? "…" : (diff == nil ? "Not a Git folder" : "None")).foregroundStyle(AppAppearance.tertiary)
-                }
-            }
-        }
+        return Array(messages.filter { $0.kind == .tool && StepKind($0) == .delegated && $0.output == nil }.suffix(6))
     }
 
     /// "3 uncommitted · 2 unpushed", or nil when both are zero.
@@ -151,31 +79,6 @@ struct ChatInspector: View {
         store.filter = .all
         store.page = .worktrees
         store.selection = tree.path
-    }
-
-    private func loadDiff(_ tree: Worktree?) async {
-        // A scanned worktree, or any local folder (a main checkout isn't always in the scan).
-        guard session.remote == nil else { diff = nil; diffChecked = true; return }
-        let path = tree?.path ?? transcript?.folder ?? session.cwd, base = tree?.facts.base
-        diff = await Task.detached(priority: .utility) { Self.diffStat(path: path, base: base) }.value
-        diffChecked = true
-    }
-
-    /// Lines changed since the branch left its base (committed or not), read-only. The base is the
-    /// scan's, or found the way the scan finds it (origin's HEAD, then origin/main, master, staging).
-    nonisolated static func diffStat(path: String, base: String?) -> DiffStat? {
-        let git = CommandRunner()
-        guard git.git(path, ["rev-parse", "--is-inside-work-tree"], timeout: 3).succeeded else { return nil }
-        let base = (base?.isEmpty == false ? base : nil) ?? GitReader().comparisonBase(path, override: nil)
-        var against = "HEAD"
-        if let base, !base.isEmpty, !base.hasPrefix("-") {
-            let merge = git.git(path, ["merge-base", base, "HEAD"], timeout: 5)
-            let commit = merge.output.trimmingCharacters(in: .whitespacesAndNewlines)
-            if merge.succeeded, commit.allSatisfy(\.isHexDigit), commit.count >= 7 { against = commit }
-        }
-        let result = git.git(path, ["diff", "--shortstat", against], timeout: 8)
-        guard result.succeeded else { return nil }
-        return parseShortstat(result.output)
     }
 
     /// " 12 files changed, 420 insertions(+), 33 deletions(-)"
@@ -202,5 +105,42 @@ struct ChatInspector: View {
         if total < 60 { return "\(total)s" }
         if total < 3600 { return "\(total / 60)m \(total % 60)s" }
         return "\(total / 3600)h \(total % 3600 / 60)m"
+    }
+}
+
+/// The details panel's slow facts, kept per folder (changes) and per chat (cost) for this run of
+/// Burro, at most 64 of each. One read per key at a time.
+@MainActor @Observable final class ChatDetailsCache {
+    static let shared = ChatDetailsCache()
+    /// nil value: not a Git folder (or git failed).
+    private(set) var changes: [String: ChatChangeList?] = [:]
+    /// nil value: can't be priced.
+    private(set) var cost: [String: Double?] = [:]
+    @ObservationIgnored private var reading: Set<String> = []
+
+    func refreshChanges(path: String, base: String?) async {
+        let key = "changes:" + path
+        guard reading.insert(key).inserted else { return }
+        defer { reading.remove(key) }
+        let list = await Task.detached(priority: .utility) { ChatChanges.read(path: path, base: base) }.value
+        if changes.count > 64 && changes[path] == nil { changes = [:] }
+        if changes[path] != .some(list) { changes[path] = .some(list) }
+    }
+
+    func refreshCost(_ session: AgentSession, profiles: [UsageProvider: String]) async {
+        guard session.remote == nil, let (provider, id) = ChatTranscripts.identity(of: session) else { return }
+        let key = "cost:" + session.id
+        guard reading.insert(key).inserted else { return }
+        defer { reading.remove(key) }
+        let kind: AgentProvider = provider == "codex" ? .codex : .claude
+        let profile = profiles[kind == .codex ? .codex : .claude]
+        let root = profile.map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(kind == .codex ? ".codex" : ".claude")
+        let started = session.startedAt ?? session.updatedAt
+        let dollars = await Task.detached(priority: .utility) {
+            ChatCost.Reader.shared.dollars(provider: kind, id: id, root: root, startedAt: started)
+        }.value
+        if cost.count > 64 && cost[session.id] == nil { cost = [:] }
+        if cost[session.id] != .some(dollars) { cost[session.id] = .some(dollars) }
     }
 }

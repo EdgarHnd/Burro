@@ -140,20 +140,6 @@ struct AppTheme: ViewModifier {
     }
 }
 
-struct ProviderBadge: View {
-    var symbol: String
-    var color: Color
-    var size: CGFloat = 28
-    var body: some View {
-        Image(systemName: symbol)
-            .font(.system(size: size * 0.48, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(color.opacity(0.85), in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous))
-            .accessibilityHidden(true)
-    }
-}
-
 struct AppEmptyState<Actions: View>: View {
     var title: String
     var symbol: String

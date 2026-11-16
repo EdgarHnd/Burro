@@ -10,7 +10,8 @@
 // can't be stopped from outside: the composer says so and offers to open them. An idle Claude
 // background session takes a reply: Send stops it and continues it (ClaudeContinue.swift), and
 // its help says so (`sendStopsFirst`). Triage drafts and Orchestrator reply cards send the same
-// way, and their help says so for every Claude chat (`cardSendHelp`).
+// way, and their help says so for every Claude chat (`cardSendHelp`). A sub-agent's plan keeps
+// only its Stop: no reply field, queue, steer or reply hand-off.
 import Foundation
 
 /// How a working chat can be stopped from Burro.
@@ -57,6 +58,14 @@ extension ChatReply {
     /// message already waits for this chat (never more than one).
     public static func composerPlan(_ session: AgentSession, host: RemoteHost?, check: ClaudeCheck?, setupProblem: String?,
                                     queued: Bool, hasURL: Bool) -> ComposerPlan {
+        // A sub-agent keeps only its Stop: never a reply field, queue, steer or hand-off to reply.
+        if session.isSubagent == true {
+            var parent = session
+            parent.isSubagent = false
+            var plan = ComposerPlan(reason: ChatReply.subagentReason)
+            plan.stop = composerPlan(parent, host: host, check: check, setupProblem: setupProblem, queued: queued, hasURL: hasURL).stop
+            return plan
+        }
         let open: ComposerPlan.Action? = hasURL ? .openInProvider : nil
         guard ChatTranscripts.identity(of: session) != nil else { return ComposerPlan(reason: "Burro can't reply to this kind of chat.", action: open) }
         if session.remote != nil && host == nil { return ComposerPlan(reason: "That machine isn't configured in Burro any more.") }
@@ -75,7 +84,7 @@ extension ChatReply {
                 return plan
             }
             if check?.open == true && check?.background == false {
-                var plan = ComposerPlan(reason: "Claude is working on this chat in the Claude app or a terminal. A reply from Burro would start a separate copy.")
+                var plan = ComposerPlan(reason: ChatReply.runsElsewhere, action: open)
                 plan.stop = .elsewhere
                 return plan
             }

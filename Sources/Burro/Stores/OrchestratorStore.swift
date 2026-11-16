@@ -6,6 +6,11 @@
 // turn; the turn in progress streams live. Replies and chats it proposes are kept as pending
 // actions until you send or discard each one; to-dos it adds or completes are applied at once
 // through the app's to-do store and can be undone. Every turn's cost goes to the runs log.
+// A Send whose outcome Burro can't confirm leaves its proposal unconfirmed; only "Send again"
+// (`beginSending(again:)`, after the card's confirmation) can send it once more. "Ask the
+// Orchestrator about this chat" prefills the question after anything already written
+// (`prefill(question:)`); Return in either composer (`submitFromReturn`) sends only text the owner
+// typed or changed, never an untouched prefill.
 import Foundation
 import Observation
 import BurroCore
@@ -41,6 +46,20 @@ import BurroCore
     /// Proposals being sent right now.
     private(set) var sendingActions: Set<String> = []
     var draft = ""
+    /// The field's text exactly as "Ask the Orchestrator about this chat" left it (nil when the
+    /// owner wrote it): Return doesn't send it untouched; only Ask does.
+    private(set) var draftPrefill: String?
+
+    /// Puts the question in the field, after anything already written there; never sends.
+    func prefill(question: String) {
+        draft = OrchestratorAskAbout.prefilled(existing: draft, question: question)
+        draftPrefill = draft
+    }
+    /// Return in either composer: sends only text the owner typed or changed.
+    func submitFromReturn() {
+        guard OrchestratorAskAbout.returnSends(draft: draft, prefilled: draftPrefill) else { return }
+        send(draft)
+    }
 
     /// Burro's current picture, written for the tool server before and during each turn.
     @ObservationIgnored var snapshot: () -> OrchestratorState? = { nil }
@@ -142,7 +161,7 @@ import BurroCore
         guard !prompt.isEmpty, !running else { return }
         guard let executable = ClaudeLaunch.executable() else { error = "Install Claude Code to use the orchestrator."; return }
         guard let server = Self.toolServer else { error = "This build of Burro is missing its orchestrator tools (burro-mcp)."; return }
-        draft = ""
+        draft = ""; draftPrefill = nil
         error = nil
         if viewing != nil { viewing = nil; history = [] }
         loadedDay = Self.today()
@@ -158,6 +177,10 @@ import BurroCore
     /// Render harnesses and tests only.
     func preview(history: [ChatMessage], live: [ChatMessage] = [], streaming: String = "", running: Bool = false) {
         self.history = history; self.live = live; self.streaming = streaming; self.running = running; loadedHistory = true
+    }
+    /// Render harnesses only: proposals, memory and today's runs to show without reading their files.
+    func preview(actions: [OrchestratorAction], memory: [OrchestratorMemoryEntry], runsToday: [OrchestratorRun]) {
+        self.actions = actions; self.memory = memory; self.runsToday = runsToday; recentRuns = runsToday.reversed()
     }
     #endif
 
@@ -302,10 +325,11 @@ import BurroCore
         reloadActions()
     }
 
-    /// Marks a proposal as going out; false when it's already sending, sent, expired or gone.
-    func beginSending(_ id: String) -> Bool {
+    /// Marks a proposal as going out; false when it's already sending, sent, expired, gone, or
+    /// unconfirmed without `again` (the owner's confirmed "Send again").
+    func beginSending(_ id: String, again: Bool = false) -> Bool {
         reloadActions()
-        guard let action = actions.first(where: { $0.id == id }), action.isWaiting(), !sendingActions.contains(id) else { return false }
+        guard let action = actions.first(where: { $0.id == id }), action.maySend(again: again), !sendingActions.contains(id) else { return false }
         sendingActions.insert(id)
         return true
     }
@@ -313,16 +337,9 @@ import BurroCore
     /// Records what Send did: the text that went, and the confirmation or the error.
     func finishSending(_ id: String, text: String, outcome: Result<(message: String, chatID: String?), Error>) {
         sendingActions.remove(id)
-        _ = try? actionStore.modify(id) { action in
-            action.text = text
-            switch outcome {
-            case .success(let sent):
-                action.status = .sent; action.result = sent.message; action.error = nil; action.sentAt = Date()
-                action.startedChatID = sent.chatID
-            case .failure(let failure):
-                action.error = (failure as? LocalizedError)?.errorDescription ?? failure.localizedDescription
-            }
-        }
+        // Sent; unconfirmed when it may have happened (terminal: no one-click Send again); else
+        // the error, with the state unchanged.
+        _ = try? actionStore.modify(id) { $0.recordSend(text: text, outcome: outcome) }
         reloadActions()
     }
 

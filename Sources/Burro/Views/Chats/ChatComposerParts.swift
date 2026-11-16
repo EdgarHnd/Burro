@@ -1,6 +1,5 @@
-// Pieces of the reply composer: the reason line that replaces the pickers when a plain reply
-// can't go (with its one action), the Stop button (■, ⌘.) or "Stop it in Claude", the Queue and
-// Steer now pills, the queued-message chip with Edit and Cancel, the queue's last notice, and the
+// Pieces of the reply composer: the reason line shown above the field when a reply can be typed
+// but not sent plainly (with its one action, whose title the unavailable bar shares), the queued-message chip with Edit and Cancel, the queue's last notice, and the
 // attachment chips. Layout and wording only; decisions come from `ComposerPlan` in BurroCore.
 import AppKit
 import SwiftUI
@@ -20,65 +19,17 @@ struct ComposerReasonLine: View {
                 .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 6)
             if let action {
-                Button(title(action)) { perform(action) }
+                Button(Self.title(action, agent: agent, machine: machine)) { perform(action) }
                     .buttonStyle(.plain).font(.system(size: 12, weight: .semibold)).foregroundStyle(AppAppearance.blue).fixedSize()
             }
         }
     }
-    private func title(_ action: ComposerPlan.Action) -> String {
+    static func title(_ action: ComposerPlan.Action, agent: String, machine: String?) -> String {
         switch action {
         case .openInProvider: "Open in \(agent)"
         case .attachInTerminal: "Attach in Terminal"
         case .attachOnMachine: "Attach on \(machine ?? "that machine")"
         case .queue: "Queue for when it's done"
-        }
-    }
-}
-
-/// A quiet capsule button for the composer's secondary actions.
-struct ComposerPill: View {
-    var title: String
-    var symbol: String?
-    var help: String
-    var enabled = true
-    var action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                if let symbol { Image(systemName: symbol).font(.system(size: 10.5, weight: .semibold)) }
-                Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1)
-            }
-            .foregroundStyle(enabled ? AppAppearance.text : AppAppearance.tertiary)
-            .padding(.horizontal, 10).frame(height: 28)
-            .background(AppAppearance.raised.opacity(enabled ? 0.9 : 0.4), in: Capsule())
-        }
-        .buttonStyle(.plain).disabled(!enabled).help(help).fixedSize()
-    }
-}
-
-/// ■ while the chat works (⌘.), or "Stop it in Claude" when only Claude can stop it.
-struct ComposerStopButton: View {
-    var stop: ChatStop
-    var stopping: Bool
-    var canOpen: Bool
-    var action: () -> Void
-    var body: some View {
-        if stop == .elsewhere {
-            ComposerPill(title: "Stop it in Claude", symbol: "arrow.up.right", help: "This chat runs in the Claude app or a terminal; only it can stop the chat",
-                         enabled: canOpen, action: action)
-        } else {
-            Button(action: action) {
-                Group {
-                    if stopping { ProgressView().controlSize(.small).tint(.white) }
-                    else { Image(systemName: "stop.fill").font(.system(size: 11, weight: .bold)) }
-                }
-                .foregroundStyle(.white).frame(width: 32, height: 32)
-                .background(Circle().fill(AppAppearance.text))
-            }
-            .buttonStyle(.plain).disabled(stopping)
-            .keyboardShortcut(".", modifiers: .command)
-            .help("Stop (⌘.). The conversation is kept.")
-            .accessibilityLabel("Stop")
         }
     }
 }
@@ -122,7 +73,7 @@ struct QueueNoticeLine: View {
                 Button("Edit", action: edit).buttonStyle(.plain).font(.system(size: 12, weight: .semibold)).foregroundStyle(AppAppearance.blue)
             }
             Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
-                .buttonStyle(.plain).foregroundStyle(AppAppearance.tertiary).help("Dismiss")
+                .buttonStyle(.plain).foregroundStyle(AppAppearance.tertiary).help("Dismiss").accessibilityLabel("Dismiss")
         }
     }
 }

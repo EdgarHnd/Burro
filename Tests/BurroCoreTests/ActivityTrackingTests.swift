@@ -642,12 +642,17 @@ final class ActivityTrackingTests: XCTestCase {
         let importer = "Sources/BurroInspect/DayflowImportCommand.swift"
         var files = ["Sources/BurroCore/Orchestrator.swift", "Sources/BurroCore/OrchestratorTools.swift",
                      "Sources/Burro/Stores/AppStore+Orchestrator.swift", "Sources/Burro/Stores/OrchestratorStore.swift",
-                     "Sources/BurroCore/RemoteAgentMonitor.swift", "Sources/BurroCore/UsageHTTP.swift", "Sources/BurroCore/ConvexClient.swift"]
+                     "Sources/BurroCore/RemoteAgentMonitor.swift", "Sources/BurroCore/UsageHTTP.swift", "Sources/BurroCore/ConvexClient.swift",
+                     // What the Orchestrator's model reads: its tools, triage and the Brief.
+                     "Sources/BurroCore/OrchestratorToolsMore.swift", "Sources/BurroCore/OrchestratorTriage.swift", "Sources/BurroCore/OrchestratorBrief.swift",
+                     "Sources/Burro/Stores/OrchestratorBriefStore.swift", "Sources/Burro/Stores/AppStore+Brief.swift"]
         for folder in ["Sources/BurroMCP", "Sources/BurroInspect", "Sources/BurroCore/Resources"] {
             files += try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(folder).path).map { "\(folder)/\($0)" }
         }
         XCTAssertTrue(files.contains(importer))
-        let markers = ["ActivityLog", "ActivitySpan", "ActivityDay", "ActivityKey", "ActivityTracker", "activityTracker", "Burro/Activity"]
+        // The tracked day and what is derived from it (agent time while you were away, the Today store holding both).
+        let markers = ["ActivityLog", "ActivitySpan", "ActivityDay", "ActivityKey", "ActivityTracker", "activityTracker", "Burro/Activity",
+                       "AgentAwayTime", "awayAgentTime", "TodayStore"]
         for file in files where file != importer {
             let text = try String(contentsOf: root.appendingPathComponent(file), encoding: .utf8)
             for marker in markers + ["DayflowImport.", "DayflowImport(", "readCards"] {
@@ -665,9 +670,10 @@ final class ActivityTrackingTests: XCTestCase {
             XCTAssertTrue(child.value is Int || child.value is [ActivityCategory: TimeInterval], "Report.\(child.label ?? "?") isn't a count")
         }
         let tracking = try ["ActivityPrivacy", "ActivityLog", "ActivityRecorder", "ActivityPresence", "ActivitySummary", "ActivityCategories", "ActivityTimeline",
-                            "ActivityTimelineLayout", "ActivityImport", "ActivityCoverage"].map {
+                            "ActivityTimelineLayout", "ActivityImport", "ActivityCoverage", "AgentAwayTime"].map {
             try String(contentsOf: root.appendingPathComponent("Sources/BurroCore/\($0).swift"), encoding: .utf8)
-        } + ["Stores/ActivityTracker", "Support/ActivitySampler", "Views/Today/TodayActivity", "Views/Today/TodayDayView", "Views/Home/HomeActivity"].map {
+        } + ["Stores/ActivityTracker", "Stores/TodayStore", "Support/ActivitySampler", "Views/Today/TodayActivity", "Views/Today/TodayDayView",
+             "Views/Home/HomeActivity"].map {
             try String(contentsOf: root.appendingPathComponent("Sources/Burro/\($0).swift"), encoding: .utf8)
         }
         for text in tracking {

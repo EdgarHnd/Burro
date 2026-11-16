@@ -1,7 +1,9 @@
-// Managing a chat from the Chats page: the header's ⋯ menu and the same items as a list row's
-// context menu (`chatRowMenu`). Rename (Codex: in Codex; Claude: a Burro-only title), Pin to top
+// Managing a chat from the Chats page: the header's ⋯ menu (which also has Open in Codex/Claude and
+// Refresh) and the same items as a list row's context menu (`chatRowMenu`). Rename (Codex: in Codex; Claude: a Burro-only title), Pin to top
 // (Burro-only), Mark as read here, Archive in Codex (asks first; Codex can unarchive) or Hide in
-// Burro for Claude. Provider calls run only on these clicks and report failures in an alert.
+// Burro for Claude. Provider calls run only on these clicks and report failures in an alert. The row's
+// context menu also leads with "Ask the Orchestrator about this chat", which only prefills the
+// Orchestrator's question and opens its page; the owner clicks Ask.
 // Also here: `marksChatSeen` (a chat open on the Chats page marks it seen in Burro while Burro's
 // window is key and Burro is the active app, and again when it becomes key) and
 // `opensChatInBurro` (a worktree's agent row opens its chat on the Chats page).
@@ -13,14 +15,17 @@ import BurroCore
 struct ChatHeaderMenu: View {
     var store: AppStore
     var session: AgentSession
+    /// Re-reads the conversation now ("Refresh").
+    var refresh: (() -> Void)? = nil
     @State private var actions = ChatManageState()
     var body: some View {
-        Menu { ChatManageItems(store: store, session: session, state: actions) } label: {
+        Menu { ChatManageItems(store: store, session: session, state: actions, includeOpen: true, refresh: refresh) } label: {
             Image(systemName: "ellipsis").font(.system(size: 14, weight: .medium)).foregroundStyle(AppAppearance.secondary)
-                .frame(width: 32, height: 32).contentShape(Rectangle())
+                .frame(width: 28, height: 28).contentShape(Rectangle())
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-        .help("Rename, pin, archive")
+        .help("Open, refresh, rename, pin, archive")
+        .accessibilityLabel("More actions")
         .modifier(ChatManageDialogs(store: store, session: session, state: actions))
     }
 }
@@ -43,7 +48,13 @@ private struct ChatRowMenu: ViewModifier {
     @State private var actions = ChatManageState()
     func body(content: Content) -> some View {
         content
-            .contextMenu { ChatManageItems(store: store, session: session, state: actions, includeOpen: true) }
+            .contextMenu {
+                Button("Ask the Orchestrator about this chat") {
+                    store.prefillOrchestratorQuestion(chatTitle: session.title, machine: session.remote?.hostName)
+                }
+                Divider()
+                ChatManageItems(store: store, session: session, state: actions, includeOpen: true)
+            }
             .modifier(ChatManageDialogs(store: store, session: session, state: actions))
     }
 }
@@ -61,6 +72,7 @@ private struct ChatManageItems: View {
     var session: AgentSession
     var state: ChatManageState
     var includeOpen = false
+    var refresh: (() -> Void)? = nil
     private var local: ChatLocalStore { .shared }
     private var codex: Bool { ChatProviderManage.codexThread(session) != nil }
     var body: some View {
@@ -75,6 +87,7 @@ private struct ChatManageItems: View {
             Divider()
             Button("Open in \(session.provider == .codex ? "Codex" : "Claude")") { NSWorkspace.shared.open(url) }
         }
+        if let refresh { Button("Refresh", action: refresh) }
         Divider()
         if codex {
             Button("Archive in Codex…") { state.confirmArchive = true }

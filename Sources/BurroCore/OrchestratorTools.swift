@@ -1,7 +1,8 @@
 // Burro's tools for the orchestrator, served over MCP (stdio, newline-delimited JSON-RPC) by
 // `burro-mcp`. Everything reads Burro's latest snapshot, except `read_chat` (reads one
 // transcript on demand, this Mac or over SSH). `reply_chat` and `start_chat` (on this Mac or, with
-// `machine`, another one) never send or launch anything: they record a proposal in the actions file next to the snapshot, which the
+// `machine`, another one) never send or launch anything (`reply_chat` refuses a sub-agent and
+// points the model at its parent chat): they record a proposal in the actions file next to the snapshot, which the
 // user sends (or discards) from Burro. The briefing, file, memory and to-do tools are in
 // OrchestratorToolsMore.swift.
 import Foundation
@@ -86,7 +87,7 @@ public struct OrchestratorTools {
         tool("list_worktrees", "A project's git worktrees: branch, uncommitted and unpushed work, activity, and whether Burro considers it safe to clean.", [
             "project": ["type": "string", "description": "Project name or path. Default: the main project."],
         ]),
-        tool("reply_chat", "Propose a reply to a chat on any machine, usually one that needs the user. This does not send it: the user reviews, edits and sends it (or discards it) in Burro.", [
+        tool("reply_chat", "Propose a reply to a chat on any machine, usually one that needs the user. Never a sub-agent: reply to the parent chat that started it. This does not send it: the user reviews, edits and sends it (or discards it) in Burro.", [
             "id": ["type": "string", "description": "A chat id from overview or list_chats."],
             "message": ["type": "string", "description": "The reply, written as the user would send it."],
         ], required: ["id", "message"]),
@@ -299,6 +300,11 @@ public struct OrchestratorTools {
               ChatTranscripts.identity(of: chat) != nil else {
             return ("No chat with the id \"\(raw)\". Use an id from overview or list_chats.", true)
         }
+        // A sub-agent is answered through the chat that started it: never proposed a reply.
+        if chat.isSubagent == true {
+            let parent = chat.parentSessionID.map { " (its parent is \"\($0)\")" } ?? ""
+            return ("\"\(chat.title)\" is a sub-agent\(parent). Burro never sends a reply to a sub-agent: address the parent chat that started it instead.", true)
+        }
         let action = OrchestratorAction(kind: .reply, createdAt: now(), text: message, chatID: chat.id, chatTitle: chat.title,
                                         machine: machineName(chat), conversation: conversation)
         var summary = "Reply to \"\(chat.title)\" (\(agent(chat)) on \(machineName(chat)))"
@@ -311,7 +317,10 @@ public struct OrchestratorTools {
         do {
             let (saved, duplicate) = try actions.propose(action, now: now())
             let what = action.kind == .reply ? "Nothing has been sent" : "Nothing has started"
-            return ("Proposal \(saved.id)\(duplicate ? " (already waiting; not added twice)" : ""): \(summary). "
+            let note = !duplicate ? "" : saved.isUnconfirmed
+                ? " (the same proposal was already sent once without confirmation, so it may have happened; not added again)"
+                : " (already waiting; not added twice)"
+            return ("Proposal \(saved.id)\(note): \(summary). "
                     + "\(what). It is waiting for the user's approval in Burro, where they can edit it and send it, or discard it. "
                     + "Tell the user it is waiting for them; don't say it was sent or started.", false)
         } catch {

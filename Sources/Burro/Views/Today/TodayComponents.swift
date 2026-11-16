@@ -1,6 +1,8 @@
-// Pieces of the Today page: the date header (on the page background, the time to the minute), the
-// summary (one headline number and one quiet line of facts that wraps), the hours strip, and chat groups. The tracked-activity pieces are in
-// TodayActivity.swift and TodayDayView.swift.
+// Pieces of the Today page: the date header (on the page background, the time to the minute; the
+// arrow keys step a day) and the summary (one headline number and one quiet line of facts that
+// wraps, led by the agents' time while you were away when there is any). The tracked-activity
+// pieces are in TodayActivity.swift and TodayDayView.swift; the ribbon, cards and chat columns in
+// TodayRibbon.swift and TodayCards.swift.
 import SwiftUI
 import BurroCore
 
@@ -12,7 +14,7 @@ struct TodayHeader: View {
                 Text(today.isToday ? "TODAY" : today.day.formatted(.dateTime.weekday(.wide)).uppercased())
                     .font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(AppAppearance.secondary)
                 Text(today.day, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day())
-                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
                 if today.isToday {
                     TimelineView(.everyMinute) { context in
                         Text(context.date, format: .dateTime.hour().minute())
@@ -25,18 +27,20 @@ struct TodayHeader: View {
             }
             Spacer()
             HStack(spacing: 8) {
-                stepButton("chevron.left", "Previous day", enabled: true) { today.step(-1) }
+                stepButton("chevron.left", "Previous day", key: .leftArrow, enabled: true) { today.step(-1) }
                 DayPill(today: today)
-                stepButton("chevron.right", "Next day", enabled: today.canGoForward) { today.step(1) }
+                stepButton("chevron.right", "Next day", key: .rightArrow, enabled: today.canGoForward) { today.step(1) }
             }
         }
         .padding(.horizontal, 2)
     }
-    private func stepButton(_ symbol: String, _ label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+    private func stepButton(_ symbol: String, _ label: String, key: KeyEquivalent, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).frame(width: 32, height: 32)
                 .background(AppAppearance.raised, in: Circle())
-        }.buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.35).help(label).accessibilityLabel(label)
+        }.buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.35)
+        .keyboardShortcut(key, modifiers: [])
+        .help("\(label) (\(key == .leftArrow ? "←" : "→"))").accessibilityLabel(label)
     }
 }
 
@@ -64,72 +68,6 @@ private struct DayPill: View {
     }
 }
 
-struct TodayChatGroup: View {
-    var title: String
-    var color: Color
-    var rows: [TodayRow]
-    var open: (TodayRow) -> Void
-    @State private var expanded = true
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button { withAnimation(.easeOut(duration: 0.18)) { expanded.toggle() } } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).rotationEffect(.degrees(expanded ? 90 : 0))
-                        .foregroundStyle(AppAppearance.tertiary)
-                    Circle().fill(color).frame(width: 7, height: 7)
-                    Text(title).font(.system(size: 13, weight: .semibold))
-                    Text("\(rows.count)").font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.tertiary)
-                }.contentShape(Rectangle())
-            }.buttonStyle(.plain)
-            if expanded {
-                VStack(spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                        if index > 0 { Divider().overlay(AppAppearance.separator).padding(.leading, 60) }
-                        TodayChatRow(row: row) { open(row) }
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: HomeStyle.cardRadius, style: .continuous))
-                .modifier(SoftSurface(radius: HomeStyle.cardRadius, shadowRadius: 8, y: 2))
-            }
-        }
-    }
-}
-
-private struct TodayChatRow: View {
-    var row: TodayRow
-    var open: () -> Void
-    @State private var hovering = false
-    var body: some View {
-        Button(action: open) {
-            HStack(alignment: .center, spacing: 12) {
-                Group {
-                    if let session = row.session { AgentAvatar(session: session, active: hovering, size: 30) }
-                    else { Image(systemName: row.provider == .codex ? "terminal" : "sparkle").frame(width: 30, height: 30)
-                        .foregroundStyle(AppAppearance.tertiary) }
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 8) {
-                        Text(row.title).font(.system(size: 13, weight: .semibold)).lineLimit(1).foregroundStyle(AppAppearance.text)
-                        Text(row.breadcrumb).font(.system(size: 12)).lineLimit(1).foregroundStyle(AppAppearance.tertiary)
-                    }
-                    if let preview = row.preview {
-                        Text(preview).font(.system(size: 12)).lineLimit(1).foregroundStyle(AppAppearance.secondary)
-                    }
-                }
-                Spacer(minLength: 8)
-                Text(row.lastAt, format: .dateTime.hour().minute()).font(.system(size: 12)).monospacedDigit()
-                    .foregroundStyle(AppAppearance.tertiary)
-                Circle().fill(row.status.color).frame(width: 7, height: 7).opacity(row.status == .idle ? 0.5 : 1)
-            }
-            .padding(.horizontal, 16).padding(.vertical, row.preview == nil ? 11 : 9)
-            .background(hovering ? AppAppearance.hover : .clear)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain).onHover { hovering = $0 }.disabled(row.session == nil)
-        .help(row.session == nil ? "Not in the live feed any more" : (row.session?.chatURL == nil ? "Show details in Burro" : "Open the chat"))
-    }
-}
-
 // MARK: Summary
 
 /// A card titled by a coloured label; it sizes to its content.
@@ -151,8 +89,9 @@ struct TodayCard<Content: View>: View {
 /// The day's numbers as one headline and one line of facts. With tracking on, tracked focus is the
 /// headline ("4h 58m focused of 6h 10m tracked"); with tracking off, the time from your first to your
 /// last message leads instead ("With agents"). The facts line (Break, longest focus, messages, to-dos,
-/// questions) leaves out anything with nothing to say and wraps on narrow windows. Questions waiting
-/// on you now are the only amber.
+/// questions) leaves out anything with nothing to say and wraps on narrow windows; it starts with
+/// "Agents worked 2h 40m while you were away" ("about 2h 40m" when partial) when tracking can tell. Questions waiting on you now
+/// are the only amber.
 struct TodaySummaryRow: View {
     struct Todos { var done: Int; var open: Int; var added: Int }
     var activity: DailyActivity?
@@ -162,6 +101,8 @@ struct TodaySummaryRow: View {
     /// Today only.
     var todos: Todos?
     var waitingNow: Int
+    /// Agent work while you were away, from AgentAwayTime.
+    var away: AgentAwayTime.Summary? = nil
 
     struct Fact: Identifiable {
         var text: String
@@ -220,6 +161,12 @@ struct TodaySummaryRow: View {
 
     var facts: [Fact] {
         var facts: [Fact] = []
+        if tracking, let away, away.total >= 60 {
+            facts.append(Fact(text: "Agents worked \(away.totalText) while you were away",
+                              help: "Wall-clock time any agent was active while Burro was recording and you weren't at the Mac"
+                                  + (away.span.map { " (\(ActivityStyle.range($0.start, $0.end)))" } ?? "") + "; time Burro wasn't recording isn't counted."
+                                  + (away.partial ? " Some chats couldn't be read, so this is approximate." : "")))
+        }
         if tracking, let note = tracked?.notRecordedNote {
             facts.append(Fact(text: note, help: "Burro was closed or tracking was paused then, so nothing was recorded. Time away from the Mac isn't counted here."))
         }
@@ -252,62 +199,6 @@ struct TodaySummaryRow: View {
             facts.append(Fact(text: "\(waitingNow) question\(waitingNow == 1 ? "" : "s") waiting", help: questionsHelp, needsYou: true))
         }
         return facts
-    }
-}
-
-/// One cell per hour: shade = messages you sent; a thin line under each hour in the colour of
-/// that hour's main tracked category. The first-to-last-message span is named here as a fact.
-struct TodayHoursCard: View {
-    var activity: DailyActivity?
-    var tracked: ActivityDay?
-    var isToday: Bool
-    /// Fixed only for snapshots.
-    var now: Date? = nil
-
-    var body: some View {
-        let hours = TodaySummary.hours(activity: activity, tracked: tracked)
-        let peak = max(1, hours.map(\.turns).max() ?? 1)
-        let currentHour = isToday ? Calendar.current.component(.hour, from: now ?? Date()) : nil
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Label("Your hours", systemImage: "clock").font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.secondary)
-                Spacer(minLength: 8)
-                Text(span).font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.tertiary).lineLimit(1)
-            }
-            HStack(spacing: 3) {
-                ForEach(hours, id: \.hour) { hour in
-                    VStack(spacing: 3) {
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(hour.turns > 0 ? AppAppearance.text.opacity(0.14 + 0.5 * Double(hour.turns) / Double(peak)) : AppAppearance.raised)
-                            .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .strokeBorder(hour.hour == currentHour ? AppAppearance.text.opacity(0.5) : .clear, lineWidth: 1.2))
-                            .frame(height: 20)
-                        RoundedRectangle(cornerRadius: 1.5).fill(hour.category.map(ActivityStyle.color) ?? .clear).frame(height: 3)
-                    }
-                    .help(help(hour))
-                }
-            }
-            HStack {
-                ForEach([0, 6, 12, 18, 24], id: \.self) { mark in
-                    Text("\(mark)").font(.system(size: 10)).monospacedDigit().foregroundStyle(AppAppearance.tertiary)
-                    if mark < 24 { Spacer() }
-                }
-            }
-        }
-        .padding(.horizontal, 18).padding(.vertical, 14).frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
-    }
-
-    private var span: String {
-        guard let activity else { return "Reading your agent logs…" }
-        guard let first = activity.firstTurn, let last = activity.lastTurn else { return "No messages from you yet" }
-        return "Chatting with agents \(ActivityStyle.range(first, last))"
-    }
-
-    private func help(_ hour: TodayHour) -> String {
-        var text = "\(hour.hour):00 — \(hour.turns) message\(hour.turns == 1 ? "" : "s") from you, \(hour.replies) replies"
-        if let category = hour.category { text += "\nMostly \(category.title)" }
-        return text
     }
 }
 

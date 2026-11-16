@@ -1,4 +1,10 @@
 // A single nonactivating AppKit panel hosts SwiftUI; no global keyboard hooks or extra permissions.
+// A needs-you card's quick-reply field counts as the pointer being inside (like an open menu)
+// while it has focus and the panel is key, or while it holds text the owner typed or edited, so
+// moving away doesn't close the panel under a half-written reply; only while expanded, so an
+// explicit collapse (Escape, the chevron, opening a chat) still closes it and keeps it closed.
+// The panel never focuses a text field by itself (opening, ⇧⌘B, becoming key): a field takes
+// focus only from the owner's click in it or Tab.
 import AppKit
 import SwiftUI
 import Observation
@@ -12,6 +18,9 @@ import BurroCore
     var chatScope: NotchChatScope = .activity
     var holdingList = false
     var visibleRows = 3
+    /// A quick-reply field has focus / holds typed text (reported by NotchView).
+    var replyFocused = false
+    var replyEdited = false
     var navigation = NotchNavigation()
     var compactGeometry = NotchGeometry.layout(screen: CGRect(x: 0, y: 0, width: 1440, height: 900),
         visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 875), safeTop: 0, hardwareWidth: 0, expanded: false)
@@ -75,7 +84,8 @@ import BurroCore
                 onOpenDashboard: { [weak self] in self?.openDashboardWindow() },
                 onSelectPage: { [weak self] in self?.selectPage($0) },
                 onNavigationBounds: { [weak self] in self?.setNavigationBounds($0) },
-                onContentChange: { [weak self] in self?.requestContentLayout() }, compact: compact)
+                onContentChange: { [weak self] in self?.requestContentLayout() },
+                onReply: { [weak self] in self?.setReply(focused: $0, edited: $1) }, compact: compact)
         }
         let surface = NotchSurfaceView(compact: content(compact: true), expanded: content(compact: false), reduceTransparency: reduceTransparency)
         panel.contentView = surface
@@ -124,7 +134,7 @@ import BurroCore
         }
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.updateListHold() }
+                Task { @MainActor in self?.updateListHold(); self?.samplePointer(source: "key window") }
             })
         }
         observationID = UUID()
@@ -191,7 +201,7 @@ import BurroCore
     func samplePointer(source: String = "reconcile") {
         guard store?.notchEnabled == true, !placingWindow else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        let inside = containsPointer() || !trackingMenus.isEmpty
+        let inside = containsPointer() || !trackingMenus.isEmpty || replyHolds
         if inside != hoverState.pointerInside {
             hoverLog.info("Hover inside=\(inside, privacy: .public) source=\(source, privacy: .public)")
         }
@@ -209,6 +219,15 @@ import BurroCore
         // Pointer events are frequent; publish only actual navigation changes to SwiftUI.
         if navigation != presentation.navigation { presentation.navigation = navigation }
         applyInteraction()
+    }
+    /// The quick-reply stay-open rule (see the header).
+    private var replyHolds: Bool {
+        presentation.expanded && (presentation.replyEdited || (presentation.replyFocused && panel?.isKeyWindow == true))
+    }
+    func setReply(focused: Bool, edited: Bool) {
+        guard presentation.replyFocused != focused || presentation.replyEdited != edited else { return }
+        presentation.replyFocused = focused; presentation.replyEdited = edited
+        samplePointer(source: "reply field")
     }
     func setNavigationBounds(_ bounds: [NotchPage: CGRect]) {
         guard bounds != navigationBounds else { return }
@@ -348,4 +367,27 @@ final class AgentNotchPanel: NSPanel {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+    /// A reply field never takes focus by itself (opening the panel, ⇧⌘B, becoming key): text
+    /// input becomes first responder only during the owner's own click or key press in this panel.
+    /// A refused request changes nothing (whatever has focus, a field he is typing in included,
+    /// keeps it). AppKit gives no reliable sign that a focus request comes from VoiceOver or
+    /// another assistive app (it arrives without an event of its own), so it isn't singled out;
+    /// VoiceOver's simulated click (VO-Shift-Space) should arrive as a mouse press (unverified).
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        if let responder, Self.isTextInput(responder), !Self.ownerActs(in: self, event: NSApp.currentEvent) {
+            return false
+        }
+        return super.makeFirstResponder(responder)
+    }
+    static func isTextInput(_ responder: NSResponder) -> Bool {
+        responder is NSText || responder is NSTextField
+    }
+    static func ownerActs(in window: NSWindow, event: NSEvent?) -> Bool {
+        guard let event, event.window === window else { return false }
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown: return true
+        case .keyDown: return event.keyCode == 48 // Tab / ⇧Tab moves focus on purpose
+        default: return false
+        }
+    }
 }

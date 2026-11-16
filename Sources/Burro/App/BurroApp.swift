@@ -70,11 +70,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Divider()
             }
         }
+        // A window-style popover (MenuBarPopover); the label logic is MenuBarLabel's.
         MenuBarExtra {
-            MonitorMenu(store: store, notch: notch)
+            MenuBarPopover(store: store, notch: notch)
         } label: {
             MenuBarLabel(store: store)
         }
+        .menuBarExtraStyle(.window)
         Settings { SettingsView(store: store).modifier(AppTheme()) }
     }
 }
@@ -94,28 +96,5 @@ private struct DesktopRootView: View {
             }, onVisibilityChange: store.dashboardVisibilityChanged))
             // Normally started at launch already; this only covers a window that comes first.
             .task { AppLaunch.shared.start() }
-    }
-}
-struct MonitorMenu: View {
-    @Bindable var store: AppStore
-    var notch: NotchController
-    @Environment(\.openWindow) private var openWindow
-    var body: some View {
-        Text("\(store.activeAgents.count) agents working")
-        Text("\(store.agentActivity.waitingCount) need input")
-        if store.agentActivity.scheduledCount > 0 { Text("\(store.agentActivity.scheduledCount) scheduled") }
-        NeedsYouMenuItems(store: store, notch: notch)
-        Divider()
-        Button("Show Agent Notch") { notch.show() }
-        Button(store.notesShortcut ? "Notes  ⌥P" : "Notes") { store.showNotes?(.last) }
-        Toggle("Enable Notch", isOn: $store.notchEnabled)
-        KeepAwakeMenu(keepAwake: store.keepAwake)
-        Button("Open Burro") { store.go(to: .home); notch.openDashboardWindow() }
-        Button("Open Today") { store.go(to: .today); notch.openDashboardWindow() }
-        Button("Open Chats") { store.go(to: .remote); notch.openDashboardWindow() }
-        Button("Refresh") { Task { await store.refreshAgents(); await store.refreshRemotes(); await store.refresh() } }.disabled(store.scanning)
-        SettingsLink()
-        Divider()
-        Button("Quit Burro") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 }

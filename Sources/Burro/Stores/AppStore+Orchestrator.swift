@@ -5,7 +5,9 @@
 // made, only when you click Send on its card: a reply goes through the same path as the Chats
 // composer, a new chat through the same launch as New chat, and a new chat on another machine
 // through the remote launch backend (folder validated there first), after which that machine is
-// checked straight away. Each remote machine's remembered folders (paths only) go in the snapshot. To-dos it adds or completes are applied
+// checked straight away. A Send whose outcome Burro can't confirm leaves the proposal unconfirmed
+// (OrchestratorAction.recordSend); "Send again" is the only way to send it once more. A reply to a
+// sub-agent is never sent. Each remote machine's remembered folders (paths only) go in the snapshot. To-dos it adds or completes are applied
 // here through the to-do store (tagged "orchestrator"); Undo reverses only a change that happened,
 // on the to-do it touched, found by id.
 import Foundation
@@ -132,17 +134,21 @@ extension AppStore {
         }
     }
 
-    /// The live chat a reply proposal targets, and its machine.
+    /// The live chat a reply proposal targets, and its machine. A sub-agent target is returned
+    /// too, but `ChatReply.unavailable` refuses it, so every card shows why and Send stays off
+    /// (and `ChatReply.send` refuses it again), even for a proposal stored before this rule.
     func orchestratorTarget(_ action: OrchestratorAction) -> (session: AgentSession, host: RemoteHost?)? {
         guard action.kind == .reply, let id = action.chatID?.lowercased() else { return nil }
         guard let session = notchChatSessions.first(where: { $0.id.lowercased() == id }) else { return nil }
         return (session, remoteHosts.first { $0.id == session.remote?.hostID })
     }
 
-    /// Sends one proposal, with the text as edited on its card. Only called from its Send button.
-    func sendOrchestratorAction(_ action: OrchestratorAction, text: String) async {
+    /// Sends one proposal, with the text as edited on its card. Only called from its Send button,
+    /// or (`again`) from "Send again" on an unconfirmed proposal after the owner confirmed that a
+    /// second chat or reply may result.
+    func sendOrchestratorAction(_ action: OrchestratorAction, text: String, again: Bool = false) async {
         let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty, orchestrator.beginSending(action.id) else { return }
+        guard !message.isEmpty, orchestrator.beginSending(action.id, again: again) else { return }
         let outcome: Result<(message: String, chatID: String?), Error>
         switch action.kind {
         case .reply:

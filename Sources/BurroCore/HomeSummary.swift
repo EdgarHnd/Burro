@@ -1,17 +1,20 @@
 // Burro Home's rollups: live attention by project and machine, plus a plain-language summary.
 // These are in-memory counts over snapshots Burro already holds, so they run in-process in
 // microseconds; a worker round trip would cost more than the work. Log scanning stays in Rust.
+// Waiting sub-agents are neither counted nor listed as needing you (the menu bar, notifications
+// and Chats leave them out too); they are answered through their parent chat.
 import Foundation
 
 public struct HomeCounts: Sendable, Equatable {
     public var running = 0, waiting = 0, done = 0, scheduled = 0
     public init() {}
     public var isQuiet: Bool { running + waiting + done + scheduled == 0 }
-    /// Same rules as the notch: stale remote input requests don't count as waiting.
+    /// Same rules as the notch and the menu bar: stale remote input requests and sub-agents (they
+    /// are answered through their parent chat) don't count as waiting.
     mutating func add(_ session: AgentSession) {
         if session.state == .working { running += 1 }
         if session.state == .scheduled { scheduled += 1 }
-        if session.state == .waiting && session.remote?.stale != true { waiting += 1 }
+        if session.state == .waiting && session.remote?.stale != true && session.isSubagent != true { waiting += 1 }
         if session.isDone { done += 1 }
     }
 }
@@ -129,7 +132,8 @@ public struct HomeSummary: Sendable, Equatable {
                         lastSeen: $0.lastSeen)
         }
         let newest: (AgentSession, AgentSession) -> Bool = { $0.updatedAt != $1.updatedAt ? $0.updatedAt > $1.updatedAt : $0.id < $1.id }
-        let needsYou = unique.filter { $0.state == .waiting && $0.remote?.stale != true }.sorted(by: newest)
+        // Sub-agents are answered through their parent chat: never listed as needing you.
+        let needsYou = unique.filter { $0.state == .waiting && $0.remote?.stale != true && $0.isSubagent != true }.sorted(by: newest)
         let unread = unique.filter(\.isDone).sorted(by: newest)
         let running = unique.filter { $0.state == .working }.sorted(by: newest)
         let scheduled = unique.filter { $0.state == .scheduled }.sorted(by: newest)

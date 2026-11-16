@@ -1,9 +1,12 @@
 // A chat's conversation, laid out like the Claude app: a long opening brief as the chat's task,
 // your messages as bubbles (a reply just sent from Burro shows dimmed as "Sending…" until the log
-// has it), replies as Markdown, runs of tool calls folded into one line (open for each call and its
+// has it), replies as Markdown (tables as quiet grids that scroll sideways when wider than the
+// column; Codex's inbox items and code comments as one-line notes, its other markup left out),
+// runs of tool calls folded into one line (open for each call and its
 // output), the plan as a checklist. While the chat works, what it's doing right now sits in a strip
 // under the conversation. The view follows new messages only while you're at the bottom; scrolled
-// up, it stays put and offers "↓ N new". When the chat waits on you, "Jump to last question" (⌘↑).
+// up, it stays put and offers "↓ N new". When the chat waits on you, "Jump to last question" (⌘↑),
+// and the page passes a hand-off card to end the conversation with (`trailing`).
 // A chat on another machine shows Burro's copy of it at once (`RemoteTranscriptMirror`), then
 // updates; while that machine can't be reached the copy stays readable "as of" its last update, and
 // "Show earlier messages" at the top fetches more of its history when the copy doesn't start at
@@ -172,6 +175,8 @@ struct ChatTranscriptView: View {
     /// Set for a remote chat whose copy can fetch earlier history: "Show earlier messages" calls it.
     var showEarlier: (() -> Void)? = nil
     var loadingEarlier = false
+    /// Drawn after the last turn: the hand-off card while the chat waits on you.
+    var trailing: AnyView? = nil
     @Environment(\.chatWaiting) private var waiting
     /// The bottom of the conversation is in view: new messages scroll into view as they come.
     @State private var atBottom = true
@@ -216,16 +221,17 @@ struct ChatTranscriptView: View {
                                      carriedPlan: turn.id == turns.last?.id ? carried : nil)
                             .id(turn.id)
                     }
+                    if let trailing { trailing }
                     Color.clear.frame(height: 1).id("bottom")
                         .background(GeometryReader { geometry in
                             Color.clear.preference(key: TranscriptBottomKey.self, value: geometry.frame(in: .named("transcript")).maxY)
                         })
                         .onDisappear { setAtBottom(false) }
                 }
-                .padding(.horizontal, 36).padding(.vertical, 22)
+                .padding(.horizontal, ChatColumn.inset).padding(.vertical, 20)
                 // Room for the live strip and the floating controls over the end.
                 .padding(.bottom, liveTurn != nil || question != nil ? 40 : 0)
-                .frame(maxWidth: 840).frame(maxWidth: .infinity)
+                .frame(maxWidth: ChatColumn.width).frame(maxWidth: .infinity)
             }
             .coordinateSpace(name: "transcript")
             .background(GeometryReader { geometry in
@@ -721,8 +727,9 @@ private struct ChatStepRow: View {
 }
 
 /// Markdown for chat replies: headings, bullet and numbered lists, paragraphs with inline
-/// styling, fenced code blocks in monospace, and images or videos linked by absolute path.
-/// Parsed per render from the message text.
+/// styling, fenced code blocks in monospace, images or videos linked by absolute path, tables
+/// (`ChatTableView`) and Codex's inbox items and code comments as quiet notes (`ChatNoteLine`).
+/// The parsing is `ChatMarkdown` (BurroCore), per render from the message text.
 struct MarkdownBlock: View {
     var text: String
     var size: CGFloat = 14
@@ -750,67 +757,19 @@ struct MarkdownBlock: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 case .media(let caption, let path):
                     ChatMediaView(caption: caption, path: path).padding(.vertical, 4)
+                case .table(let table):
+                    ChatTableView(table: table, size: size).padding(.vertical, 3)
+                case .note(let note):
+                    ChatNoteLine(note: note, size: size)
                 }
             }
         }
     }
 
-    enum Block: Equatable { case code(String), heading(String, Int), item(String, String, Int), paragraph(String), media(String, String) }
+    typealias Block = ChatMarkdown.Block
 
-    /// `![caption](/absolute/path.png)` links to an image or video file; other images stay as text.
-    nonisolated static func media(in line: String) -> (rest: String, media: [(String, String)])? {
-        var media: [(String, String)] = []
-        var rest = line
-        for match in line.matches(of: /!\[([^\]]*)\]\(<?(?:file:\/\/)?(\/[^)>]+?)>?\)/) {
-            let path = String(match.2).removingPercentEncoding ?? String(match.2)
-            guard ChatMedia.kind(of: path) != nil else { continue }
-            media.append((String(match.1), path))
-            rest = rest.replacingOccurrences(of: String(match.0), with: "")
-        }
-        return media.isEmpty ? nil : (rest.trimmingCharacters(in: .whitespaces), media)
-    }
-
-    nonisolated static func blocks(_ text: String) -> [Block] {
-        var blocks: [Block] = []
-        for (index, part) in text.components(separatedBy: "```").enumerated() {
-            if index % 2 == 1 {
-                // Drop the language tag on the fence's first line.
-                let lines = part.split(separator: "\n", omittingEmptySubsequences: false)
-                let body = lines.count > 1 && !lines[0].contains(" ") ? lines.dropFirst().joined(separator: "\n") : part
-                blocks.append(.code(body.trimmingCharacters(in: .newlines)))
-                continue
-            }
-            var paragraph: [String] = []
-            func flush() {
-                let joined = paragraph.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !joined.isEmpty { blocks.append(.paragraph(joined)) }
-                paragraph = []
-            }
-            for raw in part.components(separatedBy: "\n") {
-                let indent = raw.prefix { $0 == " " || $0 == "\t" }.count
-                let line = raw.trimmingCharacters(in: .whitespaces)
-                if line.isEmpty { flush(); continue }
-                if let found = media(in: line) {
-                    flush()
-                    if !found.rest.isEmpty { blocks.append(.paragraph(found.rest)) }
-                    blocks += found.media.map { Block.media($0.0, $0.1) }
-                    continue
-                }
-                if let match = line.wholeMatch(of: /(#{1,6})\s+(.+)/) {
-                    flush(); blocks.append(.heading(String(match.2), match.1.count)); continue
-                }
-                if let match = line.wholeMatch(of: /[-*•]\s+(.+)/) {
-                    flush(); blocks.append(.item("•", String(match.1), indent / 2)); continue
-                }
-                if let match = line.wholeMatch(of: /(\d{1,3})[.)]\s+(.+)/) {
-                    flush(); blocks.append(.item(match.1 + ".", String(match.2), indent / 2)); continue
-                }
-                paragraph.append(line)
-            }
-            flush()
-        }
-        return blocks
-    }
+    nonisolated static func media(in line: String) -> (rest: String, media: [(String, String)])? { ChatMarkdown.media(in: line) }
+    nonisolated static func blocks(_ text: String) -> [Block] { ChatMarkdown.blocks(text) }
 
     nonisolated static func inline(_ text: String) -> AttributedString {
         (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)

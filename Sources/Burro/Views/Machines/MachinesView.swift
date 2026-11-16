@@ -1,67 +1,38 @@
-// The Machines page: every machine you work on (this Mac, SSH machines, Tailscale devices) and a
-// table of agent tools per machine with their versions and one-click updates.
+// The Machines page: one card per machine you work on (this Mac and every configured SSH machine),
+// headed by "N of M reachable · X working · Y need you" and Check all now. This view wires the
+// page's values (`MachinesPageBuilder`) and actions to the existing store functions: a chat row
+// opens the chat in Chats; Attach checks a remote Claude chat is a background session and opens
+// the existing Attach; New chat here opens the New chat sheet with that machine (this Mac: the
+// current or main project); Open in Terminal opens the main project folder, Open SSH a Terminal
+// login with remote monitoring's strict options; Update asks first, then runs the tool's updater;
+// Clear empties Burro's cache for that machine; Retry now and Check all now check machines at once;
+// Forget machine asks, then removes it; the pencil and "Add a machine" open the existing editor;
+// Tailscale devices offer Add over SSH. Work runs only while the page is on screen: tool versions
+// and Tailscale every minute (the store spaces them out), the status lines every 5 seconds, and
+// cache totals when the page appears, after a clear, and when machines change.
 import SwiftUI
 import BurroCore
-
-struct MachineModel: Identifiable {
-    enum Kind { case local, ssh, tailnet }
-    var id: String
-    var name: String
-    var kind: Kind
-    var os: String?
-    var online: Bool?
-    var running: Int
-    var waiting: Int
-    var roots: [String]
-    var peer: TailscalePeer?
-    var host: RemoteHost?
-    var lastSeen: Date?
-    var detail: String?
-}
 
 struct MachinesView: View {
     @Bindable var store: AppStore
     @State private var onScreen = false
+    @State private var now = Date()
+    @State private var copiesVersion = 0
     @State private var editing: RemoteHost?
-    @State private var pendingUpdate: (harness: Harness, machine: MachineModel)?
+    @State private var forgetting: RemoteHost?
+    @State private var pendingUpdate: (harness: Harness, card: MachineCardModel)?
     private var machines: MachinesStore { store.machines }
 
     var body: some View {
-        let models = MachinesModel.build(store: store)
+        let model = MachinesPageBuilder.build(store: store, now: now)
+        let actions = self.actions
         ScrollView {
-            VStack(alignment: .leading, spacing: 30) {
-                VStack(alignment: .leading, spacing: 14) {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 270), spacing: 16, alignment: .top)], spacing: 16) {
-                        ForEach(models) { model in
-                            MachineCard(model: model, facts: machines.facts[model.id], probing: machines.probing.contains(model.id),
-                                        addOverSSH: { editing = RemoteHost(name: model.name, destination: model.peer?.dnsName ?? model.name) },
-                                        showSessions: { store.page = .remote })
-                        }
-                    }
-                    if !machines.tailscaleInstalled {
-                        Text("Install Tailscale to see every device on your tailnet here.").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                    }
-                }
-                HarnessTable(store: store, machines: models.filter { $0.kind != .tailnet || $0.host != nil }) { harness, machine in
-                    pendingUpdate = (harness, machine)
-                }
-                if let message = machines.message {
-                    HStack {
-                        Label(message, systemImage: "info.circle").font(.system(size: 12))
-                        Spacer()
-                        Button { machines.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
-                            .accessibilityLabel("Dismiss message").help("Dismiss")
-                    }.foregroundStyle(AppAppearance.secondary)
-                }
-            }
-            .padding(.horizontal, 36).padding(.top, 8).padding(.bottom, 28)
-            .frame(maxWidth: 1240).frame(maxWidth: .infinity)
+            MachinesPage(model: model, actions: actions)
+                .padding(.horizontal, 30).padding(.top, 6).padding(.bottom, 28)
+                .frame(maxWidth: 1340).frame(maxWidth: .infinity)
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            PageHeader(title: "Machines", subtitle: "\(models.count) machine\(models.count == 1 ? "" : "s")") {
-                PillButton(title: "Add", symbol: "plus") { editing = RemoteHost(name: "", destination: "") }
-                    .help("Add a machine you can reach over SSH")
-            }.background(AppAppearance.background)
+            MachinesHeader(model: model, actions: actions).frame(maxWidth: 1340).frame(maxWidth: .infinity).background(AppAppearance.background)
         }
         .background(AppAppearance.background)
         .background(WindowOcclusionReader { onScreen = $0 })
@@ -71,69 +42,77 @@ struct MachinesView: View {
                 try? await Task.sleep(for: .seconds(60))
             }
         }
+        .task(id: onScreen) {
+            while onScreen && !Task.isCancelled {
+                now = Date()
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+        .task(id: "\(onScreen)-\(copiesVersion)-\(store.remoteHosts.map { "\($0.id)\($0.destination)" })") {
+            guard onScreen else { return }
+            await machines.loadLocalCopies(store.remoteHosts)
+        }
         .sheet(item: $editing) { host in RemoteHostEditor(host: host) { store.saveRemoteHost($0) } }
-        .confirmationDialog(pendingUpdate.map { "Update \($0.harness.title) on \($0.machine.name)?" } ?? "",
+        .confirmationDialog(pendingUpdate.map { "Update \($0.harness.title) on \($0.card.name)?" } ?? "",
                             isPresented: Binding(get: { pendingUpdate != nil }, set: { if !$0 { pendingUpdate = nil } }),
                             titleVisibility: .visible) {
             Button("Update") {
-                if let pending = pendingUpdate { machines.update(pending.harness, machineID: pending.machine.id, host: pending.machine.host) }
+                if let pending = pendingUpdate { machines.update(pending.harness, machineID: pending.card.id, host: pending.card.host) }
                 pendingUpdate = nil
             }
             Button("Cancel", role: .cancel) { pendingUpdate = nil }
         } message: {
-            Text(pendingUpdate.map { "Runs `\($0.harness.command) \(($0.harness.updateArguments ?? []).joined(separator: " "))`\($0.machine.kind == .local ? "" : " over SSH"). Running chats keep the version they started with." } ?? "")
+            Text(pendingUpdate.map { "Runs `\($0.harness.command) \(($0.harness.updateArguments ?? []).joined(separator: " "))`\($0.card.isLocal ? "" : " over SSH"). Running chats keep the version they started with." } ?? "")
+        }
+        .confirmationDialog(forgetting.map { "Forget \($0.name)?" } ?? "",
+                            isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }),
+                            titleVisibility: .visible) {
+            Button("Forget machine", role: .destructive) {
+                if let host = forgetting { store.removeRemoteHost(host.id) }
+                forgetting = nil
+            }
+            Button("Cancel", role: .cancel) { forgetting = nil }
+        } message: {
+            Text("Burro stops checking it and deletes what it copied from it: last-seen chats, transcript copies, images and videos. Nothing on the machine itself changes. You can add it again later.")
         }
     }
-}
 
-enum MachinesModel {
-    @MainActor static func build(store: AppStore) -> [MachineModel] {
-        let summary = store.homeSummary
-        let peers = store.machines.peers ?? []
-        func matches(_ peer: TailscalePeer, _ destination: String) -> Bool {
-            let host = destination.split(separator: "@").last.map(String.init)?.lowercased() ?? destination.lowercased()
-            let dns = peer.dnsName?.lowercased()
-            return host == peer.hostName.lowercased() || host == dns || dns?.hasPrefix(host + ".") == true
+    private var actions: MachinesActions {
+        var actions = MachinesActions()
+        actions.openChat = { store.selectAgent($0) }
+        actions.attach = { session, host in machines.attach(session, host: host) }
+        actions.showChats = { store.page = .remote }
+        actions.newChat = { card in
+            if let host = card.host { store.openNewChat(LaunchDraft(machine: host.id)) }
+            else { store.openNewChat(LaunchDraft(folder: store.currentLaunchProject?.path ?? store.mainProject?.path)) }
         }
-        var models: [MachineModel] = []
-        let local = summary.machines.first { $0.connection == .local }
-        models.append(MachineModel(id: MachinesStore.localID, name: computerName, kind: .local,
-                                   os: store.machines.facts[MachinesStore.localID]?.os, online: true,
-                                   running: local?.counts.running ?? 0, waiting: local?.counts.waiting ?? 0,
-                                   roots: roots(store.repositoriesFound.map(\.path)), peer: peers.first(where: \.isSelf), host: nil,
-                                   lastSeen: nil, detail: "This Mac"))
-        for host in store.remoteHosts {
-            let machine = summary.machines.first { $0.id == host.id.uuidString }
-            let peer = peers.first { !$0.isSelf && matches($0, host.destination) }
-            let sessions = store.remoteSessions.filter { $0.remote?.hostID == host.id }.map(\.cwd)
-            models.append(MachineModel(id: host.id.uuidString, name: host.name, kind: .ssh,
-                                       os: store.machines.facts[host.id.uuidString]?.os ?? peer.map { $0.os }, online: machine.map { $0.connection == .online },
-                                       running: machine?.counts.running ?? 0, waiting: machine?.counts.waiting ?? 0,
-                                       roots: roots(sessions), peer: peer, host: host, lastSeen: machine?.lastSeen,
-                                       detail: store.remoteStatusLine(for: host)))
+        actions.openTerminal = { card in
+            if let host = card.host { machines.openSSH(host) }
+            else if let folder = store.mainProject?.path { machines.openTerminal(folder: folder) }
+            else { machines.openTerminal(folder: NSHomeDirectory()) }
         }
-        for peer in peers where !peer.isSelf && !store.remoteHosts.contains(where: { matches(peer, $0.destination) }) {
-            models.append(MachineModel(id: "tailnet:" + peer.id, name: peer.hostName, kind: .tailnet, os: peer.os, online: peer.online,
-                                       running: 0, waiting: 0, roots: [], peer: peer, host: nil, lastSeen: peer.lastSeen,
-                                       detail: peer.online ? "On your tailnet" : "Offline on your tailnet"))
+        actions.update = { harness, card in pendingUpdate = (harness, card) }
+        actions.clearCache = { card in
+            guard let host = card.host else { return }
+            Task { await store.clearRemoteCache(host.id); copiesVersion += 1 }
         }
-        return models
-    }
-    /// Read once: `Host.current()` can block on name resolution, which must never happen during a redraw.
-    @MainActor static let computerName: String = Host.current().localizedName ?? "This Mac"
-    /// The folders projects live in, most common first ("~/Dev"), up to three.
-    static func roots(_ paths: [String]) -> [String] {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let parents = paths.map { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
-        let counts = Dictionary(grouping: parents, by: { $0 }).mapValues(\.count)
-        return counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.prefix(3)
-            .map { $0.key.hasPrefix(home) ? "~" + $0.key.dropFirst(home.count) : $0.key }
-    }
-    static func connection(_ value: HomeMachine.Connection?) -> String {
-        switch value {
-        case .online: "Online over SSH"; case .offline: "Unreachable"; case .stale: "Status expired"
-        case .connecting: "Connecting…"; case .paused: "Paused"; case .local, nil: "SSH"
+        actions.retry = { card in if let host = card.host { store.requestRemoteCheck(host.id) } }
+        actions.resume = { card in
+            guard var host = card.host else { return }
+            host.enabled = true
+            store.saveRemoteHost(host)
         }
+        actions.edit = { card in editing = card.host }
+        actions.forget = { card in forgetting = card.host }
+        actions.add = { destination in editing = RemoteHost(name: MachinesOverview.suggestedName(for: destination), destination: destination) }
+        actions.addTailnet = { peer in editing = RemoteHost(name: peer.hostName, destination: peer.dnsName ?? peer.hostName) }
+        actions.checkAll = {
+            machines.refresh(hosts: store.remoteHosts, force: true)
+            Task { await store.refreshRemotes() }
+            copiesVersion += 1
+        }
+        actions.dismissMessage = { machines.message = nil }
+        return actions
     }
 }
 

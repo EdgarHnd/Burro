@@ -3,7 +3,7 @@
 // the Notes panel and chat notifications. A login-item launch (read from the launch Apple event) is
 // quiet: Burro doesn't activate, and the main window SwiftUI creates at launch is closed before it is
 // used, so the notch and menu bar are the only presence. Asking for the window (notch, menu bar,
-// Dock click, `open`, a notification) brings it back; SwiftUI makes a new one when none is open.
+// Dock click, `open`, a notification for a chat Burro lists) brings it back; SwiftUI makes a new one when none is open.
 // How to open one comes from the menu-bar item's label, which exists from launch even when no
 // window was ever created this run (and again from the main window when it appears).
 import AppKit
@@ -77,14 +77,14 @@ import BurroCore
         notch.openDashboardWindow()
     }
 
-    /// A notification click: the chat on the Chats page.
+    /// A notification click: the chat on the Chats page, or in the Claude app when it has left
+    /// Burro's list but the Claude app still has it (`AppStore.openChat(id:)` decides; the window
+    /// comes up only when the chat opens in Burro).
     func openChat(_ id: String) {
-        if let session = store.agentActivity.sessions.first(where: { $0.id == id }) {
-            store.selectAgent(session)
-        } else {
-            store.search = ""; store.page = .remote; store.remoteSelection = id
+        Task {
+            if case .openInClaude = await store.openChat(id: id) { return }
+            showMainWindow()
         }
-        showMainWindow()
     }
 
     private func openNewWindow() {

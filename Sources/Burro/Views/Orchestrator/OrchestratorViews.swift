@@ -1,4 +1,4 @@
-// Shared orchestrator pieces: its colours, avatar and composer. Home shows it as the Brief
+// Shared orchestrator pieces: its colours and composer. Home shows it as the Brief
 // (HomeBrief.swift); the full conversation lives on its own page (OrchestratorPage.swift).
 import SwiftUI
 import BurroCore
@@ -14,23 +14,8 @@ enum OrchestratorStyle {
     static let onGold = Color(red: 0.16, green: 0.13, blue: 0.08)
 }
 
-/// Burro's butter in gold, with sunglasses and a warm glow (brighter while it works).
-struct OrchestratorAvatar: View {
-    var size: CGFloat
-    var working = false
-    var body: some View {
-        ZStack {
-            Circle().fill(OrchestratorStyle.tint.opacity(working ? 0.34 : 0.21))
-                .frame(width: size * 0.7, height: size * 0.7).blur(radius: size * 0.32)
-                .animation(.easeInOut(duration: 0.4), value: working)
-            BurroMark(active: true, working: working, tint: OrchestratorStyle.tint, shades: true)
-                .frame(width: size, height: size)
-        }
-        .frame(width: size, height: size)
-    }
-}
-
-/// Type a message; Return sends, ⌥Return adds a line.
+/// Type a message; Return sends what you typed or changed (never an untouched prefill: the arrow
+/// sends that), ⌥Return adds a line.
 struct OrchestratorComposer: View {
     @Bindable var orchestrator: OrchestratorStore
     var placeholder = "Ask the orchestrator…"
@@ -39,7 +24,7 @@ struct OrchestratorComposer: View {
         HStack(alignment: .bottom, spacing: 8) {
             TextField(placeholder, text: $orchestrator.draft, axis: .vertical)
                 .textFieldStyle(.plain).font(.system(size: 14)).lineLimit(1...6)
-                .focused($focused).onSubmit(send)
+                .focused($focused).onSubmit { orchestrator.submitFromReturn() }
                 .padding(.vertical, 8)
             if orchestrator.running {
                 circleButton("stop.fill", help: "Stop") { orchestrator.stop() }
@@ -58,6 +43,6 @@ struct OrchestratorComposer: View {
                 .frame(width: 30, height: 30)
                 .background(Circle().fill(enabled ? AnyShapeStyle(OrchestratorStyle.gradient) : AnyShapeStyle(AppAppearance.tertiary.opacity(0.35))))
         }
-        .buttonStyle(.plain).disabled(!enabled).help(help).padding(.bottom, 2)
+        .buttonStyle(.plain).disabled(!enabled).help(help).accessibilityLabel(help).padding(.bottom, 2)
     }
 }

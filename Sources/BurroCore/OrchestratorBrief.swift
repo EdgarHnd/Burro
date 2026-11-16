@@ -452,6 +452,7 @@ extension OrchestratorTools {
         }
         let state: String
         if action.status == .sent { state = "sent" }
+        else if action.isUnconfirmed { state = "sent once without confirmation (it may have reached the chat); not offered again" }
         else if action.isExpired(now: now) { state = "expired" }
         else { state = "waiting for the user's Send: \"\(OrchestratorEvent.clip(action.text, 200))\"" }
         return "\n  Draft reply (proposal \(action.id)\(action.conversation == BriefDrafts.triageConversation ? ", by triage" : "")): \(state)"

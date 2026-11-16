@@ -1,6 +1,8 @@
 // The window's top bar, drawn by Burro instead of the system toolbar: Home, Orchestrator and
 // Today on the left (in ⌘1–⌘3 order), then a back pill after a jump from inside a page (and
-// "‹ Today" on the Timeline), page tools in the middle, and icon buttons with badges on the right.
+// "‹ Today" on the Timeline), a centred field "Search chats, or type to start one ⌘K" that opens
+// the command palette (a click or ⌘K; it is a button, typing happens in the palette), page tools,
+// icon buttons with badges on the right, and New chat (⌘N) as the bar's one amber button.
 // The current page's icon widens into a pill with its title. The Chats badge is amber while a
 // chat needs you and blue when there are only results to read. The traffic lights sit in its
 // left inset; dragging the bar moves the window.
@@ -25,8 +27,15 @@ struct TopBar: View {
                     .padding(.leading, 6)
                     .transition(.opacity)
             }
-            Spacer(minLength: 16)
-            pageTools.padding(.trailing, 10)
+            Spacer(minLength: 12)
+            // The full field when there's room; a magnifier button (still ⌘K) when the bar is crowded.
+            ViewThatFits(in: .horizontal) {
+                TopBarSearchField { CommandPalette.toggle() }.frame(minWidth: 230, idealWidth: 420, maxWidth: 420)
+                TopBarIcon(symbol: "magnifyingglass", help: "Search chats, or type to start one (⌘K)", selected: false) { CommandPalette.toggle() }
+            }
+            .layoutPriority(-1)
+            Spacer(minLength: 12)
+            pageTools.padding(.trailing, 10).layoutPriority(-0.5)
             icon(.remote, symbol: "bubble.left.and.bubble.right", help: AppPage.remote.help + ": every conversation, badge = needs you (amber) or ready to read (blue)",
                  badge: store.agentActivity.attentionCount,
                  badgeColor: store.agentActivity.waitingCount > 0 ? AppAppearance.amber : AppAppearance.blue)
@@ -36,7 +45,7 @@ struct TopBar: View {
             icon(.health, symbol: "heart.text.square", help: AppPage.health.help + (store.keepAwake.awake ? ": keeping this Mac awake" : ""),
                  badge: store.health.report.leftovers.count, badgeColor: AppAppearance.amber,
                  dot: store.keepAwake.awake ? AppAppearance.green : nil)
-            TopBarIcon(symbol: "square.and.pencil", help: "New chat (⌘N)", selected: false) { store.newChatPresented = true }
+            TopBarNewChatButton { store.newChatPresented = true }.padding(.leading, 6)
         }
         .padding(.horizontal, 14)
         .frame(height: 52)
@@ -64,7 +73,7 @@ struct TopBar: View {
                             .foregroundStyle(AppAppearance.tertiary).accessibilityLabel("Clear search")
                     }
                 }
-                .padding(.horizontal, 10).frame(width: 260, height: 30)
+                .padding(.horizontal, 10).frame(minWidth: 130, idealWidth: 260, maxWidth: 260).frame(height: 30)
                 .background(AppAppearance.surface, in: Capsule())
                 .overlay(Capsule().strokeBorder(AppAppearance.separator))
                 TopBarIcon(symbol: "trash", help: "Review inactive worktrees and cleanup blockers", selected: store.filter == .cleanup) { store.filter = .cleanup }
@@ -136,6 +145,59 @@ struct TopBarIcon: View {
         .help(help)
         .accessibilityLabel(badge > 0 ? "\(help), \(badge)" : help)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// Looks like a search field and opens the ⌘K command palette, where searching and "Start chat: …"
+/// already live; nothing is typed here.
+struct TopBarSearchField: View {
+    var action: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .medium))
+                Text("Search chats, or type to start one").font(.system(size: 13)).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 4)
+                Text("⌘K").font(.system(size: 11, design: .monospaced)).foregroundStyle(AppAppearance.secondary)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(AppAppearance.raised, in: RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(AppAppearance.hairline))
+                    .fixedSize()
+            }
+            .foregroundStyle(AppAppearance.tertiary)
+            .padding(.horizontal, 10).frame(height: 30)
+            .background(hovering ? AppAppearance.raised : AppAppearance.surface, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(AppAppearance.separator))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Search chats, pages and projects, or start a chat (⌘K)")
+        .accessibilityLabel("Search chats, or type to start one")
+        .accessibilityHint("Opens the command palette")
+    }
+}
+
+/// "+ New chat": the bar's one amber action. Opens the New chat sheet; it never starts a chat.
+struct TopBarNewChatButton: View {
+    var action: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: "plus").font(.system(size: 11, weight: .bold))
+                Text("New chat").font(.system(size: 13, weight: .semibold)).lineLimit(1).fixedSize()
+            }
+            .foregroundStyle(Color.black.opacity(0.86))
+            .padding(.horizontal, 12).frame(height: 30)
+            .background(AppAppearance.amber.opacity(hovering ? 0.88 : 1), in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("New chat (⌘N)")
+        .accessibilityLabel("New chat")
     }
 }
 

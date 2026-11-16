@@ -1,6 +1,7 @@
 // The Orchestrator page's Runs tab: how many model runs it made today and what they cost (as Claude
 // Code reports it), then the latest runs with their trigger, model, time taken and tokens. Read from
-// the runs log, which also holds automatic triage runs.
+// the runs log, which also holds automatic triage runs. Token counts read "500K", "1.2M" in every
+// language (`TokenCount`).
 import SwiftUI
 import BurroCore
 
@@ -53,7 +54,5 @@ struct OrchestratorRunsView: View {
     }
 
     nonisolated static func cost(_ value: Double) -> String { String(format: "$%.2f", value) }
-    nonisolated static func tokens(_ value: Int) -> String {
-        value >= 1_000_000 ? String(format: "%.1fM", Double(value) / 1_000_000) : (value >= 1000 ? String(format: "%.0fk", Double(value) / 1000) : String(value))
-    }
+    nonisolated static func tokens(_ value: Int) -> String { TokenCount.compact(value) }
 }

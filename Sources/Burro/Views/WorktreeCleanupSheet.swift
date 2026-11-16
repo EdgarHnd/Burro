@@ -1,4 +1,6 @@
-// One concise review covers the eligible selection; blocked rows stay in the list.
+// One concise review covers the eligible selection; blocked rows stay in the list. Every path
+// into cleanup (a row, the Worktrees bulk bar, the detail view) ends here and needs this confirm.
+// When every ready folder has been measured, it says how much space emptying the Trash frees.
 import SwiftUI
 import BurroCore
 
@@ -6,12 +8,20 @@ struct WorktreeCleanupSheet: View {
     var store: AppStore
     let request: CleanupRequest
     private var ready: [Worktree] { request.trees.filter { store.cleanupBlocker($0) == nil } }
+    private var readySize: Int64? {
+        let sizes = ready.map { store.worktreeInsights.sizes[$0.path] }
+        return sizes.contains(nil) ? nil : sizes.compactMap { $0 }.reduce(0, +)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Label(ready.isEmpty ? "These worktrees need attention" : "Move \(ready.count == 1 ? "worktree" : "\(ready.count) worktrees") to Trash?",
                   systemImage: ready.isEmpty ? "exclamationmark.circle" : "trash").font(AppAppearance.pageTitle)
             Text("Branches and commits stay. The entire folder, including ignored files, moves to Trash.")
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if !ready.isEmpty, let bytes = readySize {
+                Text("About \(WorktreeBoardFormat.bytes(bytes)), freed when you empty the Trash.")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(request.trees) { tree in

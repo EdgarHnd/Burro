@@ -5,13 +5,19 @@
 // (owner-only, next to the snapshot in the orchestrator's folder), survive a relaunch, and expire
 // a day after they were proposed: an expired proposal stays on screen, marked expired, until it is
 // discarded or a week has passed. Reads skip entries they can't decode instead of failing.
+// A Send that went out but whose outcome Burro couldn't confirm (no answer in time, an answer it
+// couldn't read: `SendOutcome.isUnconfirmed`) leaves the proposal `unconfirmed`, a terminal state:
+// it may have started or reached the chat, so it never waits for a one-click Send again. "Send
+// again" (behind a confirmation in the app) is the only way out, and a failed Send again stays
+// unconfirmed. An identical proposal is not recorded again while one is waiting or unconfirmed.
 // Adding or completing a to-do is different: a local action Burro applies at once and shows as a
 // small card with Undo (OrchestratorLocalActions.swift); it never sends anything to an agent.
 import Foundation
 
 public struct OrchestratorAction: Codable, Sendable, Equatable, Identifiable {
     public enum Kind: String, Codable, Sendable { case reply, start, addTodo, completeTodo }
-    public enum Status: String, Codable, Sendable { case pending, sent, applied, undone }
+    /// `unconfirmed`: Send went out but Burro couldn't confirm the outcome (it may have happened).
+    public enum Status: String, Codable, Sendable { case pending, sent, applied, undone, unconfirmed }
 
     public var id: String
     public var kind: Kind
@@ -63,6 +69,29 @@ public struct OrchestratorAction: Codable, Sendable, Equatable, Identifiable {
         status == .pending && now.timeIntervalSince(createdAt) >= Self.lifetime
     }
     public func isWaiting(now: Date = Date()) -> Bool { !isLocal && status == .pending && !isExpired(now: now) }
+    /// Send went out but its outcome is unknown: it may have started a chat or reached one.
+    public var isUnconfirmed: Bool { !isLocal && status == .unconfirmed }
+
+    /// Whether a Send may begin: a waiting proposal, or (`again`: the owner confirmed "Send
+    /// again", knowing a second chat or reply may result) an unconfirmed one.
+    public func maySend(again: Bool, now: Date = Date()) -> Bool {
+        isWaiting(now: now) || (again && isUnconfirmed)
+    }
+
+    /// Records what a Send did. Success: sent. A failure whose outcome is unknown: unconfirmed.
+    /// Any other failure: the error, the state unchanged (a waiting proposal keeps waiting; an
+    /// unconfirmed one stays unconfirmed, never back to a plain one-click Send).
+    public mutating func recordSend(text: String, outcome: Result<(message: String, chatID: String?), Error>, now: Date = Date()) {
+        self.text = text
+        switch outcome {
+        case .success(let sent):
+            status = .sent; result = sent.message; error = nil; sentAt = now
+            startedChatID = sent.chatID
+        case .failure(let failure):
+            error = (failure as? LocalizedError)?.errorDescription ?? failure.localizedDescription
+            if SendOutcome.isUnconfirmed(failure) { status = .unconfirmed; sentAt = now }
+        }
+    }
 
     public var provider: LaunchProvider? { agent.flatMap(LaunchProvider.init(rawValue:)) }
     /// A new chat proposed for another machine.
@@ -85,6 +114,21 @@ public struct OrchestratorAction: Codable, Sendable, Equatable, Identifiable {
             if changed == false { return "“\(text)” was already done" }
             return status == .undone ? "Reopened “\(text)”" : "Completed “\(text)”"
         }
+    }
+
+    /// An unconfirmed proposal's card: what may have happened and where to look.
+    public var unconfirmedNote: String {
+        switch kind {
+        case .start:
+            let place = isRemoteStart ? "\(machine ?? "that machine")'s chats on Machines or in Chats" : "Chats"
+            return "Burro didn't hear back after starting this chat. It may have started anyway: check \(place) before sending it again."
+        default:
+            return "Burro didn't hear back after sending this reply. It may have reached the chat: open it in Chats to check before sending it again."
+        }
+    }
+    /// The confirmation "Send again" asks for.
+    public var sendAgainWarning: String {
+        kind == .start ? "If the first one did start, this starts a second chat." : "If the first one went through, the chat gets this reply twice."
     }
 
     /// Two proposals are the same when they'd do the same thing to the same target.
@@ -113,7 +157,10 @@ public struct OrchestratorActionStore: Sendable {
     /// Records a proposal, or returns the identical one already waiting.
     public func propose(_ action: OrchestratorAction, now: Date = Date()) throws -> (action: OrchestratorAction, duplicate: Bool) {
         try update(now: now) { actions in
-            if let existing = actions.first(where: { $0.isWaiting(now: now) && $0.sameProposal(as: action) }) { return (existing, true) }
+            // Not again while the same one waits, or went out unconfirmed (it may have happened).
+            if let existing = actions.first(where: { ($0.isWaiting(now: now) || $0.isUnconfirmed) && $0.sameProposal(as: action) }) {
+                return (existing, true)
+            }
             actions.append(action)
             return (action, false)
         }

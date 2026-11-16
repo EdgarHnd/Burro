@@ -1,12 +1,15 @@
 // Chats you just started, shown on the Chats page until the real session appears: a "Starting"
 // group at the top of the list and, when one is selected, a detail pane saying what is happening.
+// A starting row lines up with the chat rows below it: the agent's mark (dimmed) in the same
+// leading column, a small spinner or the amber failure mark on its corner, then title and status.
 // While Claude's start check runs the row says "Starting… checking it got going"; a failure shows
 // the reason with Retry (the New chat sheet again, prefilled with the same request) and Dismiss;
 // a chat that started but hasn't appeared after a while offers its provider's own view instead.
+// Dismiss on a row that is still starting cancels the start where it still can: before the
+// worktree is made or the provider is called nothing happens, and a worktree already made for it
+// is undone (AppStore+Launch).
 // A chat starting on another machine names it ("Starting on Studio…"); once it starts, its row
 // gives way to the chat itself (its placeholder in that machine's list) and is no longer shown.
-// Also holds the list context the chat rows read (place tags and previews) and the Settings toggle
-// for opening chats in Burro.
 import SwiftUI
 import BurroCore
 
@@ -19,13 +22,7 @@ struct PendingLaunchRows: View {
         if !store.pendingLaunches.isEmpty {
             VStack(alignment: .leading, spacing: 2) {
                 if !launches.isEmpty {
-                    HStack(spacing: 6) {
-                        Circle().fill(AppAppearance.tertiary).frame(width: 6, height: 6)
-                        Text("STARTING").font(.system(size: 11, weight: .semibold)).tracking(0.7)
-                        Text("\(launches.count)").font(.system(size: 11)).monospacedDigit().opacity(0.6)
-                        Spacer()
-                    }
-                    .foregroundStyle(AppAppearance.tertiary).padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 6)
+                    ChatsSectionHeader(title: "Starting", count: launches.count, color: AppAppearance.tertiary)
                     ForEach(launches) { launch in
                         PendingLaunchRow(store: store, launch: launch, selected: store.remoteSelection == launch.rowID)
                     }
@@ -47,16 +44,26 @@ private struct PendingLaunchRow: View {
         TimelineView(.periodic(from: .now, by: 5)) { context in
             let status = launch.status(now: context.date)
             Button { store.remoteSelection = launch.rowID } label: {
-                HStack(spacing: 11) {
-                    ZStack {
-                        Circle().fill(AppAppearance.raised)
-                        if launch.isFailed {
-                            Image(systemName: "exclamationmark").font(.system(size: 12, weight: .bold)).foregroundStyle(AppAppearance.amber)
-                        } else {
-                            ProgressView().controlSize(.small)
+                HStack(alignment: .center, spacing: ChatListRowView.gap) {
+                    // The list's leading column: the agent's mark, with a spinner or the failure on its corner.
+                    ProviderAvatar(provider: launch.request.provider == .codex ? .codex : .claude, id: launch.rowID,
+                                   active: false, size: ChatListRowView.column)
+                        .opacity(0.6)
+                        .overlay(alignment: .bottomTrailing) {
+                            Group {
+                                if launch.isFailed {
+                                    Image(systemName: "exclamationmark.circle.fill").font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(AppAppearance.amber)
+                                } else {
+                                    ProgressView().controlSize(.mini).scaleEffect(0.6).frame(width: 9, height: 9)
+                                }
+                            }
+                            .padding(1).background(selected ? AppAppearance.raised : AppAppearance.background, in: Circle())
+                            .offset(x: 3, y: 2)
                         }
-                    }.frame(width: 28, height: 28)
-                    VStack(alignment: .leading, spacing: 2) {
+                        .frame(width: ChatListRowView.column, height: ChatListRowView.column)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
                         Text(launch.title).font(.system(size: 13, weight: .semibold)).lineLimit(1).foregroundStyle(AppAppearance.text)
                         Text([launch.request.provider.title, launch.isRemote ? launch.place : nil,
                               URL(fileURLWithPath: launch.request.folder).lastPathComponent, status].compactMap { $0 }.joined(separator: " · "))
@@ -70,10 +77,9 @@ private struct PendingLaunchRow: View {
                             .accessibilityHint("Opens the New chat sheet with the same request")
                     }
                 }
-                .padding(.horizontal, 10).padding(.vertical, 8)
-                .background(selected ? AppAppearance.surface : (hovering ? AppAppearance.hover : .clear),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(selected ? AppAppearance.separator : .clear))
+                .padding(.horizontal, 10).padding(.vertical, 7)
+                .background(selected ? AppAppearance.raised : (hovering ? AppAppearance.hover : .clear),
+                            in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain).onHover { hovering = $0 }
@@ -167,32 +173,5 @@ struct PendingLaunchDetail: View {
                 }
             }
         }
-    }
-}
-
-/// What every chat row needs to know about its neighbours: which rows show their place tag, and
-/// the previews already scanned for today.
-struct ChatListContext: Equatable {
-    var hiddenPlaces: Set<String> = []
-    var previews: [String: String] = [:]
-}
-
-private struct ChatListContextKey: EnvironmentKey {
-    static let defaultValue = ChatListContext()
-}
-
-extension EnvironmentValues {
-    var chatListContext: ChatListContext {
-        get { self[ChatListContextKey.self] }
-        set { self[ChatListContextKey.self] = newValue }
-    }
-}
-
-/// Settings → Agent notch: clicking a chat in the notch or the menu bar opens it in Burro.
-struct OpenChatsInBurroToggle: View {
-    @AppStorage(AppStore.openChatsInBurroKey) private var openInBurro = true
-    var body: some View {
-        Toggle("Open chats in Burro", isOn: $openInBurro)
-            .help("Clicking a chat in the notch or the menu bar opens it on Burro's Chats page. Hold ⌥ to open it in Codex or Claude instead.")
     }
 }

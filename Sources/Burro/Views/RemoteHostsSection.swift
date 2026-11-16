@@ -1,8 +1,26 @@
-// Native SSH host setup reuses the user's existing keys/configuration without storing credentials.
-// Each machine shows a status line ("Connected · checked 12 s ago", "Unreachable since 14:02 ·
-// retrying in 30 s") and how much Burro has cached for it, with Clear cache per machine and for all.
+// Settings → Machines: this Mac's keep-awake controls (KeepAwakeView.swift) and the other machines
+// you added. Native SSH host setup reuses the user's existing keys/configuration without storing
+// credentials. Each machine shows a status line ("Connected · checked 12 s ago", "Unreachable since
+// 14:02 · retrying in 30 s") and how much Burro has cached for it, with Clear cache per machine and
+// for all. The editor sheet is shared with the Machines page.
 import SwiftUI
 import BurroCore
+
+struct SettingsMachinesPane: View {
+    var store: AppStore
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SettingsPaneHeader(title: "Machines", summary: summary)
+            KeepAwakeSettingsGroup(keepAwake: store.keepAwake)
+            RemoteHostsSection(store: store)
+        }
+    }
+    private var summary: String {
+        let on = store.remoteHosts.filter(\.enabled).count
+        let others = on == 0 ? "no other machines" : on == 1 ? "1 other machine" : "\(on) other machines"
+        return "This Mac and \(others), read over SSH with your own keys."
+    }
+}
 
 struct RemoteHostsSection: View {
     var store: AppStore
@@ -10,43 +28,48 @@ struct RemoteHostsSection: View {
     @State private var usage: [UUID: Int64] = [:]
     @State private var usageVersion = 0
     var body: some View {
-        Section("Remote laptops & servers") {
+        SettingsGroup(title: "Other laptops and servers",
+                      note: "Reads Codex and Claude Code sessions over SSH. Use a Mac or Linux machine with Python 3 and an existing SSH login from this Mac. Provider app pairings are separate.") {
             ForEach(store.remoteHosts) { host in
-                HStack {
-                    Toggle(isOn: Binding(get: { store.remoteHosts.first { $0.id == host.id }?.enabled ?? false },
-                        set: { enabled in var value = host; value.enabled = enabled; store.saveRemoteHost(value) })) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(host.name)
-                            Text(host.destination).font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 10) {
+                        SettingsSwitch(label: "Read \(host.name)", isOn: Binding(get: { store.remoteHosts.first { $0.id == host.id }?.enabled ?? false },
+                            set: { enabled in var value = host; value.enabled = enabled; store.saveRemoteHost(value) }))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(host.name).font(.system(size: 13, weight: .medium))
+                            Text(host.destination).font(.system(size: 12, design: .monospaced)).foregroundStyle(AppAppearance.tertiary)
+                        }
+                        Spacer(minLength: 8)
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(store.remoteStatusLine(for: host, now: context.date)).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
+                                .lineLimit(2).multilineTextAlignment(.trailing)
+                        }
+                        Button { editing = host } label: { Image(systemName: "pencil") }.help("Edit remote machine")
+                            .accessibilityLabel("Edit \(host.name)")
+                        Button { store.removeRemoteHost(host.id) } label: { Image(systemName: "minus.circle") }.help("Remove remote machine")
+                            .accessibilityLabel("Remove \(host.name)")
+                    }
+                    .buttonStyle(.borderless)
+                    if let error = store.connection(for: host).error, host.enabled {
+                        Text(error).font(.system(size: 12)).foregroundStyle(AppAppearance.amber).textSelection(.enabled)
+                    }
+                    if let bytes = usage[host.id], bytes > 0 {
+                        HStack(spacing: 6) {
+                            Text("Cache: \(Self.size(bytes)) ·").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
+                            Button("Clear cache") { clear(host.id) }.buttonStyle(.link).font(.system(size: 12))
+                                .help("Removes what Burro copied from \(host.name): last-seen chats, transcript copies, images and videos")
                         }
                     }
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(store.remoteStatusLine(for: host, now: context.date)).font(.caption).foregroundStyle(.secondary)
-                            .lineLimit(2).multilineTextAlignment(.trailing)
-                    }
-                    Button { editing = host } label: { Image(systemName: "pencil") }.help("Edit remote machine")
-                    Button { store.removeRemoteHost(host.id) } label: { Image(systemName: "minus.circle") }.help("Remove remote machine")
-                }.buttonStyle(.borderless)
-                if let error = store.connection(for: host).error, host.enabled {
-                    Text(error).font(.caption).foregroundStyle(AppAppearance.amber).textSelection(.enabled)
                 }
-                if let bytes = usage[host.id], bytes > 0 {
-                    HStack(spacing: 6) {
-                        Text("Cache: \(Self.size(bytes)) ·").font(.caption).foregroundStyle(.secondary)
-                        Button("Clear cache") { clear(host.id) }.buttonStyle(.link).font(.caption)
-                            .help("Removes what Burro copied from \(host.name): last-seen chats, transcript copies, images and videos")
-                    }
-                }
+                SettingsRule()
             }
             if usage.values.filter({ $0 > 0 }).count > 1 {
                 HStack(spacing: 6) {
-                    Text("All machines: \(Self.size(usage.values.reduce(0, +))) ·").font(.caption).foregroundStyle(.secondary)
-                    Button("Clear all caches") { clear(nil) }.buttonStyle(.link).font(.caption)
+                    Text("All machines: \(Self.size(usage.values.reduce(0, +))) ·").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
+                    Button("Clear all caches") { clear(nil) }.buttonStyle(.link).font(.system(size: 12))
                 }
             }
-            Button("Add remote machine…") { editing = RemoteHost(name: "", destination: "") }
-            Text("Reads Codex and Claude Code sessions over SSH. Use a Mac or Linux machine with Python 3 and an existing SSH login from this Mac. Provider app pairings are separate.")
-                .font(.caption).foregroundStyle(.secondary)
+            HStack { Button("Add remote machine…") { editing = RemoteHost(name: "", destination: "") }; Spacer() }
         }
         .sheet(item: $editing) { host in RemoteHostEditor(host: host) { store.saveRemoteHost($0) } }
         .task(id: "\(usageVersion)-\(store.remoteHosts.map(\.id))") { usage = await store.remoteCacheUsage() }

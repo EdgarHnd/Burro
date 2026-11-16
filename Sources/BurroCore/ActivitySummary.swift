@@ -49,6 +49,11 @@ public struct ActivityDay: Sendable, Equatable {
     /// Stretches of 5 minutes or more Burro wasn't recording (closed, paused or off), in order;
     /// empty when coverage is unknown. Sleep and screen lock aren't among them: that's time away.
     public var notRecorded: [DateInterval] = []
+    /// The day coverage began to be kept: before this, whether Burro was recording is unknown
+    /// (ActivityCoverage.unknownUntil). Nil on every other day.
+    public var coverageFrom: Date?
+    /// The end of what this day covers: when it was read for today, the day's end otherwise.
+    public var coveredUntil: Date?
     /// "Not recorded 0:00–16:42", or "Not recorded for 5h 20m" when there are several gaps; nil when there's nothing to say.
     public var notRecordedNote: String?
     /// Everything except Break.
@@ -129,6 +134,8 @@ public struct ActivityDay: Sendable, Equatable {
                 .filter(listed).sorted { $0.seconds > $1.seconds },
             entries: entries, hourly: hourly,
             blocks: ActivityTimeline.blocks(categorized), focus: ActivityTimeline.focus(categorized),
-            coverageKnown: coverage != nil, notRecorded: gaps, notRecordedNote: ActivityCoverage.note(gaps, day: start, calendar: calendar))
+            coverageKnown: coverage != nil, notRecorded: gaps,
+            coverageFrom: ActivityCoverage.unknownUntil(coverage: coverage, spans: spans), coveredUntil: until,
+            notRecordedNote: ActivityCoverage.note(gaps, day: start, calendar: calendar))
     }
 }

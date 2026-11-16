@@ -9,7 +9,13 @@
 // row hands over at once: a placeholder for the chat (`remote:<host>:<provider>:<id>`) is put in
 // that machine's list, so the Chats page can open the conversation before the next check lists it,
 // and the hidden row keeps re-adding it until a check made after the start lists the real chat (or
-// two minutes pass). Pure state; the app drives it.
+// two minutes pass). A chat started "in a new worktree" first says "Creating worktree <branch>…";
+// once the worktree exists the request's folder becomes it, so a later failure's Retry starts
+// there, while a failure to create it keeps the project folder and asks for a new worktree again.
+// Dismissing a row while its worktree is being made undoes the worktree; if that undo leaves
+// anything behind, the row comes back failed, naming each leftover (the worktree's path, its
+// branch, its folder) so it can be removed from Worktrees.
+// Pure state; the app drives it.
 import Foundation
 
 public struct PendingLaunch: Identifiable, Equatable, Sendable {
@@ -31,6 +37,11 @@ public struct PendingLaunch: Identifiable, Equatable, Sendable {
     public var confirmedAt: Date?
     /// A remote chat whose placeholder took over the row: hidden from the list, kept until a check lists it.
     public var handedOver = false
+    /// For a chat started in a new worktree: the branch it is created on, and whether it exists yet.
+    public var worktreeBranch: String?
+    public var worktreeReady = false
+    /// Retry asks for a new worktree again only when this attempt never made one.
+    public var retryInNewWorktree: Bool { worktreeBranch != nil && !worktreeReady }
 
     /// How long a started chat may take to appear in the feed before the row says so.
     public static let listingGrace: TimeInterval = 45
@@ -97,7 +108,9 @@ public struct PendingLaunch: Identifiable, Equatable, Sendable {
     public func status(now: Date) -> String {
         let starting = isRemote ? "Starting on \(place)…" : "Starting…"
         switch phase {
-        case .starting: return request.provider == .claude ? "\(starting) checking it got going" : starting
+        case .starting:
+            if let worktreeBranch, !worktreeReady { return "Creating worktree \(worktreeBranch)…" }
+            return request.provider == .claude ? "\(starting) checking it got going" : starting
         case .started:
             if isOverdue(now: now) { return isRemote ? "Started · appears at the next check" : "Started · not in the list yet" }
             return "Started · opening…"
@@ -123,16 +136,36 @@ public struct PendingLaunches: Equatable, Sendable {
 
     @discardableResult
     public mutating func begin(_ request: LaunchRequest, follow: Bool, now: Date, id: UUID = UUID(),
-                               machine: UUID? = nil, machineName: String? = nil) -> PendingLaunch {
-        let launch = PendingLaunch(id: id, request: request, startedAt: now, follow: follow, machine: machine, machineName: machineName)
+                               machine: UUID? = nil, machineName: String? = nil, worktreeBranch: String? = nil) -> PendingLaunch {
+        var launch = PendingLaunch(id: id, request: request, startedAt: now, follow: follow, machine: machine, machineName: machineName)
+        launch.worktreeBranch = machine == nil ? worktreeBranch : nil
         items.insert(launch, at: 0)
         return launch
     }
     public mutating func succeed(_ id: UUID, with result: LaunchResult, now: Date = Date()) {
         update(id) { $0.phase = .started(result); $0.confirmedAt = now }
     }
+    /// The worktree exists: the chat starts there (and a Retry would too), on the branch it really got.
+    public mutating func worktreeCreated(_ id: UUID, folder: String, branch: String) {
+        update(id) { $0.request.folder = folder; $0.worktreeBranch = branch; $0.worktreeReady = true }
+    }
     public mutating func fail(_ id: UUID, message: String) { update(id) { $0.phase = .failed(message) } }
     public mutating func remove(_ id: UUID) { items.removeAll { $0.id == id } }
+    /// A dismissed start whose worktree Burro made but couldn't fully undo: the row comes back,
+    /// failed, naming what was left behind, so the owner can remove it from Worktrees. `launch` is
+    /// the row as it was begun (its project folder), so Retry asks for a new worktree again.
+    public mutating func leftBehind(_ launch: PendingLaunch, leftovers: [String]) {
+        guard !leftovers.isEmpty else { return }
+        var row = launch
+        row.phase = .failed(Self.leftBehindMessage(leftovers))
+        row.handedOver = false
+        items.removeAll { $0.id == launch.id }
+        items.insert(row, at: 0)
+    }
+    public static func leftBehindMessage(_ leftovers: [String]) -> String {
+        "Dismissed: the chat wasn't started, but Burro couldn't undo the worktree it made for it. Left behind: "
+            + leftovers.joined(separator: ", ") + ". Remove it from Worktrees."
+    }
 
     /// Hands every started launch whose chat is now in the feed over to it and returns the pairs
     /// (pending row id → feed chat id), so a selected pending row can select the real chat. A chat on

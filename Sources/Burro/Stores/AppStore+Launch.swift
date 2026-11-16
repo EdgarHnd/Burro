@@ -12,7 +12,19 @@
 // chat; a check of that machine is requested right away, and the placeholder is re-added after
 // checks that don't list the chat yet (for up to two minutes). A failure becomes one clear message
 // (`RemoteLaunchFailure`) with Retry, the machine included.
-// The sheet's per-project memory (`LaunchDefaults`) lives in preferences under `launch.defaults`.
+// "Start in a new worktree" (this Mac only): the row first says "Creating worktree <branch>…" while
+// `NewWorktree` makes it off the main thread; the chat then starts in the new folder (the same
+// subfolder of it when the project is a subfolder of its repository). If the worktree can't be
+// made, nothing of it is left, the chat is not started, and the row shows the error with Retry
+// (the sheet again with the switch on).
+// Dismissing a Starting / Creating worktree row cancels the start: the row is checked before the
+// worktree is made and again before the chat is launched; a worktree made for a dismissed row is
+// undone (as on failure, without forcing) and the chat is not started; if the undo leaves anything
+// behind, the row comes back failed, listing what is left (path, branch, folder) to remove from
+// Worktrees. Once the provider has been called the chat can't be called back; Dismiss then only
+// hides the row.
+// The sheet's per-project memory (`LaunchDefaults`) lives in preferences under `launch.defaults`;
+// its recent prompts and templates (`LaunchPromptMemory`) under `launch.prompts`. Both stay on this Mac.
 import AppKit
 import BurroCore
 
@@ -72,21 +84,31 @@ extension AppStore {
         set { if let data = newValue.encoded() { UserDefaults.standard.set(data, forKey: LaunchDefaults.preferencesKey) } }
     }
 
+    var launchPrompts: LaunchPromptMemory {
+        get { LaunchPromptMemory.decode(UserDefaults.standard.data(forKey: LaunchPromptMemory.preferencesKey)) ?? LaunchPromptMemory() }
+        set { if let data = newValue.encoded() { UserDefaults.standard.set(data, forKey: LaunchPromptMemory.preferencesKey) } }
+    }
+
     // MARK: Launching
 
     /// Starts the chat in the background (the owner pressed Start), on this Mac or on the machine
-    /// `machine`. Returns at once.
-    func launch(_ request: LaunchRequest, follow: Bool, machine: UUID? = nil) {
+    /// `machine`; on this Mac with `newWorktree`, in a worktree made for it first. Returns at once.
+    func launch(_ request: LaunchRequest, follow: Bool, machine: UUID? = nil, newWorktree: Bool = false) {
         guard !request.trimmedPrompt.isEmpty, !request.folder.isEmpty else { return }
+        var prompts = launchPrompts
+        prompts.recordStart(request.prompt, folder: request.folder, machine: machine)
+        launchPrompts = prompts
         if let machine {
             guard let host = remoteHosts.first(where: { $0.id == machine }) else { return }
             launchRemote(request, follow: follow, host: host)
             return
         }
+        // Remembered under the project, not the worktree made for it.
         var memory = launchDefaults
         memory.record(request)
         launchDefaults = memory
-        let pending = pendingLaunches.begin(request, follow: follow, now: Date())
+        let branch = newWorktree ? NewWorktree.branchName(prompt: request.prompt, provider: request.provider) : nil
+        let pending = pendingLaunches.begin(request, follow: follow, now: Date(), worktreeBranch: branch)
         if follow {
             search = ""
             page = .remote
@@ -94,7 +116,32 @@ extension AppStore {
         }
         let id = pending.id
         Task { @MainActor in
-            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<LaunchResult, Error> in
+            var request = request
+            if newWorktree {
+                guard pendingLaunches.launch(id) != nil else { return } // dismissed: nothing made, nothing started
+                let asked = request
+                let made = await Task.detached(priority: .userInitiated) { () -> Result<CreatedWorktree, Error> in
+                    Result { try NewWorktree.create(in: asked.folder, prompt: asked.prompt, provider: asked.provider) }
+                }.value
+                switch made {
+                case .success(let tree):
+                    guard pendingLaunches.launch(id) != nil else {
+                        // Dismissed while the worktree was being made: undo it, start nothing. What
+                        // the undo couldn't remove comes back as a failed row naming it.
+                        let leftovers = await Task.detached(priority: .utility) { NewWorktree.discard(tree) }.value
+                        pendingLaunches.leftBehind(pending, leftovers: leftovers)
+                        return
+                    }
+                    request.folder = tree.folder
+                    pendingLaunches.worktreeCreated(id, folder: tree.folder, branch: tree.branch)
+                case .failure(let error):
+                    let reason = (error as? LocalizedError)?.errorDescription ?? "Git couldn't create the worktree."
+                    pendingLaunches.fail(id, message: "No worktree made: " + reason + " The chat wasn't started.")
+                    return
+                }
+            }
+            guard pendingLaunches.launch(id) != nil else { return } // dismissed before the provider was called
+            let outcome = await Task.detached(priority: .userInitiated) { [request] () -> Result<LaunchResult, Error> in
                 Result { request.provider == .codex ? try CodexLaunch.start(request) : try ClaudeLaunch.start(request) }
             }.value
             switch outcome {
@@ -129,6 +176,7 @@ extension AppStore {
         }
         let id = pending.id
         Task { @MainActor in
+            guard pendingLaunches.launch(id) != nil else { return } // dismissed before the machine was asked
             let outcome = await Task.detached(priority: .userInitiated) { () -> Result<RemoteLaunchResult, Error> in
                 Result { request.provider == .codex ? try RemoteLaunch.startCodex(request, host: host) : try RemoteLaunch.startClaude(request, host: host) }
             }.value
@@ -180,10 +228,11 @@ extension AppStore {
         }
     }
 
-    /// Retry: the sheet again, prefilled with the failed request on the same machine. The failed row goes away.
+    /// Retry: the sheet again, prefilled with the failed request on the same machine (and the new
+    /// worktree switch on when the worktree was never made). The failed row goes away.
     func retryLaunch(_ launch: PendingLaunch) {
         dismissLaunch(launch)
-        openNewChat(LaunchDraft(retrying: launch.request, machine: launch.machine))
+        openNewChat(LaunchDraft(retrying: launch.request, machine: launch.machine, newWorktree: launch.retryInNewWorktree))
     }
     func dismissLaunch(_ launch: PendingLaunch) {
         if remoteSelection == launch.rowID { remoteSelection = nil }

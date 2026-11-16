@@ -1,10 +1,20 @@
 // State for the Today page: the selected day, its agent activity (Rust history worker) and the
 // activity Burro tracked itself. Scans run only while the page is on screen: agent activity at
-// most once a minute for today (past days once); tracked activity is a small local file, re-read
-// when the tracker saved something or at most once a minute for today. The day follows the
-// calendar (ShownDay): left on today, the page moves to the new day at midnight, checked on every
-// refresh and on the system's day-change notice so it holds while the page is off screen; a past
-// day you picked stays put.
+// most once a minute for today; a past day once its scan was taken after the day ended (plus 5
+// minutes, DayScanCache), so a scan just before midnight is redone; tracked activity is a small
+// local file, re-read when the tracker saved something, at most once a minute for today, and on
+// the same rule for a past day. Caches keep today, the day shown and the five most recently used
+// other days. The day follows the calendar (ShownDay): left on today, the page moves to the new
+// day at midnight, checked on every refresh and on the system's day-change notice so it holds
+// while the page is off screen; a past day you picked stays put.
+// From the two it works out how much agents worked while you were away (AgentAwayTime), in the
+// app and from data it already has: `away` for the day shown, and `awayAgentTime` (with
+// `awayAgentTimePartial`) for today whatever day is shown, which Home reads along with
+// `todayTracked` for its card. Home keeps them fresh with `refreshAwayAgentTime()` from its own
+// on-screen loop: today's tracked day read once per call (when over a minute old), and today's
+// agent scan reused when under 100 seconds old, otherwise redone without previews (cheaper; the
+// Today page rescans with previews when it needs them).
+// Neither is logged, stored or sent anywhere; both are nil when tracking is off or nothing can be said.
 import Foundation
 import Observation
 import BurroCore
@@ -14,15 +24,28 @@ import BurroCore
     var day: Date { shown.day }
     private(set) var activity: DailyActivity?
     private(set) var tracked: ActivityDay?
-    private(set) var scanning = false
+    /// Agent work while you were away on the day shown; nil when it can't be said.
+    private(set) var away: AgentAwayTime.Summary?
+    /// Today's wall-clock agent time while you were away (Burro recording, you not there), for
+    /// Home. Nil until today's activity and tracked day have been read, or when tracking is off.
+    private(set) var awayAgentTime: TimeInterval?
+    /// `awayAgentTime` is approximate (partial scan or chats with unknown stretches): worded "about".
+    private(set) var awayAgentTimePartial = false
+    /// Today's tracked day as last read, for Home's card (one read serves both).
+    private(set) var todayTracked: ActivityDay?
+    private var scanningDays: Set<Date> = []
+    /// The day shown is being scanned.
+    var scanning: Bool { scanningDays.contains(day) }
     let tracker: ActivityTracker
     var previews: Bool { didSet { defaults.set(previews, forKey: "today.previews"); activityCache = [:]; refresh(force: true) } }
     var profiles: () -> [UsageProvider: String] = { [:] }
 
-    @ObservationIgnored private var activityCache: [Date: (activity: DailyActivity, at: Date)] = [:]
+    @ObservationIgnored private var activityCache: [Date: (activity: DailyActivity, at: Date, previews: Bool)] = [:]
     @ObservationIgnored private var trackedCache: [Date: (day: ActivityDay, at: Date, revision: Int)] = [:]
-    @ObservationIgnored private var task: Task<Void, Never>?
-    @ObservationIgnored private var trackedTask: Task<Void, Never>?
+    /// Last use per cached day, for keeping the most recently used (DayScanCache.evictions).
+    @ObservationIgnored private var used: [Date: Int] = [:]
+    @ObservationIgnored private var useCounter = 0
+    @ObservationIgnored private var trackedReading: Set<Date> = []
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let calendar = Calendar.current
     @ObservationIgnored private var dayObserver: NSObjectProtocol?
@@ -52,16 +75,35 @@ import BurroCore
         refresh()
     }
 
-    /// Re-scans when the cached result is stale: past days never change, so they scan once.
+    /// Re-scans when the cached result is stale (DayScanCache.due): a past day settles once scanned after it ended.
     func refresh(force: Bool = false) {
         followCalendar()
         refreshTracked()
-        let target = day, now = Date(), today = isToday
-        let activityDue = force || activityCache[target].map { today && now.timeIntervalSince($0.at) > 60 } ?? true
-        guard activityDue, task == nil else { return }
-        scanning = true
-        let previews = previews, profiles = profiles()
-        task = Task { [weak self] in
+        scan(day, force: force, previews: previews, maxAge: 60)
+        updateAway()
+    }
+
+    /// For Home: reads today's tracked day when over a minute old and today's agent activity when
+    /// over 100 seconds old, without previews (a fresher scan from the Today page is reused), so
+    /// `awayAgentTime` and `todayTracked` stay current while Today is off screen.
+    func refreshAwayAgentTime() {
+        followCalendar()
+        let today = calendar.startOfDay(for: Date())
+        refreshTracked(today)
+        scan(today, force: false, previews: false, maxAge: 100)
+        updateAway()
+    }
+
+    private func scan(_ target: Date, force: Bool, previews: Bool, maxAge: TimeInterval) {
+        let now = Date()
+        touch(target)
+        let due = force || activityCache[target].map { cached in
+            (previews && !cached.previews) || DayScanCache.due(takenAt: cached.at, day: target, now: now, maxAge: maxAge, calendar: calendar)
+        } ?? true
+        guard due, !scanningDays.contains(target) else { return }
+        scanningDays.insert(target)
+        let profiles = profiles()
+        Task { [weak self] in
             let scanned = await Task.detached(priority: .utility) {
                 DailyActivityScanner.scan(day: target, previews: previews, profiles: profiles)
             }.value
@@ -72,11 +114,12 @@ import BurroCore
                 return day
             }
             if let activity {
-                self.activityCache[target] = (activity, Date())
+                self.activityCache[target] = (activity, Date(), previews)
                 if self.day == target { self.activity = activity }
+                self.evict()
             }
-            self.scanning = false
-            self.task = nil
+            self.scanningDays.remove(target)
+            self.updateAway()
         }
     }
 
@@ -89,24 +132,68 @@ import BurroCore
     }
 
     private func showCached() {
+        touch(day)
         activity = activityCache[day]?.activity
         tracked = trackedCache[day]?.day
+        updateAway()
     }
 
     /// Reads the tracked day when the tracker changed it (save, delete, rules) or, for today, after a minute.
-    func refreshTracked() {
+    func refreshTracked() { refreshTracked(day) }
+
+    private func refreshTracked(_ target: Date) {
         tracker.refreshTrust()
-        let target = day, now = Date(), revision = tracker.revision
+        let now = Date(), revision = tracker.revision
+        touch(target)
         let cached = trackedCache[target]
-        let due = cached.map { $0.revision != revision || (isToday && now.timeIntervalSince($0.at) > 60) } ?? true
-        guard due, trackedTask == nil else { return }
-        trackedTask = Task { [weak self] in
+        let due = cached.map { $0.revision != revision || DayScanCache.due(takenAt: $0.at, day: target, now: now, maxAge: 60, calendar: calendar) } ?? true
+        guard due, !trackedReading.contains(target) else { return }
+        trackedReading.insert(target)
+        Task { [weak self] in
             guard let self else { return }
             let result = await self.tracker.day(target)
             self.trackedCache[target] = (result, Date(), revision)
             if self.day == target { self.tracked = result }
-            self.trackedTask = nil
-            if self.tracker.revision != revision { self.refreshTracked() }
+            self.evict()
+            self.trackedReading.remove(target)
+            self.updateAway()
+            if self.tracker.revision != revision { self.refreshTracked(target) }
+        }
+    }
+
+    /// Works out `away` (day shown) and `awayAgentTime` (today) from what is cached. Cheap: a few
+    /// interval merges over one day's stretches.
+    private func updateAway() {
+        let now = Date(), today = calendar.startOfDay(for: now)
+        let summary = { [self] (target: Date) -> AgentAwayTime.Summary? in
+            guard tracker.enabled, let activity = activityCache[target]?.activity, let tracked = trackedCache[target]?.day else { return nil }
+            return AgentAwayTime.summary(chats: activity.chats, tracked: tracked, day: target, now: now, partial: activity.partial, calendar: calendar)
+        }
+        let shownSummary = summary(day)
+        if shownSummary != away { away = shownSummary }
+        let todaySummary = day == today ? shownSummary : summary(today)
+        if todaySummary?.total != awayAgentTime { awayAgentTime = todaySummary?.total }
+        let partial = todaySummary?.partial ?? false
+        if partial != awayAgentTimePartial { awayAgentTimePartial = partial }
+        let todayDay = trackedCache[today]?.day
+        if todayDay != todayTracked { todayTracked = todayDay }
+    }
+
+    /// Marks a day as just used, for eviction.
+    private func touch(_ target: Date) {
+        useCounter += 1
+        used[target] = useCounter
+    }
+
+    /// Keeps today, the day shown and the five most recently used other days in the caches.
+    private func evict() {
+        let keep: Set<Date> = [calendar.startOfDay(for: Date()), day]
+        let cached = Set(activityCache.keys).union(trackedCache.keys)
+        let drop = DayScanCache.evictions(used: Dictionary(uniqueKeysWithValues: cached.map { ($0, used[$0] ?? 0) }), keep: keep)
+        for target in drop {
+            activityCache[target] = nil
+            trackedCache[target] = nil
+            used[target] = nil
         }
     }
 }

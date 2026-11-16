@@ -11,6 +11,10 @@
 // background session when the Send asks for it (`stopIdleBackground`): then that one session is
 // stopped first and the reply goes only once `claude agents` confirms it stopped
 // (ClaudeContinue.swift). Interactive sessions (the Claude app, a terminal) are never stopped.
+// A sub-agent never takes a reply (`unavailable`). A failure after the request may already have
+// reached the provider (no answer in time, the connection dropped mid-call, an answer Burro
+// couldn't read) throws `ReplyNotConfirmed` instead of an ordinary error, so no surface treats
+// it as "nothing was sent" and offers a one-click resend.
 import Foundation
 
 public enum ReplyAccess: String, CaseIterable, Identifiable, Sendable {
@@ -48,6 +52,28 @@ public enum ReplyAccess: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// A reply whose request left Burro but whose answer never came back (no answer in time, the
+/// connection dropped mid-call, an answer Burro couldn't read): it may have reached the chat.
+/// Never shown as "nothing was sent", and never resent with one click.
+public struct ReplyNotConfirmed: Error, LocalizedError, Equatable, Sendable {
+    public var detail: String
+    public init(_ detail: String) { self.detail = detail }
+    public var errorDescription: String? {
+        "Burro sent the reply but didn't hear back (\(detail.hasSuffix(".") ? String(detail.dropLast()) : detail)). It may have reached the chat: check the chat before sending it again."
+    }
+}
+
+/// Sends whose outcome Burro can't vouch for: a reply or a start that may have happened anyway.
+public enum SendOutcome {
+    public static func isUnconfirmed(_ error: Error) -> Bool {
+        if error is ReplyNotConfirmed { return true }
+        if case RemoteLaunchError.notConfirmed? = error as? RemoteLaunchError { return true }
+        // A local tool that ran but didn't finish in time (a start that may have got going).
+        if error is ProcessTimedOut { return true }
+        return false
+    }
+}
+
 public struct ReplyRequest: Sendable, Equatable {
     public var text: String
     public var model: String?
@@ -62,8 +88,12 @@ public struct ReplyRequest: Sendable, Equatable {
 }
 
 public enum ChatReply {
+    /// Sub-agents are answered through the chat that started them, never directly: no reply
+    /// field, queued message or proposal Send ever targets one.
+    public static let subagentReason = "This is a sub-agent. Answer it through the chat that started it."
     /// Why this chat can't take a reply right now, or nil when it can.
     public static func unavailable(_ session: AgentSession, host: RemoteHost?) -> String? {
+        if session.isSubagent == true { return subagentReason }
         guard ChatTranscripts.identity(of: session) != nil else { return "Burro can't reply to this kind of chat." }
         if session.remote != nil && host == nil { return "That machine isn't configured in Burro any more." }
         if session.remote?.stale == true { return "\(session.remote?.hostName ?? "That machine") isn't answering right now." }
@@ -89,7 +119,8 @@ public enum ChatReply {
             defer { server.close() }
             // Loads the thread into the daemon if it isn't already; a running turn is steered.
             _ = try? server.request("thread/resume", ["threadId": id, "excludeTurns": true])
-            _ = try server.request("turn/start", codexTurnParams(threadID: id, request))
+            do { _ = try server.request("turn/start", codexTurnParams(threadID: id, request)) }
+            catch { throw codexTurnFailure(error) }
             return session.state == .working ? "Sent. Codex will take it into account in this turn." : "Sent. Codex is on it."
         }
         let arguments = claudeArguments(sessionID: id, request)
@@ -100,7 +131,7 @@ public enum ChatReply {
         let output: String
         if let host {
             let operation = stopIdleBackground ? "continue" : "args"
-            output = try remoteClaude([operation: arguments, "cwd": session.cwd], host: host)
+            output = try remoteClaude([operation: arguments, "cwd": session.cwd], host: host, delivers: true)
         } else {
             guard let claude = ClaudeLaunch.executable() else { throw LaunchError.notInstalled(.claude) }
             let folder = FileManager.default.fileExists(atPath: session.cwd) ? session.cwd : NSHomeDirectory()
@@ -110,6 +141,14 @@ public enum ChatReply {
         }
         if output.localizedCaseInsensitiveContains("copy") { return "Sent, but Claude started a copy of this chat because it was open elsewhere." }
         return "Sent. Claude is continuing in the background."
+    }
+
+    /// A failed `turn/start`: Codex's own refusal, or a request that never left Burro, means
+    /// nothing was sent; anything else (no answer in time, the connection gone mid-call) may have
+    /// started the turn.
+    static func codexTurnFailure(_ error: Error) -> Error {
+        if error is CodexRPCRefusal || error is CodexRequestNotSent { return error }
+        return ReplyNotConfirmed((error as? LocalizedError)?.errorDescription ?? "Codex didn't answer")
     }
 
     static func codexTurnParams(threadID: String, _ request: ReplyRequest) -> [String: Any] {
@@ -183,6 +222,10 @@ public enum ChatReply {
         return live
     }
     static let stillOpen = "This chat is still open as a background session. Attach to it to reply there."
+    /// A working Claude chat that the Claude app or a terminal runs (one sentence, ending in what to do).
+    public static let runsElsewhere = "A reply from Burro would start a separate copy, so reply in the Claude app or terminal running this chat."
+    /// The same for an open but idle one; `remote_reply.py` words it the same way.
+    public static let openElsewhere = "A reply from Burro would start a separate copy, so reply in the Claude app or terminal that has this chat open."
     /// `attached`: a `claude attach` for this session runs in a terminal (only looked at for an
     /// idle background session).
     static func claudePlan(_ live: ClaudeLive?, attached: Bool = false) -> ClaudeCheck {
@@ -204,7 +247,7 @@ public enum ChatReply {
             }
             return ClaudeCheck(problem: stillOpen, attach: live.handle, open: true, background: true)
         }
-        return ClaudeCheck(problem: "This chat is open in Claude Code (a terminal or the Claude app). Reply there: a reply from Burro would start a separate copy.",
+        return ClaudeCheck(problem: openElsewhere,
                            open: true)
     }
 
@@ -217,13 +260,21 @@ public enum ChatReply {
     /// add up to under two minutes (lookups, the stop, its confirmation, the resume); others 90 s.
     static func remoteTimeout(_ request: [String: Any]) -> TimeInterval { request["continue"] != nil ? 150 : 90 }
 
-    static func remoteClaude(_ request: [String: Any], host: RemoteHost) throws -> String {
-        let result = try RemoteScript.run("remote_reply", request: request, host: host, timeout: remoteTimeout(request))
+    /// `delivers`: this request resumes the chat with a message (not a stop or a check), so an
+    /// answer that never came back, or came back unreadable, may mean it went (`ReplyNotConfirmed`).
+    /// SSH failing to connect (exit 255) is treated as not sent: OpenSSH uses it for a refused or
+    /// dropped connection, and the script only resumes after it has read its whole request.
+    static func remoteClaude(_ request: [String: Any], host: RemoteHost, delivers: Bool = false) throws -> String {
+        let result: Data
+        do { result = try RemoteScript.run("remote_reply", request: request, host: host, timeout: remoteTimeout(request)) }
+        catch RemoteLaunchError.timedOut(let name) where delivers { throw ReplyNotConfirmed("\(name) didn't answer in time") }
         guard let object = try? JSONSerialization.jsonObject(with: result) as? [String: Any] else {
+            if delivers { throw ReplyNotConfirmed("\(host.name) answered in a way Burro couldn't read") }
             throw LaunchError.failed("\(host.name) didn't answer as expected.")
         }
         guard object["ok"] as? Bool == true else {
             let message = (object["error"] as? String) ?? "Claude didn't continue on \(host.name)."
+            if delivers, object["code"] as? String == "notConfirmed" { throw ReplyNotConfirmed(message) }
             if let refusal = ReplyRefusal.remote(object["live"], message: message) { throw refusal }
             throw LaunchError.failed(message)
         }
@@ -275,7 +326,9 @@ enum RemoteScript {
         try? pipe.fileHandleForWriting.close()
         if done.wait(timeout: .now() + timeout) == .timedOut {
             process.terminate()
-            throw LaunchError.failed("\(host.name) didn't answer in time.")
+            // Same words as before ("… didn't answer in time."); typed so a reply can tell it
+            // apart from a refusal.
+            throw RemoteLaunchError.timedOut(host: host.name)
         }
         let status = process.terminationStatus
         if status != 0 {

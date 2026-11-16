@@ -253,6 +253,17 @@ final class OrchestratorTests: XCTestCase {
         XCTAssertEqual(tools.actions.load().count, 2)
     }
 
+    func testReplyChatRefusesASubagentAndNamesItsParent() throws {
+        var worker = session("codex:\(otherID)", "Codex sub-agent", state: .waiting)
+        worker.isSubagent = true
+        worker.parentSessionID = "codex:\(chatID)"
+        let tools = try tools(state(chats: [session("codex:\(chatID)", "Season pass", state: .working), worker]))
+        let (text, isError) = tools.replyChat(["id": otherID, "message": "Go ahead"])
+        XCTAssertTrue(isError, text)
+        XCTAssertTrue(text.contains("sub-agent") && text.contains("parent"), text)
+        XCTAssertTrue(tools.actions.load().isEmpty, "nothing is proposed for a sub-agent")
+    }
+
     /// The tool server must have no way to send a message or start a chat by itself.
     func testToolServerHasNoPathThatSendsOrLaunches() throws {
         let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

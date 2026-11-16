@@ -1,4 +1,6 @@
 // Independent provider polling, account selection, preferences and private aggregate history.
+// Also holds the Usage page's local seven-day token picture (`week`), scanned on demand while the
+// page is on screen (at most every 90 seconds) and dropped when a profile changes.
 import AppKit
 import Observation
 import BurroCore
@@ -22,12 +24,18 @@ struct UsagePreferences: Codable, Equatable {
     var preferences: UsagePreferences { didSet {
         if let data = try? JSONEncoder().encode(preferences) { defaults.set(data, forKey: "usagePreferences") }
         if !preferences.history { clearHistory() }
+        if preferences.profiles != oldValue.profiles { week = nil }
         if preferences.providers != oldValue.providers || preferences.profiles != oldValue.profiles { invalidate() }
         else if preferences.interval != oldValue.interval { nextPoll = [:] }
     } }
     var history: [UsageHistorySample]
     var selected: UsageProvider? = nil
     var message: String?
+    /// The last seven days of local tokens and today's models; nil until scanned or when the reader is unavailable.
+    var week: UsageWeek?
+    private(set) var scanningWeek = false
+    /// The app's store, for the Usage page's project, Orchestrator and triage figures (set by AppStore).
+    @ObservationIgnored weak var app: AppStore?
     private let defaults: UserDefaults
     private var signingIn: (provider: UsageProvider, previousScope: String?)?
     private var generation = 0
@@ -175,6 +183,18 @@ struct UsagePreferences: Codable, Equatable {
         }
         checking = false
         if enabled && (ticket != generation || recoveryRequested) { await refresh() }
+    }
+    /// Rescans the seven-day token picture in the usage worker, at most every 90 seconds.
+    func refreshWeek(force: Bool = false) {
+        guard !scanningWeek else { return }
+        if !force, let last = week?.scannedAt, Date().timeIntervalSince(last) < 90 { return }
+        scanningWeek = true
+        let profiles = preferences.profiles
+        Task {
+            let result = await Task.detached(priority: .utility) { UsageWeekScanner.scan(profiles: profiles) }.value
+            if preferences.profiles == profiles { week = result }
+            scanningWeek = false
+        }
     }
     func connectClaude() {
         guard !checking else { return }

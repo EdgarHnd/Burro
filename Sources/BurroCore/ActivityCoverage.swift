@@ -88,7 +88,7 @@ public enum ActivityCoverage {
         guard let coverage, range.duration > 0 else { return [] }
         let recorded = merged(coverage + spans.filter { $0.end > $0.start }.map { DateInterval(start: $0.start, end: $0.end) })
         var gaps: [DateInterval] = [], cursor = range.start
-        if let first = coverage.map(\.start).min(), spans.contains(where: { $0.start < first }) { cursor = max(cursor, first) }
+        if let first = unknownUntil(coverage: coverage, spans: spans) { cursor = max(cursor, first) }
         for interval in recorded where interval.end > cursor {
             if interval.start >= range.end { break }
             if interval.start > cursor { gaps.append(DateInterval(start: cursor, end: interval.start)) }
@@ -96,6 +96,13 @@ public enum ActivityCoverage {
         }
         if cursor < range.end { gaps.append(DateInterval(start: cursor, end: range.end)) }
         return gaps.filter { $0.duration >= minimumGap }
+    }
+
+    /// On the day coverage began to be kept: the start of the first recording interval when spans
+    /// predate it (before it, whether Burro was recording is unknown). Nil otherwise.
+    public static func unknownUntil(coverage: [DateInterval]?, spans: [ActivitySpan]) -> Date? {
+        guard let first = coverage?.map(\.start).min(), spans.contains(where: { $0.start < first }) else { return nil }
+        return first
     }
 
     /// The short note for the summary: "Not recorded 0:00–16:42" for one gap, "Not recorded for

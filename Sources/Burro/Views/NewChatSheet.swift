@@ -1,12 +1,24 @@
-// Start a Codex or Claude chat: one large prompt field with the cursor in it, and under it a single
-// line of chips — project ▾ · provider model effort ▾ · access ▾ · machine ▾ — already filled from
-// the last launch in that project (LaunchDefaults). The project chip lists recently used projects
-// first and ⌘1–⌘9 pick them; switching project brings back that project's choices, switching
-// provider brings back the model and effort last used with it. ⌘↩ starts the chat and follows it
-// on the Chats page; ⇧⌘↩ starts it and stays on the current page; Escape cancels. Starting closes
-// the sheet at once: the chat shows as "Starting…" in Chats while the provider spins it up (for
-// Claude, the start check of up to 20 seconds runs then, not here). Opening the sheet from a to-do,
-// a note, the palette, a worktree or Retry prefills it; only Start launches.
+// Start a Codex or Claude chat. Top to bottom: the title with "Burro remembers your last choices
+// per project"; one large prompt field with the cursor in it; one line of labelled chips — Project ▾
+// · Agent (provider · model · effort) ▾ · Access ▾ · machine ▾ — already filled from the last launch
+// in that project (LaunchDefaults); Recent (the last prompts started from this sheet in the chosen
+// project, first line shown, two as chips and the rest under "N more") and Templates (three
+// built-ins plus the owner's own: "Save as template" keeps the current prompt, the × on hover or
+// the context menu deletes one of his) — a click puts that prompt in the field, replacing what is
+// there (LaunchPromptMemory, kept on this Mac only); then "Start in a new worktree" with the branch
+// it will create (this Mac and git projects only: on Start, Burro makes the worktree first and
+// starts the chat in it; a failure shows on the Starting row with Retry and nothing starts; the
+// switch hides while a newly chosen folder is being checked, and Start checks the folder again) and,
+// on the right, the chosen provider's quota from the usage reading ("Claude session: 38% left ·
+// resets 23:00", hidden when unknown or on another machine); and the footer's key hints, Cancel
+// and Start chat.
+// The project chip lists recently used projects first and ⌘1–⌘9 pick them; switching project brings
+// back that project's choices, switching provider brings back the model and effort last used with
+// it. ⌘↩ starts the chat and follows it on the Chats page; ⇧⌘↩ starts it and stays on the current
+// page; Escape cancels. Starting closes the sheet at once: the chat shows as "Starting…" in Chats
+// while the provider spins it up (for Claude, the start check of up to 20 seconds runs then, not
+// here). Opening the sheet from a to-do, a note, the palette, a worktree or Retry prefills it; only
+// Start launches.
 // The machine chip lists This Mac and every configured machine with its status line (paused or
 // unreachable ones can't be picked, and say why). With another machine chosen, the project chip
 // lists that machine's folders: the remembered list at once, refreshed over SSH off the main thread
@@ -20,7 +32,12 @@ import BurroCore
 
 struct NewChatSheet: View {
     @Bindable var store: AppStore
+    /// Prompt memory to show instead of the saved one (snapshot tests).
+    private let initialPrompts: LaunchPromptMemory?
     @Environment(\.dismiss) private var dismiss
+    @State private var prompts = LaunchPromptMemory()
+    /// Whether the chosen folder on this Mac is a git project (checked off the main thread).
+    @State private var gitProject = false
     @State private var form = LaunchForm()
     @State private var defaults = LaunchDefaults()
     @State private var customFolders: [String] = []
@@ -39,6 +56,11 @@ struct NewChatSheet: View {
     @State private var checkingPath = false
     @State private var pathProblem: String?
     @FocusState private var pathFocused: Bool
+
+    init(store: AppStore, prompts: LaunchPromptMemory? = nil) {
+        self.store = store
+        initialPrompts = prompts
+    }
 
     /// The model lists for a machine, as a closure that doesn't read `form` (it is passed into `form`'s own mutations).
     private func modelLists(for machine: UUID?) -> (LaunchProvider) -> [LaunchModel] {
@@ -74,6 +96,12 @@ struct NewChatSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("New chat").font(.system(size: 15, weight: .semibold))
+                Spacer(minLength: 8)
+                Text("Burro remembers your last choices per project").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
+            }
+
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $form.prompt)
                     .font(.system(size: 15)).scrollContentBackground(.hidden)
@@ -86,19 +114,15 @@ struct NewChatSheet: View {
                         .padding(.horizontal, 17).padding(.vertical, 12).allowsHitTesting(false)
                 }
             }
-            .frame(minHeight: 170)
-            .background(AppAppearance.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(promptFocused ? AppAppearance.hairline : AppAppearance.separator))
+            .frame(minHeight: 132)
+            .background(AppAppearance.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(promptFocused ? AppAppearance.tertiary.opacity(0.6) : AppAppearance.hairline))
 
-            HStack(spacing: 6) {
+            FlowLayout(spacing: 6) {
                 projectChip
-                dot
                 modelChip
-                dot
                 accessChip
-                dot
                 machineChip
-                Spacer(minLength: 0)
             }
 
             if typingPath, form.machine != nil { pathField }
@@ -111,21 +135,32 @@ struct NewChatSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: 10) {
-                Text("⌘↩ start · ⇧⌘↩ start and stay here · ⌘1–9 project")
-                    .font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Start chat") { start(follow: true) }
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(!canStart)
+            NewChatPromptShortcuts(recent: prompts.recentPrompts(folder: form.folder, machine: form.machine),
+                                   templates: prompts.templates, canSave: prompts.canSave(form.prompt),
+                                   use: usePrompt, save: saveTemplate, delete: deleteTemplate)
+
+            let quota = quotaLine
+            if showsWorktreeSwitch || quota != nil {
+                Rectangle().fill(AppAppearance.separator).frame(height: 1)
+                NewChatWorktreeRow(worktree: showsWorktreeSwitch ? $form.newWorktree : nil,
+                                   branch: NewWorktree.branchName(prompt: form.prompt, provider: form.choice.provider), quota: quota)
             }
+
+            NewChatFooter(canStart: canStart, cancel: { dismiss() }, start: { start(follow: true) })
         }
-        .padding(20)
-        .frame(width: 640)
+        .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 16)
+        .frame(width: 700)
         .background { shortcuts }
+        .background(AppAppearance.surface)
         .modifier(AppTheme())
         .onAppear(perform: prepare)
+        .task(id: form.machine == nil ? form.folder : "") {
+            // Unknown until this folder's own answer arrives: never the previous folder's.
+            gitProject = false
+            let folder = form.machine == nil ? form.folder : ""
+            let found = await Task.detached(priority: .userInitiated) { NewWorktree.isGitProject(folder) }.value
+            if !Task.isCancelled { gitProject = found }
+        }
         .onChange(of: store.codexModels) { _, _ in
             if form.machine == nil, form.choice.provider == .codex { form.choice = form.choice.validated(models: store.codexModels) }
         }
@@ -139,6 +174,36 @@ struct NewChatSheet: View {
         }
     }
 
+    /// The worktree switch: this Mac, a git project.
+    private var showsWorktreeSwitch: Bool { form.machine == nil && gitProject }
+
+    /// The chosen provider's quota on this Mac's account; another machine may be signed in differently.
+    private var quotaLine: String? {
+        guard form.machine == nil else { return nil }
+        return LaunchQuota.line(provider: form.choice.provider, modelTitle: form.choice.selectedModel(in: models)?.title,
+                                usage: store.providerUsage, now: Date(), calendar: .current)
+    }
+
+    private func usePrompt(_ text: String) {
+        form.prompt = text
+        promptFocused = true
+    }
+    private func saveTemplate() {
+        guard prompts.saveTemplate(form.prompt) != nil else { return }
+        persistPrompts()
+    }
+    private func deleteTemplate(_ id: String) {
+        prompts.deleteTemplate(id)
+        persistPrompts()
+    }
+    /// Saved only for the real sheet, never for a snapshot's sample memory.
+    private func persistPrompts() {
+        guard initialPrompts == nil else { return }
+        var stored = store.launchPrompts
+        stored.saved = prompts.saved
+        store.launchPrompts = stored
+    }
+
     /// The amber line: a start problem, else why the chosen machine can't be used now.
     private var notice: String? {
         if let error { return error }
@@ -146,12 +211,10 @@ struct NewChatSheet: View {
         return nil
     }
 
-    private var dot: some View { Text("·").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary) }
-
     // MARK: Chips
 
     private var projectChip: some View {
-        chip(symbol: "folder", title: projectName, busy: form.machine != nil && loadingFolders) {
+        NewChatChip(label: "Project", title: projectName, busy: form.machine != nil && loadingFolders) {
             let list = projects
             if form.machine != nil, list.isEmpty {
                 Text(loadingFolders ? "Loading folders…" : "No folders remembered yet")
@@ -175,10 +238,10 @@ struct NewChatSheet: View {
     private var modelChip: some View {
         let choice = form.choice
         let modelTitle = choice.selectedModel(in: models)?.title ?? (choice.model.isEmpty ? "Default" : choice.model)
-        let title = [agentName, modelTitle, choice.effort.isEmpty ? nil : Self.effortTitle(choice.effort)].compactMap { $0 }.joined(separator: " ")
+        let title = [agentName, modelTitle, choice.effort.isEmpty ? nil : Self.effortTitle(choice.effort).lowercased()].compactMap { $0 }.joined(separator: " · ")
         let efforts = choice.selectedModel(in: models)?.efforts ?? []
         let codexLoading = form.machine == nil ? store.codexModels.isEmpty : (remoteModels.isEmpty && loadingModels)
-        return chip(symbol: nil, title: title) {
+        return NewChatChip(label: "Agent", title: title) {
             Section("Agent") {
                 ForEach(LaunchProvider.allCases) { provider in
                     Toggle(provider.title, isOn: Binding(get: { form.choice.provider == provider }, set: { if $0 { selectProvider(provider) } }))
@@ -205,8 +268,7 @@ struct NewChatSheet: View {
     }
 
     private var accessChip: some View {
-        chip(symbol: form.choice.access == .readOnly ? "eye" : (form.choice.access == .edit ? "pencil" : "hand.raised"),
-             title: form.choice.access.title) {
+        NewChatChip(label: "Access", title: form.choice.access.title) {
             ForEach(LaunchAccess.allCases) { access in
                 Toggle(access.title, isOn: Binding(get: { form.choice.access == access }, set: { if $0 { form.choice.access = access } }))
             }
@@ -216,31 +278,13 @@ struct NewChatSheet: View {
 
     private var machineChip: some View {
         let list = machines
-        return chip(symbol: form.machine == nil ? "laptopcomputer" : "desktopcomputer", title: selectedMachine.name) {
+        return NewChatChip(label: nil, dot: selectedMachine.available ? AppAppearance.green : AppAppearance.tertiary, title: selectedMachine.name) {
             ForEach(list) { machine in
                 Toggle(LaunchMachines.rowTitle(machine), isOn: Binding(get: { form.machine == machine.id }, set: { if $0 { selectMachine(machine.id) } }))
                     .disabled(!machine.available && form.machine != machine.id)
             }
         }
         .help(form.machine == nil ? "Runs on this Mac" : "Runs on \(selectedMachine.name) · \(selectedMachine.detail)")
-    }
-
-    private func chip<Content: View>(symbol: String?, title: String, busy: Bool = false, @ViewBuilder content: () -> Content) -> some View {
-        Menu { content() } label: {
-            HStack(spacing: 5) {
-                if busy {
-                    ProgressView().controlSize(.mini)
-                } else if let symbol {
-                    Image(systemName: symbol).font(.system(size: 10.5, weight: .semibold))
-                }
-                Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.6)
-            }
-            .foregroundStyle(AppAppearance.secondary)
-            .padding(.horizontal, 10).frame(height: 28)
-            .background(AppAppearance.raised.opacity(0.6), in: Capsule())
-        }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
     }
 
     /// A folder path typed for another machine, checked there before it is used.
@@ -299,6 +343,7 @@ struct NewChatSheet: View {
     private func prepare() {
         store.loadCodexModels()
         defaults = store.launchDefaults
+        prompts = initialPrompts ?? store.launchPrompts
         let draft = store.newChatDraft ?? LaunchDraft()
         store.newChatDraft = nil
         let options = machines
@@ -421,7 +466,9 @@ struct NewChatSheet: View {
         guard FileManager.default.fileExists(atPath: request.folder) else { error = LaunchError.missingFolder.errorDescription; return }
         let installed = request.provider == .codex ? CodexUsageReader.executable() != nil : ClaudeLaunch.executable() != nil
         guard installed else { error = LaunchError.notInstalled(request.provider).errorDescription; return }
-        store.launch(request, follow: follow)
+        // The switch must be showing for this folder, and the folder is checked again now.
+        let worktree = showsWorktreeSwitch && form.newWorktree && NewWorktree.isGitProject(request.folder)
+        store.launch(request, follow: follow, newWorktree: worktree)
         dismiss()
     }
 }

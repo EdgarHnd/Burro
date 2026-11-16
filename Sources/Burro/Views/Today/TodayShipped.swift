@@ -549,6 +549,10 @@ private struct MergedBlock: View {
     var day: ShippedDay
     var person: ShippedDay.Person
     @State private var all = false
+    /// Lines added or removed, "1.2K" (not a token count, so it keeps its own format).
+    static func lines(_ value: Int) -> String {
+        Double(value).formatted(.number.notation(.compactName).precision(.fractionLength(0...1)))
+    }
     var body: some View {
         let pulls = day.merged(by: person.login)
         let shown = all ? pulls : Array(pulls.prefix(6))
@@ -560,8 +564,8 @@ private struct MergedBlock: View {
                 Spacer()
                 let added = pulls.reduce(0) { $0 + $1.additions }, removed = pulls.reduce(0) { $0 + $1.deletions }
                 HStack(spacing: 5) {
-                    Text("+" + HomeFormat.tokens(Double(added))).foregroundStyle(AppAppearance.green.opacity(0.8))
-                    Text("−" + HomeFormat.tokens(Double(removed))).foregroundStyle(Color(red: 0.92, green: 0.36, blue: 0.36).opacity(0.8))
+                    Text("+" + Self.lines(added)).foregroundStyle(AppAppearance.green.opacity(0.8))
+                    Text("−" + Self.lines(removed)).foregroundStyle(Color(red: 0.92, green: 0.36, blue: 0.36).opacity(0.8))
                 }
                 .font(.system(size: 11.5)).monospacedDigit()
                 .help("\(added.formatted()) lines added, \(removed.formatted()) removed")

@@ -117,8 +117,9 @@ import XCTest
 
     /// The whole page with a stand-in for Shipped (it reads GitHub, which snapshots never do).
     private func page(_ today: TodayStore) -> some View {
-        TodayPage(today: today, activity: messyChats, rows: messyRows, todos: .init(done: 3, open: 5, added: 2), waitingNow: 1,
-                  grouping: .constant(TodayGrouping.status.rawValue), now: messyNow, open: { _ in }) {
+        TodayPage(today: today, activity: messyChats, away: nil, rows: messyRows, todos: .init(done: 3, open: 5, added: 2), waitingNow: 1,
+                  shippedState: .loading, grouping: .constant(TodayGrouping.status.rawValue), mode: .constant(TodayDayMode.list.rawValue),
+                  shippedDetails: .constant(true), now: messyNow, open: { _ in }) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("SHIPPED").font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(AppAppearance.tertiary)
                 HomeEmptyCard(symbol: "shippingbox", title: "Shipped", detail: "Stand-in: the real section reads GitHub, which snapshots don't.") { EmptyView() }
@@ -186,9 +187,9 @@ import XCTest
             try render(TodayDaySection(today: full, now: now), width: 868, dark: dark, to: out.appendingPathComponent("today-wide-\(suffix).png"))
             try render(TodayDaySection(today: full, now: now), width: 600, dark: dark, to: out.appendingPathComponent("today-narrow-\(suffix).png"))
             try render(TodayDaySection(today: empty, now: now), width: 868, dark: dark, to: out.appendingPathComponent("today-empty-\(suffix).png"))
-            try render(HomeActivityCard(tracker: full.tracker, active: false, day: day, now: now) {}, width: 368, dark: dark,
+            try render(HomeActivityCard(tracker: full.tracker, day: day, now: now) {}, width: 368, dark: dark,
                        to: out.appendingPathComponent("home-card-\(suffix).png"))
-            try render(HomeActivityCard(tracker: empty.tracker, active: false, day: try XCTUnwrap(empty.tracked), now: now) {}, width: 368,
+            try render(HomeActivityCard(tracker: empty.tracker, day: try XCTUnwrap(empty.tracked), now: now) {}, width: 368,
                        dark: dark, to: out.appendingPathComponent("home-card-empty-\(suffix).png"))
         }
     }

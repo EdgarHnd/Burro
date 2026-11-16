@@ -144,15 +144,20 @@ final class ClaudeContinueTests: XCTestCase {
         var listings: [String]
         var stopCode: Int32 = 0
         var resumeCode: Int32 = 0
+        /// The resume runs but never finishes in time.
+        var resumeTimesOut = false
+        var stopTimesOut = false
         var processes: String? = ""
         var clock: TimeInterval = 0
         init(_ listings: [String]) { self.listings = listings }
         var commands: ClaudeCommands {
             ClaudeCommands(run: { [self] arguments, _, _ in
-                lock.withLock {
+                try lock.withLock {
                     calls.append(arguments)
                     if arguments.first == "agents" { return (0, listings.count > 1 ? listings.removeFirst() : (listings.first ?? "[]")) }
+                    if arguments.first == "stop", stopTimesOut { throw ProcessTimedOut(name: "claude") }
                     if arguments.first == "stop" { return (stopCode, stopCode == 0 ? "" : "Error: no such session") }
+                    if resumeTimesOut { throw ProcessTimedOut(name: "claude") }
                     return (resumeCode, resumeCode == 0 ? "Started c0d2240d · claude attach c0d2240d" : "Error: bad")
                 }
             }, processes: { [self] in lock.withLock { processes } },
@@ -220,6 +225,27 @@ final class ClaudeContinueTests: XCTestCase {
         let busy = Fake([String(decoding: rows([row(["id": "c0d2240d", "kind": "background", "pid": 42, "status": "busy"])]), as: UTF8.self)])
         XCTAssertThrowsError(try ChatReply.continueClaude(id, arguments: args, folder: "/tmp", stopIdleBackground: true, commands: busy.commands))
         XCTAssertEqual(busy.verbs, ["agents"])
+    }
+
+    func testAResumeThatRanButDidntFinishIsNotConfirmedNotFailed() {
+        let args = ChatReply.claudeArguments(sessionID: id, ReplyRequest(text: "go on"))
+        let slow = Fake([stoppedListing]); slow.resumeTimesOut = true
+        XCTAssertThrowsError(try ChatReply.continueClaude(id, arguments: args, folder: "/tmp", stopIdleBackground: false, commands: slow.commands)) {
+            XCTAssertTrue($0 is ReplyNotConfirmed, "it may have gone: \($0)")
+            XCTAssertTrue(SendOutcome.isUnconfirmed($0))
+            XCTAssertTrue(($0 as? LocalizedError)?.errorDescription?.contains("may have reached the chat") == true)
+        }
+        // A stop that didn't finish sent nothing: an ordinary failure, and no resume.
+        let slowStop = Fake([idleListing, stoppedListing]); slowStop.stopTimesOut = true
+        XCTAssertThrowsError(try ChatReply.continueClaude(id, arguments: args, folder: "/tmp", stopIdleBackground: true, commands: slowStop.commands)) {
+            XCTAssertFalse(SendOutcome.isUnconfirmed($0))
+        }
+        XCTAssertFalse(slowStop.verbs.contains("--bg"))
+        // A plain refusal stays an ordinary failure (nothing went).
+        let refused = Fake([stoppedListing]); refused.resumeCode = 1
+        XCTAssertThrowsError(try ChatReply.continueClaude(id, arguments: args, folder: "/tmp", stopIdleBackground: false, commands: refused.commands)) {
+            XCTAssertFalse(SendOutcome.isUnconfirmed($0))
+        }
     }
 
     func testLocalReplyToAFinishedSessionResumesDirectly() throws {

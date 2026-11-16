@@ -71,11 +71,12 @@ import BurroCore
                                    status: status, updatedAt: session.updatedAt),
                 Row(symbol: "bubble.left", kindLabel: status == .needsYou ? "Needs you" : (status == .working ? "Working" : "Chat"),
                     needsYou: status == .needsYou, session: session) { store.showChat(session) })
-            // The same wording as the Orchestrator page's "Ask" button; it fills the composer, it doesn't send.
-            let draft = "What's the latest on “\(session.title)” (\(session.remote?.hostName ?? "This Mac"))?"
+            // The same prefill as "Ask the Orchestrator about this chat": it fills the composer
+            // (after anything already written), it doesn't send.
+            let chatTitle = session.title, machine = session.remote?.hostName
             asks.append((CommandPaletteItem(id: "ask:\(session.id)", kind: .action, title: "Ask the Orchestrator about “\(title)”",
                                             subtitle: place, weight: -40),
-                         Row(symbol: "sparkles", kindLabel: "Action") { store.orchestrator.draft = draft; store.page = .orchestrator }))
+                         Row(symbol: "sparkles", kindLabel: "Action") { store.prefillOrchestratorQuestion(chatTitle: chatTitle, machine: machine) }))
         }
 
         // Projects and machines, as Home lists them.

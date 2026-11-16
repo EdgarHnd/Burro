@@ -1,14 +1,21 @@
-// Burro's landing page: a cover with a greeting, live chips and a plain-language summary, then what
-// needs you, the Brief (the Orchestrator's card), the main project, your projects and machines as benches, and to-dos,
-// today so far (when activity tracking is on), notes and a scratchpad on the side.
+// Burro's landing page, over the fixed aquarium backdrop. Left column: the greeting and one
+// summary sentence, then what needs you, what is working and what is ready to read
+// (HomeAttention.swift; one place per chat), then the main project, benches and projects as
+// before. Right column: Ask the Orchestrator (composer and triage footer), Today so far (with
+// activity tracking on), To-dos, Machines, Notes and the Scratchpad. Below about 900 pt the right
+// column's cards move under Ready to read. New chat lives in the top bar.
 // Read-only like the rest of monitoring. While on screen it keeps Mac Health sampling, syncs
-// to-dos, rescans today's activity at most every 90 seconds and re-reads today's tracked activity
-// once a minute; it starts no other background work.
+// to-dos once a minute, rescans project activity every 90 seconds, and every 2 minutes (with
+// tracking on) asks TodayStore to re-read today's tracked day once (shared by Today so far and
+// the away figure) and reuse or redo today's agent scan without previews, from which it works out
+// (locally, never sent anywhere) how long agents worked while you were away; it starts no other
+// background work.
 import SwiftUI
 import BurroCore
 
 struct HomeView: View {
     @Bindable var store: AppStore
+    /// Kept for the caller; the notch button left with the dock (⇧⌘B still shows it).
     var notch: NotchController
     @State private var onScreen = false
     @State private var editingBench: Bench?
@@ -16,40 +23,22 @@ struct HomeView: View {
     @AppStorage("home.coverStyle") private var coverStyle = CoverField.Style.aquarium.rawValue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private static let space = "home"
+    /// Below this window width the right column's cards join the single column.
+    static let twoColumnWidth: CGFloat = 900
+    static let sideWidth: CGFloat = 320
 
     var body: some View {
         let summary = store.homeSummary
+        let board = HomeChatSections.board(store: store, summary: summary)
         let fish = coverStyle == CoverField.Style.aquarium.rawValue ? AquariumFish.school(running: summary.running, waiting: summary.needsYou, scheduled: summary.scheduled, today: summary.today) : []
         GeometryReader { geometry in
         ZStack(alignment: .bottom) {
             // The backdrop stays put; the page scrolls over it.
             CoverBackdrop(running: summary.counts.running, waiting: summary.counts.waiting, fish: fish, hover: hover, animate: onScreen)
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    HomeCover(store: store, summary: summary)
-                    HomeAttention(store: store, summary: summary)
-                    HStack(alignment: .top, spacing: 28) {
-                        VStack(alignment: .leading, spacing: 30) {
-                            HomeBrief(store: store)
-                            HomeMainProject(store: store, summary: summary)
-                            benches(summary)
-                            projects(summary)
-                            machines(summary)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                        VStack(spacing: 16) {
-                            HomeTodayCard(todos: store.todos, startChat: { store.startChat(from: $0) })
-                            if store.activityTracker.enabled {
-                                HomeActivityCard(tracker: store.activityTracker, active: onScreen) {
-                                    store.today.show(Date()); store.page = .today
-                                }
-                            }
-                            HomeNotesCard(notes: store.notes, startChat: { store.startChat(withText: $0.content) }) { store.showNotes?($0) }
-                            HomeScratchpadCard(notes: store.notes)
-                        }.frame(width: 320)
-                    }
-                }
-                .padding(.horizontal, 30).padding(.top, 20).padding(.bottom, 120)
-                .frame(maxWidth: 1240).frame(maxWidth: .infinity)
+                page(summary: summary, board: board, width: geometry.size.width)
+                .padding(.horizontal, 28).padding(.top, 34).padding(.bottom, 48)
+                .frame(maxWidth: 1220).frame(maxWidth: .infinity)
                 .frame(minHeight: geometry.size.height, alignment: .top)
                 // Behind the cards: the open water, where a fish can be hovered and clicked.
                 .background {
@@ -59,14 +48,6 @@ struct HomeView: View {
                 }
             }
             .scrollIndicators(.automatic)
-            // Content fades out under the floating dock, leaving the backdrop showing through.
-            .mask {
-                VStack(spacing: 0) {
-                    Color.black
-                    LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: 110)
-                }
-            }
-            HomeDock(store: store, summary: summary, notch: notch).padding(.bottom, 20).padding(.horizontal, 24)
             AquariumLabel(hover: hover, size: geometry.size)
         }
         .coordinateSpace(name: Self.space)
@@ -86,11 +67,67 @@ struct HomeView: View {
             }
         }
         .task(id: onScreen) {
+            // Today so far and the agents' time while you were away: one tracked-day read and at
+            // most one preview-free agent scan per tick (the store reuses fresher results).
+            while onScreen && !Task.isCancelled {
+                if store.activityTracker.enabled { store.today.refreshAwayAgentTime() }
+                try? await Task.sleep(for: .seconds(120))
+            }
+        }
+        .task(id: onScreen) {
             while onScreen && !Task.isCancelled {
                 store.refreshProjectActivity()
                 try? await Task.sleep(for: .seconds(90))
             }
         }
+    }
+
+    @ViewBuilder private func page(summary: HomeSummary, board: HomeBoard, width: CGFloat) -> some View {
+        let content = min(width, 1220) - 56
+        let wide = width >= Self.twoColumnWidth
+        let left = wide ? content - Self.sideWidth - 28 : content
+        let top = VStack(alignment: .leading, spacing: 26) {
+            HomeCover(sentence: sentence(board), checking: !store.didCheckAgents)
+            HomeChatSections(store: store, summary: summary, board: board, columns: left >= 780 ? 3 : left >= 460 ? 2 : 1)
+        }
+        let lower = VStack(alignment: .leading, spacing: 30) {
+            HomeMainProject(store: store, summary: summary)
+            benches(summary)
+            projects(summary)
+        }
+        if wide {
+            HStack(alignment: .top, spacing: 28) {
+                VStack(alignment: .leading, spacing: 34) { top; lower }.frame(maxWidth: .infinity, alignment: .leading)
+                side(summary).frame(width: Self.sideWidth)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 30) { top; side(summary); lower }
+        }
+    }
+
+    private func side(_ summary: HomeSummary) -> some View {
+        VStack(spacing: 14) {
+            HomeAskCard(store: store)
+            if store.activityTracker.enabled {
+                HomeActivityCard(tracker: store.activityTracker, day: store.today.todayTracked, awayAgentTime: store.today.awayAgentTime,
+                                 awayPartial: store.today.awayAgentTimePartial) {
+                    store.today.show(Date()); store.page = .today
+                }
+            }
+            HomeTodayCard(todos: store.todos, startChat: { store.startChat(from: $0) })
+            HomeMachinesCard(store: store, summary: summary)
+            HomeNotesCard(notes: store.notes, startChat: { store.startChat(withText: $0.content) }) { store.showNotes?($0) }
+            HomeScratchpadCard(notes: store.notes)
+        }
+    }
+
+    /// "2 chats need you, 3 are working, and 4 pull requests shipped today." plus a low usage limit.
+    private func sentence(_ board: HomeBoard) -> String {
+        let now = Date()
+        let shipped = store.shipped.shipped(now)?.merged.count
+        let providers = store.usage.enabled ? store.usage.snapshot.providers : []
+        return HomeBoard.sentence(needsYou: board.needsYou.count, working: board.working.count, toRead: board.toRead.count,
+                                  shipped: shipped, usageLine: HomeBoard.usageLine(providers, now: now))
     }
 
     private func newBench() -> Bench {
@@ -151,23 +188,6 @@ struct HomeView: View {
                 }
             }
         }
-        }
-    }
-
-    @ViewBuilder private func machines(_ summary: HomeSummary) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HomeSectionHeader(title: "Machines") { Button("All machines") { store.page = .machines } }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 16)], spacing: 18) {
-                ForEach(summary.machines) { machine in
-                    BenchCard(title: machine.name, symbol: machine.connection == .local ? "laptopcomputer" : "desktopcomputer",
-                              dimmed: !(machine.connection == .local || machine.connection == .online),
-                              counts: machine.counts,
-                              quiet: machine.connection == .local || machine.connection == .online ? "Quiet" : MachinesModel.connection(machine.connection),
-                              help: machine.connection == .local ? "Mac Health" : "Machines") {
-                        store.page = machine.connection == .local ? .health : .machines
-                    }
-                }
-            }
         }
     }
 }

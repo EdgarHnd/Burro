@@ -6,7 +6,8 @@
 // (saved) before it is sent, so a relaunch never sends it twice. Success or failure leaves a
 // notice on the chat; a failed message keeps its text so you can edit it back. A send the provider
 // refuses because the chat is working or waiting after all stays queued and goes when the chat is
-// next idle (`ReplyQueue.requeue`). Nothing is sent
+// next idle (`ReplyQueue.requeue`). One whose outcome Burro couldn't confirm (`ReplyNotConfirmed`:
+// it may have reached the chat) is never retried, and its notice says so. Nothing is sent
 // that you didn't queue, and a queued message can be cancelled or edited until it goes.
 import Foundation
 import Observation
@@ -93,6 +94,9 @@ final class ReplyQueueModel {
                 next.requeue(chatID: item.chatID, now: Date())
                 idleSince[item.chatID] = nil
                 commit(next)
+            case .failure(let error) where SendOutcome.isUnconfirmed(error):
+                // It may have gone: never retried, and never reported as "not sent".
+                finish(item, sent: false, message: "Queued message: " + ((error as? LocalizedError)?.errorDescription ?? "Burro couldn't confirm it went."))
             case .failure(let error):
                 finish(item, sent: false, message: "Queued message not sent: " + ((error as? LocalizedError)?.errorDescription ?? "it couldn't be delivered."))
             }

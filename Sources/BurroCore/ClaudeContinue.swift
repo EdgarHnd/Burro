@@ -13,7 +13,8 @@
 // row (no pid, no status, done/failed/stopped) is not running and doesn't block a reply.
 // The same rules run on other machines in `remote_reply.py`'s `continue` operation.
 // A refusal because the chat is working or waiting for an answer is typed (`ReplyRefusal`), so the
-// reply queue can keep a message and try again when the chat is next idle.
+// reply queue can keep a message and try again when the chat is next idle. A resume that ran
+// but didn't finish in time is `ReplyNotConfirmed`: Claude may have taken the message.
 import Foundation
 
 /// A reply refused because the chat is in the middle of something: Claude is working on it, or a
@@ -168,7 +169,10 @@ extension ChatReply {
         case .resume: break
         case .stopThenResume(let handle):
             guard let stop = claudeStopArguments(handle: handle) else { throw LaunchError.failed("Claude gave this session an unexpected id.") }
-            let result = try commands.run(stop, NSHomeDirectory(), 30)
+            let result: (code: Int32, text: String)
+            // The stop step sends nothing: a stop that didn't finish is a plain failure.
+            do { result = try commands.run(stop, NSHomeDirectory(), 30) }
+            catch is ProcessTimedOut { throw LaunchError.failed("Claude didn't stop the background session in time, so nothing was sent.") }
             guard result.code == 0 else {
                 throw LaunchError.failed("Claude didn't stop the background session, so nothing was sent" + (lastLine(result.text).map { ": \($0)" } ?? "."))
             }
@@ -177,7 +181,10 @@ extension ChatReply {
             }
             stopped = true
         }
-        let result = try commands.run(arguments, folder, 60)
+        // The resume ran but never finished: Claude may have taken the message.
+        let result: (code: Int32, text: String)
+        do { result = try commands.run(arguments, folder, 60) }
+        catch is ProcessTimedOut { throw ReplyNotConfirmed("Claude didn't finish continuing the chat in time") }
         guard result.code == 0 else {
             let reason = lastLine(result.text).map { "Claude didn't continue: \($0)" } ?? "Claude didn't continue."
             throw LaunchError.failed(stopped ? "Burro stopped the idle background session, but \(reason) The conversation is kept." : reason)

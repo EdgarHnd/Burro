@@ -145,6 +145,8 @@ public enum ShippedSummary {
             return (result, cost(output.text))
         } catch LaunchError.failed {
             return (.failure(.failed("Claude took too long to answer.")), nil)
+        } catch is ProcessTimedOut {
+            return (.failure(.failed("Claude took too long to answer.")), nil)
         } catch {
             return (.failure(.failed((error as? LocalizedError)?.errorDescription ?? "Claude didn't run.")), nil)
         }

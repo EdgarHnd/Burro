@@ -16,7 +16,12 @@
 // to the Orchestrator's runs log (`OrchestratorRuns`), the same file and lock as its own runs, so the
 // footer's count and the Runs tab agree. When triage has a headline for a chat that needs you,
 // `headlineReady` passes it on (the needs-you banner uses it). Inert until `start()`, so stores built in tests never read or write files.
-// Nothing is logged.
+// "Run triage now" on the Orchestrator page (`runNow`) reads the newest chats waiting on you or
+// unread (up to 30, newest first, stopping once five need triage; chats on a machine that isn't
+// configured or answering are skipped) and puts up to five whose latest messages haven't been triaged at the front of
+// the queue, due at once, through the same gate (Off switch, caps, Claude's limits), checked again
+// after the read; when every chat it looked at is already triaged it says "Nothing new to triage".
+// A run uses the same skip rule (`TriageNow.needsTriage`). Nothing is logged.
 import AppKit
 import Foundation
 import Observation
@@ -30,6 +35,8 @@ import BurroCore
     private(set) var gate: TriageGate = .open
     /// Why the last run produced nothing (Claude missing, signed out, unreadable answer).
     private(set) var problem: String?
+    /// "Run triage now" is reading chats to find ones not triaged yet.
+    private(set) var checkingNow = false
 
     var autoTriage: Bool {
         didSet {
@@ -223,6 +230,64 @@ import BurroCore
 
     // MARK: Runs
 
+    /// When triage last ran (from the runs log), for the Orchestrator page's header.
+    var lastRunAt: Date? { runTimes.max() }
+
+    /// "Run triage now": reads the newest chats waiting on you or unread (up to
+    /// `TriageNow.lookLimit`, off the main thread), picks up to five whose latest messages haven't
+    /// been triaged, and puts them at the front of the queue, due at once (a run starts now, or
+    /// right after the one in progress). Only through the gate, checked before and after reading:
+    /// off, a cap or a Claude window below its floor queues nothing and says why.
+    @discardableResult
+    func runNow(now: Date = Date()) async -> TriageNow.Outcome {
+        guard started else { return .paused("Triage hasn't started yet") }
+        guard !checkingNow else { return .paused("Already looking for chats to triage") }
+        refreshGate(now: now)
+        let plan = TriageNow.plan(chats: sessions.values.map(BriefChatState.init), gate: gate)
+        if let outcome = plan.outcome { return outcome }
+        let total = sessions.values.map(BriefChatState.init).filter { $0.waiting || $0.unread }.count
+        let hosts = hosts(), profiles = profiles(), triaged = file.triaged
+        // A chat on a machine that isn't configured or answering is skipped (no SSH wait for it).
+        let targets: [(id: String, session: AgentSession, host: RemoteHost?)] = plan.chatIDs.compactMap { id in
+            guard let session = sessions[id] else { return nil }
+            let host = hosts.first { $0.id == session.remote?.hostID }
+            if let remote = session.remote, host == nil || remote.stale { return nil }
+            return (id, session, host)
+        }
+        checkingNow = true
+        defer { checkingNow = false }
+        // Newest first, stopping once a batch's worth needs triage.
+        let inputs = await Task.detached(priority: .userInitiated) { () -> [(id: String, input: TriageInput?)] in
+            var read: [(id: String, input: TriageInput?)] = []
+            for target in targets {
+                if read.filter({ TriageNow.needsTriage($0.input, triaged: triaged) }).count >= TriageScheduler.batchSize { break }
+                let transcript = try? ChatTranscripts.load(target.session, host: target.host, profiles: profiles, limit: 120)
+                read.append((target.id, transcript.map {
+                    TriageInput.build(chatID: target.id, title: "", project: "", machine: "", stop: .finished, messages: $0.messages, notes: [])
+                }))
+            }
+            return read
+        }.value
+        // "in the 30 newest" only when older candidates really weren't looked at.
+        let picked = TriageNow.pick(inputs, triaged: triaged, total: total > plan.chatIDs.count ? Int.max : inputs.count)
+        guard !picked.chatIDs.isEmpty else { return picked.outcome }
+        // The gate again: a cap or a limit may have been reached while the chats were read.
+        refreshGate(now: Date())
+        if !gate.allowsRun { return .paused(gate == .off ? "Triage is off" : gate.reason ?? "Triage is paused") }
+        for id in picked.chatIDs { stops[id] = sessions[id]?.state == .waiting ? .waiting : .finished }
+        scheduler.prioritize(picked.chatIDs, at: Date())
+        pump(now: Date())
+        return picked.outcome
+    }
+
+    #if DEBUG
+    /// Render harnesses only: a brief to show without reading `brief.json` or the runs log.
+    func preview(file: BriefFile, runsToday: Int, lastRun: Date?, gate: TriageGate = .open, triaging: Int = 0) {
+        self.file = file; self.runsToday = runsToday; self.gate = gate; self.triaging = triaging
+        runTimes = lastRun.map { [$0] } ?? []
+    }
+    #endif
+
     private func pump(now: Date) {
         guard triaging == 0, scheduler.isDue(now: now), gate.allowsRun else { return }
         let batch = scheduler.takeBatch()
@@ -245,7 +310,7 @@ import BurroCore
                     let input = TriageInput.build(chatID: target.session.id, title: target.session.title, project: target.projectName,
                                                   machine: target.machine, stop: target.stop, messages: transcript.messages,
                                                   notes: TriageMemory.notes(project: target.projectPath ?? target.session.cwd))
-                    return triaged[target.session.id] == input.sourceHash || (input.lastAssistant == nil && input.lastUser == nil) ? nil : input
+                    return TriageNow.needsTriage(input, triaged: triaged) ? input : nil
                 }
             }.value
             // Off since the batch was taken: no call; off during the call: it is stopped and

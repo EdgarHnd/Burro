@@ -1,6 +1,13 @@
 // A compact attention queue keeps live status separate from stable pointer and keyboard targets.
-// Collapsed, the notch shows running (or scheduled) agents on the left and chats that need you or
-// are ready to read on the right; a side with a zero count is left empty.
+// Collapsed, the notch shows the running (or scheduled) count with a waveform on the left and, on
+// the right, the number of chats waiting on you in amber with an amber dot (or, when none wait,
+// unread results in blue); a side with a zero count is left empty, so an idle notch is plain black.
+// Expanded, the Agents tab lists "Needs you" cards (quick reply or hand-off, NotchAttentionRows)
+// above "Working" lines; chats that only have a result to read are counted in the footer's
+// "N ready to read" (it opens Chats) beside the pin. Each card is keyed by the chat it answers,
+// and reply holds are dropped for chats no listed group targets any more. Sections are fixed while you interact, like
+// the rows. The list reports its height to the panel in NotchGeometry's row slots
+// (NotchListLayout), so the panel's own sizing is unchanged.
 import SwiftUI
 import BurroCore
 
@@ -16,22 +23,30 @@ struct NotchView: View {
     var onSelectPage: (NotchPage) -> Void
     var onNavigationBounds: ([NotchPage: CGRect]) -> Void
     var onContentChange: () -> Void
+    /// A quick-reply field has focus / holds typed text: the controller keeps the panel open.
+    var onReply: (_ focused: Bool, _ edited: Bool) -> Void = { _, _ in }
     var compact = false
+    /// Snapshot tests only: invented drafts, questions, checks and turn durations.
+    var fixture: NotchFixture? = nil
     @State private var list = NotchListState()
     @State private var expandedGroups: Set<String> = []
     @State private var showingHealth = false
     @State private var workspacePaths: [String: String] = [:]
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    private var workspaces: [NotchWorkspace] {
-        NotchWorkspace.grouped(list.groups) { workspacePaths[$0.id] ?? store.workspacePath(for: $0) }
-    }
+    /// Each listed group's section, decided when the list reconciles (fixed while holding).
+    @State private var sectionOf: [String: NotchSection] = [:]
+    @State private var focusedReplies: Set<String> = []
+    @State private var editedReplies: Set<String> = []
     private var showingUsage: Bool { presentation.navigation.visible == .usage }
     private var showingMac: Bool { presentation.navigation.visible == .mac }
     private var activity: AgentActivitySnapshot { store.agentActivity }
     private var chatSessions: [AgentSession] { presentation.chatScope == .today ? store.notchChatSessions : activity.sessions }
+    private var needsYouGroups: [NotchGroup] { list.groups.filter { sectionOf[$0.id] == .needsYou } }
+    private var workingGroups: [NotchGroup] { list.groups.filter { sectionOf[$0.id] == .working } }
     private var rowCount: Int {
         if presentation.chatScope == .today { return list.groups.count }
-        return list.groups.reduce(0) { $0 + 1 + (expandedGroups.contains($1.id) ? $1.workers.count : 0) } + workspaces.filter { !$0.path.isEmpty }.count
+        let cards = needsYouGroups.count
+        let lines = workingGroups.reduce(0) { $0 + 1 + (expandedGroups.contains($1.id) ? $1.workers.count : 0) }
+        return NotchListLayout.slots(cards: cards, lines: lines, headers: (cards > 0 ? 1 : 0) + (lines > 0 ? 1 : 0))
     }
 
     var body: some View {
@@ -64,7 +79,7 @@ struct NotchView: View {
         .onChange(of: Calendar.current.startOfDay(for: activity.sampledAt)) { _, _ in reconcile() }
         .onChange(of: presentation.holdingList) { _, _ in reconcile() }
         .onChange(of: presentation.expanded) { _, expanded in
-            if !expanded { showingHealth = false }
+            if !expanded { showingHealth = false; focusedReplies = []; reportReplies() }
             reconcile(force: !expanded)
         }
         .onChange(of: presentation.includeIdle) { _, _ in reconcile(force: true) }
@@ -82,11 +97,27 @@ struct NotchView: View {
         guard !compact else { return }
         let holding = !force && presentation.expanded && presentation.holdingList
         list.reconcile(NotchFeed(sessions: chatSessions, includeIdle: presentation.includeIdle, scope: presentation.chatScope), holding: holding)
+        if !holding || sectionOf.isEmpty {
+            sectionOf = Dictionary(list.groups.compactMap { group in NotchAttentionList.section(group).map { (group.id, $0) } },
+                                   uniquingKeysWith: { first, _ in first })
+        }
+        // Reply holds only for chats a listed group still targets.
+        let focused = NotchAttentionList.liveReplyIDs(focusedReplies, groups: list.groups)
+        let edited = NotchAttentionList.liveReplyIDs(editedReplies, groups: list.groups)
+        if focused != focusedReplies || edited != editedReplies {
+            focusedReplies = focused; editedReplies = edited; reportReplies()
+        }
         if !holding || workspacePaths.isEmpty {
             workspacePaths = Dictionary(list.groups.flatMap(\.members).map { ($0.id, store.workspacePath(for: $0)) }, uniquingKeysWith: { first, _ in first })
         }
         updateGeometry()
     }
+    private func replyHold(_ id: String, focused: Bool, edited: Bool) {
+        if focused { focusedReplies.insert(id) } else { focusedReplies.remove(id) }
+        if edited { editedReplies.insert(id) } else { editedReplies.remove(id) }
+        reportReplies()
+    }
+    private func reportReplies() { onReply(!focusedReplies.isEmpty, !editedReplies.isEmpty) }
     private func updateGeometry() {
         guard !compact else { return }
         let rows = showingHealth || showingUsage || showingMac || presentation.navigation.isPreviewing ? 5 : min(5, rowCount)
@@ -94,24 +125,35 @@ struct NotchView: View {
         onContentChange()
     }
     private var compactStatus: some View {
-        HStack(spacing: 0) {
-            statusCount(activity.workingCount > 0 ? activity.workingCount : activity.scheduledCount,
-                symbol: activity.workingCount == 0 && activity.scheduledCount > 0 ? "clock" : "waveform.path",
-                color: activity.workingCount > 0 ? AgentState.working.color : (activity.scheduledCount > 0 ? AgentState.scheduled.color : .gray))
-                .frame(maxWidth: .infinity)
+        let status = NotchCompactStatus(working: activity.workingCount, scheduled: activity.scheduledCount,
+                                        waiting: activity.waitingCount, done: activity.doneCount)
+        return HStack(spacing: 0) {
+            Group {
+                switch status.left {
+                case .working(let count): statusCount(count, symbol: "waveform", color: AgentState.working.color, leading: true)
+                case .scheduled(let count): statusCount(count, symbol: "clock", color: AgentState.scheduled.color, leading: true)
+                case .none: statusCount(0, symbol: "waveform", color: .gray, leading: true)
+                }
+            }.frame(maxWidth: .infinity)
             Color.clear.frame(width: presentation.compactGeometry.hardwareGap)
-            statusCount(activity.attentionCount, symbol: "tray.fill",
-                color: activity.waitingCount > 0 ? NotchStyle.attention : (activity.doneCount > 0 ? .blue : .gray))
-                .frame(maxWidth: .infinity)
+            Group {
+                switch status.right {
+                case .needsYou(let count): statusCount(count, symbol: nil, color: NotchStyle.attention, leading: false)
+                case .toRead(let count): statusCount(count, symbol: nil, color: AppAppearance.blue, leading: false)
+                case .none: statusCount(0, symbol: nil, color: .gray, leading: false)
+                }
+            }.frame(maxWidth: .infinity)
         }.padding(.horizontal, 8)
     }
-    /// One side of the compact notch; a side with nothing to count stays empty.
-    @ViewBuilder private func statusCount(_ number: Int, symbol: String, color: Color) -> some View {
+    /// One side of the compact notch: a glyph and the count on the left, the count and a dot on
+    /// the right. A side with nothing to count stays empty ("–" on both until the first check).
+    @ViewBuilder private func statusCount(_ number: Int, symbol: String?, color: Color, leading: Bool) -> some View {
         if !store.didCheckAgents || number > 0 {
             HStack(spacing: 4) {
-                Image(systemName: symbol).font(.system(size: 10, weight: .medium))
+                if let symbol { Image(systemName: symbol).font(.system(size: 10, weight: .semibold)) }
                 Text(store.didCheckAgents ? "\(number)" : "–").font(.system(size: 11, weight: .semibold)).monospacedDigit()
-            }.foregroundStyle(color).fixedSize()
+                if !leading && store.didCheckAgents { Circle().fill(color).frame(width: 6, height: 6) }
+            }.foregroundStyle(store.didCheckAgents ? color : .gray).fixedSize()
         } else {
             Color.clear.frame(height: 1) // keeps both sides centred around the camera
         }
@@ -125,10 +167,6 @@ struct NotchView: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
             Color.clear.frame(width: presentation.expandedGeometry.hardwareGap)
             HStack(spacing: 8) {
-                Button(action: onPin) { Image(systemName: presentation.pinned ? "pin.fill" : "pin") }
-                    .foregroundStyle(presentation.pinned ? NotchStyle.accent : .secondary)
-                    .accessibilityLabel(presentation.pinned ? "Unpin panel" : "Pin panel")
-                    .help(presentation.pinned ? "Unpin panel" : "Keep panel open")
                 Button(action: onCollapse) { Image(systemName: "chevron.up") }
                     .accessibilityLabel("Collapse agent panel").help("Collapse")
             }.buttonStyle(NotchIconButtonStyle()).frame(maxWidth: .infinity, alignment: .trailing)
@@ -186,55 +224,76 @@ struct NotchView: View {
             }
             else if showingHealth && !presentation.navigation.isPreviewing { NotchHealthView(store: store) }
             else if !store.didCheckAgents { loading }
-            else if list.groups.isEmpty { empty }
             else if presentation.chatScope == .today {
-                NotchTodayView(groups: list.groups, active: presentation.expanded, select: onSelect, inspect: onInspect)
+                if list.groups.isEmpty { empty }
+                else { NotchTodayView(groups: list.groups, active: presentation.expanded, select: onSelect, inspect: onInspect) }
             }
-            else {
-                ScrollView {
-                    LazyVStack(spacing: 6) {
-                        ForEach(workspaces) { workspace in
-                            if !workspace.path.isEmpty { workspaceHeader(workspace) }
-                            ForEach(workspace.groups) { group in
-                                groupRow(group)
-                                if expandedGroups.contains(group.id) {
-                                    ForEach(group.workers) { worker in
-                                        NotchAgentRow(session: worker, workspace: store.workspaceLabel(for: worker),
-                                            available: !group.unavailableIDs.contains(worker.id),
-                                            animate: presentation.expanded,
-                                            select: { onSelect(worker) }, inspect: { onInspect(worker) })
-                                            .padding(.leading, 18)
-                                    }
-                                }
-                            }
-                        }
-                    }.padding(.horizontal, 20).padding(.vertical, 8)
-                }.scrollIndicators(.automatic)
-            }
+            else if needsYouGroups.isEmpty && workingGroups.isEmpty { empty }
+            else { attentionList }
             footer
         }.frame(maxHeight: .infinity)
     }
-    private func workspaceHeader(_ workspace: NotchWorkspace) -> some View {
-        let session = workspace.sessions.first
-        let branch = session.flatMap { store.workspaceBranch(for: $0) }
-        return HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "folder").foregroundStyle(NotchStyle.accent)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(workspace.path.isEmpty ? "Background workers" : "Folder: " + URL(fileURLWithPath: workspace.path).lastPathComponent)
-                    .lineLimit(1).truncationMode(.middle)
-                Text("\(session?.remote?.hostName ?? "This Mac") · Branch: \(branch ?? "unavailable")")
-                    .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-            }
-            Spacer(minLength: 4)
-            VStack(alignment: .trailing, spacing: 3) {
-                Text("\(workspace.groups.count) \(workspace.groups.count == 1 ? "chat" : "chats")")
-                if let session, let delivery = store.workspaceDelivery(for: session) {
-                    Text(delivery).font(.system(size: 9))
-                        .help("Checkout status from local Git refs; not a per-chat delivery or cleanup guarantee")
+    /// Needs you (cards) above Working (lines), in the list's held order.
+    private var attentionList: some View {
+        let needs = needsYouGroups, working = workingGroups
+        return ScrollView {
+            VStack(spacing: NotchListLayout.gap) {
+                if !needs.isEmpty {
+                    NotchSectionHeader(title: "Needs you", count: needs.count, tint: NotchStyle.attention)
+                    ForEach(needs) { group in needsCard(group) }
                 }
-            }.foregroundStyle(.secondary)
-        }.font(.system(size: 10, weight: .medium)).padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 4)
-            .help(workspace.path.isEmpty ? "Workers without a known parent chat" : workspace.path)
+                if !working.isEmpty {
+                    NotchSectionHeader(title: "Working", count: working.count, tint: AgentState.working.color)
+                    ForEach(working) { group in
+                        workingLine(group)
+                        if expandedGroups.contains(group.id) {
+                            ForEach(group.workers) { worker in
+                                NotchWorkingLine(session: worker, place: place(worker), available: !group.unavailableIDs.contains(worker.id),
+                                                 turn: turn(worker.id),
+                                                 select: { onSelect(worker) }, inspect: { onInspect(worker) })
+                                    .padding(.leading, 16)
+                            }
+                        }
+                    }
+                }
+            }.padding(.horizontal, 20).padding(.vertical, NotchListLayout.inset)
+        }.scrollIndicators(.automatic)
+    }
+    @ViewBuilder private func needsCard(_ group: NotchGroup) -> some View {
+        if let session = NotchAttentionList.target(group) {
+            let brief = fixture == nil ? store.brief.file.open.first { $0.kind.needsYou && $0.chatID?.lowercased() == session.id.lowercased() } : nil
+            NotchNeedsYouCard(store: store, session: session, place: place(session),
+                              question: fixture.map { $0.questions[session.id] } ?? brief.map { $0.question ?? $0.headline },
+                              draft: fixture.map { $0.drafts[session.id] } ?? store.brief.draft(chatID: session.id, actions: store.orchestrator.actions),
+                              host: store.remoteHosts.first { $0.id == session.remote?.hostID },
+                              available: !group.unavailableIDs.contains(session.id), active: presentation.expanded,
+                              now: activity.sampledAt, checkOverride: fixture?.checks[session.id],
+                              open: { onSelect(session) }, inspect: { onInspect(session) },
+                              currentTarget: { list.groups.first { $0.id == group.id }.flatMap(NotchAttentionList.target)?.id },
+                              hold: { id, focused, edited in replyHold(id, focused: focused, edited: edited) })
+                // A new target is a new card: no text, draft or focus carries over to another chat.
+                .id(session.id)
+        }
+    }
+    @ViewBuilder private func workingLine(_ group: NotchGroup) -> some View {
+        if let session = group.root {
+            NotchWorkingLine(session: session, place: place(session), available: !group.unavailableIDs.contains(session.id),
+                             workerState: workerState(group), turn: turn(session.id),
+                             workers: group.workers.count, workersExpanded: expandedGroups.contains(group.id),
+                             toggleWorkers: group.workers.isEmpty ? nil : { toggleGroup(group.id) },
+                             select: { onSelect(session) }, inspect: { onInspect(session) })
+        } else {
+            let live = group.workers.filter { $0.remote?.stale != true && !group.unavailableIDs.contains($0.id) }
+            NotchWorkersLine(count: group.workers.count, machine: group.workers.first?.remote?.hostName ?? "This Mac",
+                             needsYou: live.contains { $0.state == .waiting }, running: live.contains { $0.state == .working },
+                             expanded: expandedGroups.contains(group.id)) { toggleGroup(group.id) }
+        }
+    }
+    private func turn(_ id: String) -> TimeInterval? { fixture.map { $0.turns[id] } ?? store.turnClock.turn(id, now: activity.sampledAt) }
+    /// "This Mac · focustown": the machine and the chat's folder (its worktree's when Burro knows it).
+    private func place(_ session: AgentSession) -> String {
+        let path = workspacePaths[session.id] ?? session.cwd
+        return "\(session.remote?.hostName ?? "This Mac") · \(URL(fileURLWithPath: path).lastPathComponent)"
     }
     private var navigationTabs: some View {
         HStack(spacing: 2) {
@@ -263,60 +322,28 @@ struct NotchView: View {
             }
         }.padding(2).background(AppAppearance.raised, in: Capsule()).fixedSize()
     }
-    @ViewBuilder private func groupRow(_ group: NotchGroup) -> some View {
-        if let session = group.root {
-            HStack(spacing: 0) {
-                NotchAgentRow(session: session, workspace: session.remote?.hostName ?? "This Mac",
-                    available: !group.unavailableIDs.contains(session.id), workerState: workerState(group),
-                    animate: presentation.expanded,
-                    select: { onSelect(session) }, inspect: { onInspect(session) })
-                if !group.workers.isEmpty { workerDisclosure(group) }
-            }.background(AppAppearance.surface.opacity(reduceTransparency ? 1 : 0.25),
-                in: RoundedRectangle(cornerRadius: AppAppearance.cardRadius))
-        } else {
-            Button { toggleGroup(group.id) } label: {
-                HStack(spacing: 11) {
-                    Image(systemName: "square.stack.3d.up").frame(width: 30, height: 30)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Background workers").font(.system(size: 12, weight: .medium))
-                        Text("\(group.workers.count) \(group.workers.count == 1 ? "worker" : "workers") · \(group.workers.first?.remote?.hostName ?? "This Mac")")
-                            .font(.system(size: 10)).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 6)
-                    if group.workers.contains(where: { $0.state == .waiting && $0.remote?.stale != true && !group.unavailableIDs.contains($0.id) }) {
-                        Text("Needs input").font(.system(size: 10, weight: .medium)).foregroundStyle(NotchStyle.attention)
-                    } else if group.workers.contains(where: { $0.state == .working && $0.remote?.stale != true && !group.unavailableIDs.contains($0.id) }) {
-                        Text("Running").font(.system(size: 10, weight: .medium)).foregroundStyle(AgentState.working.color)
-                    }
-                    Image(systemName: expandedGroups.contains(group.id) ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                }.padding(.horizontal, 10).frame(height: 56).contentShape(Rectangle())
-            }.buttonStyle(.plain).foregroundStyle(.secondary)
-                .accessibilityLabel("\(expandedGroups.contains(group.id) ? "Hide" : "Show") \(group.workers.count) background workers on \(group.workers.first?.remote?.hostName ?? "This Mac")")
-        }
-    }
     private func workerState(_ group: NotchGroup) -> AgentState? {
         let live = group.workers.filter { $0.remote?.stale != true && !group.unavailableIDs.contains($0.id) }
         if live.contains(where: { $0.state == .waiting }) { return .waiting }
         return live.contains(where: { $0.state == .working }) ? .working : nil
-    }
-    private func workerDisclosure(_ group: NotchGroup) -> some View {
-        Button { toggleGroup(group.id) } label: {
-            HStack(spacing: 3) {
-                Text("\(group.workers.count)").monospacedDigit()
-                Image(systemName: expandedGroups.contains(group.id) ? "chevron.down" : "chevron.right")
-            }.font(.system(size: 10, weight: .medium)).padding(7)
-        }.buttonStyle(.plain)
-            .foregroundStyle(group.workers.contains { $0.state == .waiting } ? NotchStyle.attention : .secondary)
-            .help("\(group.workers.count) background workers")
-            .accessibilityLabel("\(expandedGroups.contains(group.id) ? "Hide" : "Show") workers for \(group.title)")
     }
     private func toggleGroup(_ id: String) {
         if expandedGroups.contains(id) { expandedGroups.remove(id) } else { expandedGroups.insert(id) }
     }
     private var footer: some View {
         HStack(spacing: 10) {
-            if showingUsage {
+            let showsAgents = !showingUsage && !showingMac && !showingHealth && presentation.chatScope == .activity
+            if showsAgents && activity.doneCount > 0 {
+                Button { store.go(to: .remote); onOpenDashboard() } label: {
+                    HStack(spacing: 6) {
+                        Circle().fill(AppAppearance.blue).frame(width: 6, height: 6)
+                        Text("\(activity.doneCount) ready to read").font(.system(size: 11.5, weight: .medium)).foregroundStyle(AppAppearance.text)
+                    }
+                }.help("Open Chats to read the finished results").fixedSize()
+            }
+            if showsAgents && activity.doneCount > 0 && activity.unverifiedSessions.isEmpty && store.notchNotices.isEmpty {
+                EmptyView()
+            } else if showingUsage {
                 Text("Remaining · all machines").foregroundStyle(.secondary)
             } else if showingMac {
                 Text("This Mac · live").foregroundStyle(.secondary)
@@ -353,6 +380,10 @@ struct NotchView: View {
                 Button("Update list") { reconcile(force: true) }.foregroundStyle(NotchStyle.accent)
                     .help("Apply pending list changes; rows stay still while you interact")
             }
+            Button(action: onPin) { Image(systemName: presentation.pinned ? "pin.fill" : "pin") }
+                .foregroundStyle(presentation.pinned ? NotchStyle.accent : .secondary)
+                .accessibilityLabel(presentation.pinned ? "Unpin panel" : "Pin panel open")
+                .help(presentation.pinned ? "Unpin panel" : "Keep panel open")
             Button {
                 store.page = showingUsage ? .usage : (showingMac ? .health : .home)
                 onOpenDashboard()
@@ -366,6 +397,7 @@ struct NotchView: View {
     }
     private func count(_ number: Int, _ title: String, _ color: Color) -> some View {
         HStack(spacing: 3) { Text("\(number)").foregroundStyle(color).monospacedDigit(); Text(title).foregroundStyle(.secondary) }
+            .lineLimit(1).fixedSize()
     }
     private var empty: some View {
         VStack(spacing: 8) {

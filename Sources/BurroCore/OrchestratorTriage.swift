@@ -100,7 +100,7 @@ public struct TriageInput: Sendable, Equatable {
     /// transcript or note that happens to mention one can't carry it to the model.
     static func scrub(_ text: String) -> String {
         var result = text
-        let marker = "Application Support/Burro/Activity"
+        let marker = ActivityPrivacy.dataFolderMarker
         let stops = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'`"))
         func isStop(_ character: Character) -> Bool { character.unicodeScalars.contains { stops.contains($0) } }
         // Each hit is widened to the whole path-like token around it (up to whitespace or a quote).
@@ -436,6 +436,12 @@ public struct TriageScheduler: Sendable, Equatable {
         pending.append(Pending(chatID: chatID, trigger: trigger, at: now))
     }
     public mutating func drop(_ chatID: String) { pending.removeAll { $0.chatID == chatID } }
+    /// "Run triage now": these chats go first (already queued ones move up) and the batch is due
+    /// at once (queued as if they had waited the longest a batch waits).
+    public mutating func prioritize(_ chatIDs: [String], trigger: String = "triage", at now: Date) {
+        pending.removeAll { chatIDs.contains($0.chatID) }
+        pending.insert(contentsOf: chatIDs.map { Pending(chatID: $0, trigger: trigger, at: now.addingTimeInterval(-maximumWait)) }, at: 0)
+    }
     public mutating func clear() { pending = [] }
 
     public func isDue(now: Date) -> Bool {

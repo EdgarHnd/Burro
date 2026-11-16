@@ -1,7 +1,9 @@
 // A short-lived client for Codex's shared app-server daemon. `codex app-server proxy` relays
 // stdio to the daemon's control socket, which speaks JSON-RPC over WebSocket; this file
 // implements just enough of RFC 6455 (masked text frames out, plain frames in, ping/pong) to
-// call a few methods and disconnect. Work started here keeps running in the daemon.
+// call a few methods and disconnect. Work started here keeps running in the daemon. A request
+// Codex refused (`CodexRPCRefusal`) and one that couldn't be written (`CodexRequestNotSent`) are
+// told apart from failures after it left, whose outcome Burro can't know.
 import Darwin
 import Foundation
 
@@ -125,13 +127,15 @@ final class CodexAppServer {
     func request(_ method: String, _ params: [String: Any]) throws -> [String: Any] {
         nextID += 1
         let id = nextID
-        try send(["id": id, "method": method, "params": params])
+        // A request that couldn't be written never left Burro; once it has, any failure to read
+        // the answer leaves its outcome unknown to the caller.
+        do { try send(["id": id, "method": method, "params": params]) } catch { throw CodexRequestNotSent() }
         let deadline = ProcessInfo.processInfo.systemUptime + timeout
         while true {
             let message = try readMessage(until: deadline)
             guard message["method"] == nil, (message["id"] as? Int) == id else { continue }
             if let error = message["error"] as? [String: Any] {
-                throw LaunchError.failed("Codex: " + ((error["message"] as? String) ?? "request failed"))
+                throw CodexRPCRefusal(message: (error["message"] as? String) ?? "request failed")
             }
             return message["result"] as? [String: Any] ?? [:]
         }
@@ -240,11 +244,28 @@ enum LaunchShell {
         defer { cancel?.detach() }
         if done.wait(timeout: .now() + timeout) == .timedOut {
             process.terminate()
-            throw LaunchError.failed("\(URL(fileURLWithPath: executable).lastPathComponent) didn't finish starting in time.")
+            throw ProcessTimedOut(name: URL(fileURLWithPath: executable).lastPathComponent)
         }
         if cancel?.isCancelled == true { throw CancellationError() }
         let data = (try? FileHandle(forReadingFrom: outputURL).readToEnd()) ?? nil
         if process.terminationStatus == 70 { throw LaunchError.missingFolder }
         return Output(code: process.terminationStatus, text: String(decoding: (data ?? Data()).prefix(1024 * 1024), as: UTF8.self))
     }
+}
+
+/// Codex answered a request with a JSON-RPC error: it refused, so nothing happened.
+struct CodexRPCRefusal: Error, LocalizedError, Equatable {
+    var message: String
+    var errorDescription: String? { "Codex: " + message }
+}
+
+/// Writing a request to the app server failed: it never left Burro.
+struct CodexRequestNotSent: Error, LocalizedError, Equatable {
+    var errorDescription: String? { "Couldn't reach the Codex app server." }
+}
+
+/// `LaunchShell.run` gave up waiting: the tool ran and may have done its work (same words as before).
+struct ProcessTimedOut: Error, LocalizedError, Equatable {
+    var name: String
+    var errorDescription: String? { "\(name) didn't finish starting in time." }
 }

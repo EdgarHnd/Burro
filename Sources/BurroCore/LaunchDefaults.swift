@@ -7,7 +7,9 @@
 // with its own memory, and each machine remembers its own recent projects; the machine of the last
 // launch is remembered too. The sheet's form (`LaunchForm`) holds the prompt, the machine (nil =
 // this Mac), the folder on it and those choices; switching machine brings back that machine's last
-// project. Stored as one small JSON value in preferences; nothing here starts a chat.
+// project. The form also carries "Start in a new worktree" (this Mac only; a draft from Retry
+// brings it back when the worktree was never made). Stored as one small JSON value in
+// preferences; nothing here starts a chat.
 import Foundation
 
 /// Provider, model, effort and access for one launch. An empty model or effort means "the default".
@@ -221,12 +223,15 @@ public struct LaunchDraft: Equatable, Sendable {
     public var choice: LaunchChoice?
     /// The machine to start on: nil for this Mac (or, for a plain ⌘N, the last launch's machine).
     public var machine: UUID?
-    public init(prompt: String = "", folder: String? = nil, choice: LaunchChoice? = nil, machine: UUID? = nil) {
-        self.prompt = prompt; self.folder = folder; self.choice = choice; self.machine = machine
+    /// Start in a new worktree (this Mac only).
+    public var newWorktree: Bool
+    public init(prompt: String = "", folder: String? = nil, choice: LaunchChoice? = nil, machine: UUID? = nil, newWorktree: Bool = false) {
+        self.prompt = prompt; self.folder = folder; self.choice = choice; self.machine = machine; self.newWorktree = newWorktree
     }
     /// The same launch again, as it was asked for, on the same machine.
-    public init(retrying request: LaunchRequest, machine: UUID? = nil) {
-        self.init(prompt: request.prompt, folder: request.folder, choice: LaunchChoice(request), machine: machine)
+    public init(retrying request: LaunchRequest, machine: UUID? = nil, newWorktree: Bool = false) {
+        self.init(prompt: request.prompt, folder: request.folder, choice: LaunchChoice(request), machine: machine,
+                  newWorktree: machine == nil && newWorktree)
     }
 
     /// The machine the sheet opens on. A draft that names a machine or a folder keeps its own (a
@@ -265,9 +270,12 @@ public struct LaunchForm: Equatable, Sendable {
     public var choice: LaunchChoice
     /// The machine to start on: nil is this Mac, else a remote host's id.
     public var machine: UUID?
+    /// "Start in a new worktree": only on this Mac, and only used when the folder is a git project.
+    public var newWorktree = false
 
-    public init(prompt: String = "", folder: String = "", choice: LaunchChoice = .builtIn(.codex), machine: UUID? = nil) {
+    public init(prompt: String = "", folder: String = "", choice: LaunchChoice = .builtIn(.codex), machine: UUID? = nil, newWorktree: Bool = false) {
         self.prompt = prompt; self.folder = folder; self.choice = choice; self.machine = machine
+        self.newWorktree = machine == nil && newWorktree
     }
 
     /// The form a draft opens: the draft's own choices when it has them (Retry), else the folder's
@@ -279,7 +287,7 @@ public struct LaunchForm: Equatable, Sendable {
             ?? (machine.map { defaults.lastProject(machine: $0) ?? "" } ?? fallbackFolder)
         let choice = draft.choice.map { $0.validated(models: models($0.provider)) }
             ?? defaults.choice(for: folder, machine: machine, parent: machine == nil ? parent(folder) : nil, models: models)
-        self.init(prompt: draft.prompt, folder: folder, choice: choice, machine: machine)
+        self.init(prompt: draft.prompt, folder: folder, choice: choice, machine: machine, newWorktree: draft.newWorktree)
     }
 
     /// A prompt and a folder; on another machine the folder must be an absolute path there.
@@ -305,6 +313,7 @@ public struct LaunchForm: Equatable, Sendable {
                                        models: (LaunchProvider) -> [LaunchModel]) {
         guard id != machine else { return }
         machine = id
+        if id != nil { newWorktree = false }
         folder = id.map { defaults.lastProject(machine: $0) ?? "" } ?? LaunchDefaults.key(localFolder)
         choice = defaults.choice(for: folder, machine: id, parent: id == nil ? parent(folder) : nil, models: models)
     }

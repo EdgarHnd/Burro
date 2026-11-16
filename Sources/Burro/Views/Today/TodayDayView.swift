@@ -1,4 +1,4 @@
-// The Today page's day view while activity tracking is on: the controls, a timeline of the day's
+// The Today page's List view while activity tracking is on: the controls (unless the page draws them), a timeline of the day's
 // blocks (ActivityTimeline in BurroCore groups the spans; ActivityTimelineLayout places them, from
 // the first block's hour to the last block or now, with long idle gaps as thin dividers) and Your
 // day so far beside it at a matching height (a donut of categories, the apps and sites with the
@@ -15,15 +15,19 @@ struct TodayDaySection: View {
     var today: TodayStore
     /// Fixed only for snapshots; otherwise the time of this render.
     var now: Date? = nil
+    /// The Today page draws the Activity row (with the Ribbon | List switch) itself.
+    var showsHeader = true
     private var tracker: ActivityTracker { today.tracker }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Text("ACTIVITY").font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(AppAppearance.tertiary)
-                ActivityControls(today: today)
-            }.padding(.horizontal, 2)
-            if !tracker.accessibilityTrusted { ActivityAccessPrompt(tracker: tracker).padding(.horizontal, 2) }
+            if showsHeader {
+                HStack(spacing: 12) {
+                    Text("ACTIVITY").font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(AppAppearance.tertiary)
+                    ActivityControls(today: today)
+                }.padding(.horizontal, 2)
+                if !tracker.accessibilityTrusted { ActivityAccessPrompt(tracker: tracker).padding(.horizontal, 2) }
+            }
             if let day = today.tracked, day.total > 0 {
                 TodayDayContent(day: day, isToday: today.isToday, now: now ?? Date(), tracker: tracker)
             } else {

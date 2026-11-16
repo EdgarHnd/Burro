@@ -22,6 +22,9 @@ public struct ActivityKey: Sendable, Hashable {
 
 public enum ActivityPrivacy {
     public static let privateHost = "Private"
+    /// Where private tracked activity lives on disk (the end of its folder's path). The
+    /// Orchestrator's triage scrubber blanks any path containing it before text reaches the model.
+    public static let dataFolderMarker = "Application Support/Burro/Activity"
     public static let titleLimit = 120
 
     /// Password managers and credential apps: app time only.

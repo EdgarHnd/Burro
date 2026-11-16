@@ -43,3 +43,14 @@ struct TogglePill: View {
         }.buttonStyle(.plain)
     }
 }
+
+/// A small quiet label (a machine, a model, an OS, a detail) on Home, Machines, Today and the
+/// Orchestrator page. Add `.fixedSize()` where it must never truncate.
+struct AppTag: View {
+    var text: String
+    var body: some View {
+        Text(text).font(.system(size: 11)).foregroundStyle(AppAppearance.secondary).lineLimit(1)
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(AppAppearance.raised, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
