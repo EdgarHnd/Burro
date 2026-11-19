@@ -113,6 +113,13 @@ import XCTest
         XCTAssertNil(state.result(.claude, profile: "/tmp/other-profile"))
     }
 
+    /// The page as UsagePageContent lays it out inside its scroll view, at a content width.
+    private func page(_ usage: UsageStore, extras: UsagePageExtras, history: UsageLocalHistoryState) -> some View {
+        UsagePage(usage: usage, extras: extras, now: now, localHistory: history) {}
+            .padding(.horizontal, 36).padding(.vertical, 28)
+            .modifier(AppTheme())
+    }
+
     func testRenderUsageSnapshots() throws {
         guard ProcessInfo.processInfo.environment["BURRO_USAGE_SNAPSHOTS"] == "1" else { throw XCTSkip("set BURRO_USAGE_SNAPSHOTS=1") }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -120,54 +127,77 @@ import XCTest
             ?? root.appendingPathComponent("dist/screenshots")
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
-        let full = try store()
-        full.snapshot = ProviderUsageSnapshot(availability: .available, providers: providers())
-        full.week = week()
-        let alerts = UsageAlert.alerts(full.snapshot.providers, now: now)
+        // One low limit: Claude's Fable weekly at 6%.
+        let low = try store()
+        low.snapshot = ProviderUsageSnapshot(availability: .available, providers: providers())
+        low.week = week()
+        let alerts = UsageAlert.alerts(low.snapshot.providers, now: now)
         XCTAssertEqual(alerts.map(\.title), ["Claude Fable weekly"])
-        for dark in [true, false] {
-            try render(UsagePageContent(usage: full, extras: extras(), now: now, localHistory: try localHistory()) {}, width: 1440, height: 1900, dark: dark,
-                       to: out.appendingPathComponent("usage-1440-\(dark ? "dark" : "light").png"))
+
+        // Every provider healthy: the same accounts with Fable comfortably inside its window and Grok read just now.
+        let healthy = try store()
+        healthy.snapshot = ProviderUsageSnapshot(availability: .available, providers: providers().map { provider in
+            var provider = provider
+            provider.updatedAt = now.addingTimeInterval(-60)
+            provider.windows = provider.windows.map { window in
+                var window = window
+                if window.model != nil { window.remainingPercent = 64 }
+                return window
+            }
+            return provider
+        })
+        healthy.week = week()
+        XCTAssertTrue(UsageAlert.alerts(healthy.snapshot.providers, now: now).isEmpty)
+
+        // Problems: Claude needs Keychain access, Codex signed out, Grok's reading stale; a message; no local figures yet.
+        let states = try store()
+        var stale = ProviderUsage(id: .grok, updatedAt: now.addingTimeInterval(-40 * 60), windows: [window("grok", "Weekly credits", left: 52, resetIn: 2 * day, duration: 7 * day)])
+        stale.identity = UsageIdentity(account: "sample-grok", plan: "SuperGrok", owner: "sample-grok")
+        states.snapshot = ProviderUsageSnapshot(availability: .available, providers: [.failure(.codex, .signInRequired), .failure(.claude, .permissionRequired), stale])
+        states.message = "Finish Claude sign-in in Terminal, then refresh here."
+
+        let off = try store()
+        off.enabled = false
+
+        let full = extras()
+        for width in [935, 1015, 1215] {
+            for dark in [true, false] {
+                let suffix = "\(width)-\(dark ? "dark" : "light")"
+                try render(page(healthy, extras: full, history: try localHistory()), width: CGFloat(width), dark: dark, to: out.appendingPathComponent("usage-healthy-\(suffix).png"))
+                try render(page(low, extras: full, history: try localHistory()), width: CGFloat(width), dark: dark, to: out.appendingPathComponent("usage-low-\(suffix).png"))
+                try render(page(states, extras: UsagePageExtras(), history: try localHistory()), width: CGFloat(width), dark: dark, to: out.appendingPathComponent("usage-signedout-\(suffix).png"))
+                try render(page(off, extras: UsagePageExtras(), history: try localHistory()), width: CGFloat(width), dark: dark, to: out.appendingPathComponent("usage-off-\(suffix).png"))
+            }
         }
-        try render(UsagePageContent(usage: full, extras: extras(), now: now, localHistory: try localHistory()) {}, width: 760, height: 2600, dark: true,
-                   to: out.appendingPathComponent("usage-760-dark.png"))
 
         // Claude's local history open with an invented scan; Codex's open but not read yet this launch.
         let history = try localHistory(open: [.claude, .codex])
         history.seed(localCost(), provider: .claude, profile: nil)
-        for dark in [true, false] {
-            try render(UsagePageContent(usage: full, extras: extras(), now: now, localHistory: history) {}, width: 1440, height: 2500, dark: dark,
-                       to: out.appendingPathComponent("usage-history-1440-\(dark ? "dark" : "light").png"))
-        }
-        try render(UsagePageContent(usage: full, extras: extras(), now: now, localHistory: history) {}, width: 760, height: 3300, dark: true,
-                   to: out.appendingPathComponent("usage-history-760-dark.png"))
+        try render(page(low, extras: full, history: history), width: 1215, dark: true, to: out.appendingPathComponent("usage-history-1215-dark.png"))
+        try render(page(low, extras: full, history: history), width: 935, dark: false, to: out.appendingPathComponent("usage-history-935-light.png"))
 
-        // Problems: Claude needs Keychain access, Codex is still loading, a message, no local figures yet.
-        let states = try store()
-        var codex = ProviderUsage.loading(.codex); codex.identity = nil
-        states.snapshot = ProviderUsageSnapshot(availability: .available, providers: [codex, .failure(.claude, .permissionRequired),
-            ProviderUsage(id: .grok, updatedAt: now, windows: [window("grok", "Weekly credits", left: 0, resetIn: 5 * hour, duration: 7 * day)])])
-        states.message = "Finish Claude sign-in in Terminal, then refresh here."
-        try render(UsagePageContent(usage: states, extras: UsagePageExtras(), now: now) {}, width: 1100, height: 1300, dark: true,
-                   to: out.appendingPathComponent("usage-states-dark.png"))
-
-        let off = try store()
-        off.enabled = false
-        try render(UsagePageContent(usage: off, extras: UsagePageExtras(), now: now) {}, width: 1100, height: 900, dark: false,
-                   to: out.appendingPathComponent("usage-off-light.png"))
+        // One provider: its second window fills the strip.
+        let single = try store()
+        single.snapshot = ProviderUsageSnapshot(availability: .available, providers: [providers()[0]])
+        single.week = week()
+        try render(page(single, extras: full, history: try localHistory()), width: 1015, dark: true, to: out.appendingPathComponent("usage-single-1015-dark.png"))
     }
 
-    private func render<V: View>(_ view: V, width: CGFloat, height: CGFloat, dark: Bool, to url: URL) throws {
+    private func render<V: View>(_ view: V, width: CGFloat, dark: Bool, to url: URL) throws {
         let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        let host = NSHostingView(rootView: view.frame(width: width, height: height).background(AppAppearance.background))
+        let host = NSHostingView(rootView: view.frame(width: width).background(AppAppearance.background))
         host.appearance = appearance
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: width, height: height), styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: width, height: 900), styleMask: [.borderless], backing: .buffered, defer: false)
         window.appearance = appearance
         window.contentView = host
-        host.frame.size = CGSize(width: width, height: height)
+        host.frame.size = host.fittingSize
+        window.setContentSize(host.fittingSize)
         host.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        host.frame.size = host.fittingSize
+        window.setContentSize(host.fittingSize)
         host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         let bounds = host.bounds
         let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * 2), pixelsHigh: Int(bounds.height * 2),
                                                  bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,

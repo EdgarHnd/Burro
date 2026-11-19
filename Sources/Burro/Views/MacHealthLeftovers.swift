@@ -1,4 +1,4 @@
-// Mac Health's "Left running" list and its side cards. Each leftover row shows what it is and where, why Burro
+// Mac Health's "Left running" panel and its side panels (cells of the page's joined surface). Each leftover row shows what it is and where, why Burro
 // flagged it (with the chat it belongs to when Burro can tell), how long it has run, its memory, and Stop…, which
 // only opens the confirmation dialog. "Top by agents" lists the processes running under this Mac's agent chats;
 // when there are none, "Busiest now" lists the busiest processes instead.
@@ -7,76 +7,76 @@ import BurroCore
 
 struct MacHealthLeftoversSection: View {
     var health: MacHealthStore
-    @State private var width: CGFloat = 800
     /// Below this the rows stack instead of lining up in columns.
-    static let columns: CGFloat = 720
-    private static let ageWidth: CGFloat = 56, memoryWidth: CGFloat = 70, actionsWidth: CGFloat = 132
+    nonisolated static var columns: CGFloat { 720 }
     var body: some View {
         let report = health.report
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                if !report.leftovers.isEmpty {
-                    Circle().fill(AppAppearance.amber).frame(width: 7, height: 7).accessibilityHidden(true)
-                    MacHealthLabel("Left running · \(report.leftovers.count)", color: AppAppearance.amber)
-                } else {
-                    MacHealthLabel("Left running")
-                }
-                Spacer()
-                if report.reclaimable > 0 {
-                    Text("\(HealthFormat.bytes(report.reclaimable)) in all").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                }
-            }.padding(.horizontal, 2)
+        Panel(title: "Left running", subtitle: subtitle(report)) {
+            if report.reclaimable > 0 {
+                Text("\(HealthFormat.bytes(report.reclaimable)) in all").font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.tertiary)
+            }
+        } content: {
             VStack(alignment: .leading, spacing: 0) {
                 if report.leftovers.isEmpty {
                     Label(report.complete ? "Nothing left running." : "Checking processes…", systemImage: report.complete ? "checkmark.circle" : "ellipsis")
-                        .foregroundStyle(report.complete ? AppAppearance.green : AppAppearance.secondary)
-                        .padding(.horizontal, 18).padding(.vertical, 14)
+                        .font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).padding(.vertical, 4)
                 } else {
-                    if width >= Self.columns { columnHeader }
                     TimelineView(.periodic(from: .now, by: 60)) { context in
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(report.leftovers.enumerated()), id: \.element.id) { index, item in
-                                if index > 0 || width >= Self.columns { Divider().overlay(AppAppearance.separator) }
-                                row(item, now: context.date)
-                            }
+                        // Columns when they fit, else stacked rows; decided by layout, not by a measured width.
+                        ViewThatFits(in: .horizontal) {
+                            table(report.leftovers, columns: true, now: context.date).frame(minWidth: Self.columns)
+                            table(report.leftovers, columns: false, now: context.date)
                         }
                     }
                 }
                 if !report.leftovers.isEmpty || !health.ignored.isEmpty {
-                    Divider().overlay(AppAppearance.separator)
+                    Rectangle().fill(AppAppearance.separator).frame(height: 1).padding(.top, report.leftovers.isEmpty ? 10 : 0)
                     footer
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .modifier(AppCardSurface())
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
         }
     }
-    private var nameWidth: CGFloat {
-        max(150, (width - 36 - 4 * 14 - Self.ageWidth - Self.memoryWidth - Self.actionsWidth) * 0.38)
+    private func table(_ items: [Leftover], columns: Bool, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if columns { columnHeader }
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                if index > 0 || columns { Rectangle().fill(AppAppearance.separator).frame(height: 1) }
+                row(item, columns: columns, now: now)
+            }
+        }
+    }
+    /// The count in amber (the page's warning for leftovers, as before), or what the list is for.
+    private func subtitle(_ report: LeftoverReport) -> [TextRun] {
+        guard !report.leftovers.isEmpty else {
+            return [TextRun("Dev servers, watchers, simulators and scripts your work left behind")]
+        }
+        let count = report.leftovers.count
+        return [TextRun("\(count) thing\(count == 1 ? "" : "s") left running", .needsYou),
+                TextRun(" · each asks before it stops")]
     }
     private var columnHeader: some View {
-        HStack(spacing: 14) {
-            MacHealthLabel("Process").frame(width: nameWidth, alignment: .leading)
+        LeftoverColumnsLayout {
+            MacHealthLabel("Process").frame(maxWidth: .infinity, alignment: .leading)
             MacHealthLabel("Why it’s flagged").frame(maxWidth: .infinity, alignment: .leading)
-            MacHealthLabel("Age").frame(width: Self.ageWidth, alignment: .trailing)
-            MacHealthLabel("Memory").frame(width: Self.memoryWidth, alignment: .trailing)
-            Color.clear.frame(width: Self.actionsWidth, height: 1)
+            MacHealthLabel("Age").frame(maxWidth: .infinity, alignment: .trailing)
+            MacHealthLabel("Memory").frame(maxWidth: .infinity, alignment: .trailing)
+            Color.clear.frame(height: 1)
         }
-        .padding(.horizontal, 18).padding(.top, 11).padding(.bottom, 8)
+        .padding(.bottom, 8)
         .accessibilityHidden(true)
     }
-    @ViewBuilder private func row(_ item: Leftover, now: Date) -> some View {
+    @ViewBuilder private func row(_ item: Leftover, columns: Bool, now: Date) -> some View {
         let age = LeftoverPolicy.duration(now.timeIntervalSince(item.started))
-        if width >= Self.columns {
-            HStack(alignment: .firstTextBaseline, spacing: 14) {
-                identity(item, now: now).frame(width: nameWidth, alignment: .leading)
+        if columns {
+            LeftoverColumnsLayout {
+                identity(item, now: now).frame(maxWidth: .infinity, alignment: .leading)
                 why(item).frame(maxWidth: .infinity, alignment: .leading)
-                Text(age).foregroundStyle(AppAppearance.secondary).monospacedDigit().frame(width: Self.ageWidth, alignment: .trailing)
-                Text(HealthFormat.bytes(item.memory)).monospacedDigit().frame(width: Self.memoryWidth, alignment: .trailing)
-                actions(item).frame(width: Self.actionsWidth, alignment: .trailing)
+                Text(age).foregroundStyle(AppAppearance.secondary).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing)
+                Text(HealthFormat.bytes(item.memory)).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing)
+                actions(item).frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .padding(.horizontal, 18).padding(.vertical, 11)
+            .padding(.vertical, 11)
             .accessibilityElement(children: .contain)
         } else {
             VStack(alignment: .leading, spacing: 6) {
@@ -88,7 +88,7 @@ struct MacHealthLeftoversSection: View {
                 why(item)
                 Text("\(age) · \(HealthFormat.bytes(item.memory))").font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.tertiary)
             }
-            .padding(.horizontal, 16).padding(.vertical, 11)
+            .padding(.vertical, 11)
             .accessibilityElement(children: .contain)
         }
     }
@@ -148,7 +148,32 @@ struct MacHealthLeftoversSection: View {
                     .help("Stop ignoring them; anything still running reappears on the next check")
             }
         }
-        .padding(.horizontal, 18).padding(.vertical, 10)
+        .padding(.top, 10)
+    }
+}
+
+/// Left running's columns: the process (38% of what the fixed columns leave, at least 150), why it's
+/// flagged (the rest), then age, memory and the actions at fixed widths; children are top-aligned.
+/// Widths come from the proposal, so the table never feeds a measured width back into its layout.
+struct LeftoverColumnsLayout: SwiftUI.Layout {
+    static let spacing: CGFloat = 14
+    static let fixed: [CGFloat] = [56, 70, 132]
+    func widths(_ total: CGFloat) -> [CGFloat] {
+        let flexible = max(0, total - Self.fixed.reduce(0, +) - Self.spacing * 4)
+        let name = max(150, flexible * 0.38)
+        return [name, max(0, flexible - name)] + Self.fixed
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 720
+        let heights = zip(subviews, widths(width)).map { $0.sizeThatFits(ProposedViewSize(width: $1, height: nil)).height }
+        return CGSize(width: width, height: heights.max() ?? 0)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        for (subview, width) in zip(subviews, widths(bounds.width)) {
+            subview.place(at: CGPoint(x: x, y: bounds.minY), anchor: .topLeading, proposal: ProposedViewSize(width: width, height: nil))
+            x += width + Self.spacing
+        }
     }
 }
 
@@ -177,52 +202,48 @@ struct MacHealthAgentsCard: View {
     var summary: AgentProcessSummary
     var openChat: (String) -> Void
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                MacHealthLabel("Top by agents")
-                Spacer()
-                Text("CPU · memory").font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
-            }.padding(.bottom, 4)
-            ForEach(Array(summary.top.enumerated()), id: \.element.id) { index, line in
-                if index > 0 { Divider().overlay(AppAppearance.separator) }
-                MacHealthProcessRow(name: line.name, cpu: line.cpuPercent, memory: line.memory) {
-                    Button { openChat(line.chat.id) } label: {
-                        Text(line.chat.title).font(.system(size: 12)).lineLimit(1).truncationMode(.tail)
-                            .underline(color: AppAppearance.hairline)
+        Panel(title: "Top by agents", subtitle: [TextRun("Processes your agent chats are running")]) {
+            Text("CPU · memory").font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
+        } content: {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(summary.top.enumerated()), id: \.element.id) { index, line in
+                    if index > 0 { Rectangle().fill(AppAppearance.separator).frame(height: 1) }
+                    MacHealthProcessRow(name: line.name, cpu: line.cpuPercent, memory: line.memory) {
+                        Button { openChat(line.chat.id) } label: {
+                            Text(line.chat.title).font(.system(size: 12)).lineLimit(1).truncationMode(.tail)
+                                .underline(color: AppAppearance.hairline)
+                        }
+                        .buttonStyle(.plain).frame(minWidth: 60, maxWidth: .infinity, alignment: .leading)
+                        .help("Show “\(line.chat.title)” in Burro")
                     }
-                    .buttonStyle(.plain).frame(minWidth: 60, maxWidth: .infinity, alignment: .leading)
-                    .help("Show “\(line.chat.title)” in Burro")
                 }
+                Text("Agents use \(Int(summary.cpuPercent.rounded()))% CPU and \(HealthFormat.bytes(summary.memory)) in all.")
+                    .font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).padding(.top, 6)
+                    .help("\(summary.processes) process\(summary.processes == 1 ? "" : "es") under Claude Code chats whose process Burro has verified on this Mac. CPU is a share of one core.")
             }
-            Text("Agents use \(Int(summary.cpuPercent.rounded()))% CPU and \(HealthFormat.bytes(summary.memory)) in all.")
-                .font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).padding(.top, 6)
-                .help("\(summary.processes) process\(summary.processes == 1 ? "" : "es") under Claude Code chats whose process Burro has verified on this Mac. CPU is a share of one core.")
         }
-        .padding(.horizontal, 18).padding(.vertical, 16).frame(maxWidth: .infinity, alignment: .leading).modifier(AppCardSurface())
     }
 }
 
 struct MacHealthBusiestCard: View {
     var report: LeftoverReport
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                MacHealthLabel("Busiest now")
-                Spacer()
-                Text("CPU · memory").font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
-            }.padding(.bottom, 4)
-            if report.busiest.isEmpty {
-                Text("Measuring…").foregroundStyle(AppAppearance.secondary).padding(.vertical, 7)
+        Panel(title: "Busiest now", subtitle: [TextRun("Your busiest processes")]) {
+            Text("CPU · memory").font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
+        } content: {
+            VStack(alignment: .leading, spacing: 0) {
+                if report.busiest.isEmpty {
+                    Text("Measuring…").font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).padding(.vertical, 7)
+                }
+                ForEach(Array(report.busiest.enumerated()), id: \.element.id) { index, line in
+                    if index > 0 { Rectangle().fill(AppAppearance.separator).frame(height: 1) }
+                    MacHealthProcessRow(name: line.name, cpu: line.cpuPercent, memory: line.memory, nameWidth: nil) { EmptyView() }
+                }
+                Text(report.agentProcesses > 0
+                     ? "\(report.agentProcesses) Claude and Codex process\(report.agentProcesses == 1 ? " uses" : "es use") \(HealthFormat.bytes(report.agentMemory)) in all."
+                     : "CPU is a share of one core.")
+                    .font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).padding(.top, 6)
             }
-            ForEach(Array(report.busiest.enumerated()), id: \.element.id) { index, line in
-                if index > 0 { Divider().overlay(AppAppearance.separator) }
-                MacHealthProcessRow(name: line.name, cpu: line.cpuPercent, memory: line.memory, nameWidth: nil) { EmptyView() }
-            }
-            Text(report.agentProcesses > 0
-                 ? "\(report.agentProcesses) Claude and Codex process\(report.agentProcesses == 1 ? " uses" : "es use") \(HealthFormat.bytes(report.agentMemory)) in all."
-                 : "Your processes; CPU is a share of one core.")
-                .font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).padding(.top, 6)
         }
-        .padding(.horizontal, 18).padding(.vertical, 16).frame(maxWidth: .infinity, alignment: .leading).modifier(AppCardSurface())
     }
 }

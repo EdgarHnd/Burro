@@ -1,4 +1,4 @@
-// One provider's card on the Usage page: its name, plan, account and where the reading comes from,
+// One provider's limits on the Usage page (a section of the joined Limits panel, `framed: false`): its name, plan, account and where the reading comes from,
 // the Account menu (sign in or switch, choose a profile, default account, Claude Keychain access),
 // when it was read (marked stale after ten minutes), any problem with its action (Connect Claude,
 // Sign in…, Refresh), then each limit as a wide meter: what is left (or used, per Usage settings),
@@ -19,6 +19,8 @@ struct UsageLimitCard: View {
     var calendar: Calendar
     var compact: Bool
     var localHistory: UsageLocalHistoryState = .shared
+    /// false inside the page's joined Limits panel: no surface or padding of its own.
+    var framed = true
     @State private var showHistory = false
     @State private var days = 7
 
@@ -47,7 +49,8 @@ struct UsageLimitCard: View {
             UsageLocalHistorySection(state: localHistory, provider: provider.id, profile: usage.preferences.profiles[provider.id],
                                      now: now, calendar: calendar)
         }
-        .padding(.horizontal, 20).modifier(AppCardSurface())
+        .padding(.horizontal, framed ? 20 : 0)
+        .modifier(FramedSurface(framed: framed))
     }
 
     private var header: some View {
@@ -83,7 +86,7 @@ struct UsageLimitCard: View {
             if provider.id == .claude { Button("Allow Claude Keychain access…") { usage.connectClaude() } }
         } label: { Label("Account", systemImage: "person.crop.circle").font(.system(size: 12, weight: .medium)) }
             .menuStyle(.borderlessButton).fixedSize().padding(.horizontal, 10).padding(.vertical, 4)
-            .background(AppAppearance.raised, in: Capsule())
+            .overlay(Capsule().strokeBorder(AppAppearance.hairline))
             .help("Sign in, switch account or choose a profile for \(provider.title)")
     }
 
@@ -171,6 +174,14 @@ struct UsageLimitCard: View {
                 Text("Readings are stored only on this Mac, separately for each verified account.").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
             }
         }
+    }
+}
+
+/// A card surface only when framed.
+private struct FramedSurface: ViewModifier {
+    var framed: Bool
+    func body(content: Content) -> some View {
+        if framed { content.modifier(AppCardSurface()) } else { content }
     }
 }
 

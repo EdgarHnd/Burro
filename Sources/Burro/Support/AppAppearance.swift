@@ -3,6 +3,7 @@
 // The notch panel pins itself to dark, so it keeps its black, camera-housing look.
 import AppKit
 import SwiftUI
+import BurroCore
 
 enum AppAppearance {
     typealias RGBA = (Double, Double, Double, Double)
@@ -91,24 +92,56 @@ struct SoftSurface: ViewModifier {
 }
 
 /// The shared page header: a large rounded title, an optional subtitle and trailing actions,
-/// sitting on the page background with no divider.
+/// sitting on the page background with no divider. The dashboard variant (Today first; Usage, Mac
+/// Health, Worktrees and the Orchestrator later) adds a small grey eyebrow over the title and, in
+/// place of the subtitle, one sentence of facts whose runs carry a tone (`TextRun`: amber for what
+/// needs you, grey for stuck); the trailing slot holds a date control and at most a button or two.
 struct PageHeader<Trailing: View>: View {
     var title: String
     var subtitle: String? = nil
     /// Left and right padding; narrow columns (the Chats list) use less.
     var inset: CGFloat = 30
+    /// A small uppercase line over the title ("TODAY").
+    var eyebrow: String? = nil
+    /// One sentence of facts, shown instead of `subtitle` when not empty.
+    var sentence: [TextRun] = []
+    var top: CGFloat = 20
+    var bottom: CGFloat = 14
     @ViewBuilder var trailing: () -> Trailing
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: sentence.isEmpty ? .center : .bottom, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
+                if let eyebrow {
+                    Text(eyebrow.uppercased()).font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(AppAppearance.tertiary)
+                }
                 Text(title).font(.system(size: 28, weight: .bold, design: .rounded)).foregroundStyle(AppAppearance.text)
-                if let subtitle { Text(subtitle).font(.system(size: 13)).foregroundStyle(AppAppearance.secondary) }
+                if !sentence.isEmpty {
+                    TextRuns.text(sentence).font(.system(size: 13.5)).monospacedDigit()
+                        .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
+                } else if let subtitle {
+                    Text(subtitle).font(.system(size: 13)).foregroundStyle(AppAppearance.secondary)
+                }
             }
             Spacer(minLength: 12)
             trailing()
         }
-        .padding(.horizontal, inset).padding(.top, 20).padding(.bottom, 14)
+        .padding(.horizontal, inset).padding(.top, top).padding(.bottom, bottom)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A sentence of `TextRun`s as one `Text`: plain runs in the base grey, strong ones in text colour,
+/// needs-you runs in amber (medium weight, the only emphasis), stuck runs in tertiary grey.
+enum TextRuns {
+    static func text(_ runs: [TextRun], base: Color = AppAppearance.secondary) -> Text {
+        runs.reduce(Text(verbatim: "")) { sentence, run in
+            switch run.tone {
+            case .plain: sentence + Text(verbatim: run.text).foregroundStyle(base)
+            case .strong: sentence + Text(verbatim: run.text).foregroundStyle(AppAppearance.text)
+            case .needsYou: sentence + Text(verbatim: run.text).fontWeight(.medium).foregroundStyle(AppAppearance.amber)
+            case .stuck: sentence + Text(verbatim: run.text).foregroundStyle(AppAppearance.tertiary)
+            }
+        }
     }
 }
 

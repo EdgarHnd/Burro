@@ -80,6 +80,11 @@ public enum ActivityCoverage {
         return out
     }
 
+    /// Wall-clock seconds covered by `intervals`: overlaps count once (two chats working at once).
+    public static func mergedDuration(_ intervals: [DateInterval]) -> TimeInterval {
+        merged(intervals).reduce(0) { $0 + $1.duration }
+    }
+
     /// The stretches of `range` Burro wasn't recording: not inside a recording interval and not
     /// covered by a recorded span, at least `minimumGap` long. Nil coverage (no sidecar) claims nothing.
     /// Spans from before the first recording interval mean coverage wasn't being kept yet (the day

@@ -187,10 +187,8 @@ import XCTest
             try render(TodayDaySection(today: full, now: now), width: 868, dark: dark, to: out.appendingPathComponent("today-wide-\(suffix).png"))
             try render(TodayDaySection(today: full, now: now), width: 600, dark: dark, to: out.appendingPathComponent("today-narrow-\(suffix).png"))
             try render(TodayDaySection(today: empty, now: now), width: 868, dark: dark, to: out.appendingPathComponent("today-empty-\(suffix).png"))
-            try render(HomeActivityCard(tracker: full.tracker, day: day, now: now) {}, width: 368, dark: dark,
-                       to: out.appendingPathComponent("home-card-\(suffix).png"))
-            try render(HomeActivityCard(tracker: empty.tracker, day: try XCTUnwrap(empty.tracked), now: now) {}, width: 368,
-                       dark: dark, to: out.appendingPathComponent("home-card-empty-\(suffix).png"))
+            try render(ActivityCategoryBar(day: day).padding(16), width: 300, dark: dark,
+                       to: out.appendingPathComponent("home-category-bar-\(suffix).png"))
         }
     }
 

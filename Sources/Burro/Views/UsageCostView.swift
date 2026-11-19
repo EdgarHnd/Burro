@@ -1,28 +1,20 @@
 // The Usage page's local token cards, all from this Mac's own logs and explicitly separate from
 // subscription quotas and paid charges: today by project (Home's project activity: named projects,
 // then "Other folders"), today by model (with the model of any low limit marked), and the last
-// seven days as a strip. Costs are estimated API value at reference rates, never a bill; the
+// seven days as a strip. Each is a `Panel` cell of the page's joined surface. Costs are estimated API value at reference rates, never a bill; the
 // caveats (priced coverage, partial scans, other accounts' logs, remote work, Grok) stay visible.
 import SwiftUI
 import BurroCore
 
-/// A card with an uppercase section title and a quiet note on the right.
+/// A cell of the page's joined surface: a `Panel` with the quiet note as its subtitle.
 private struct UsageSectionCard<Content: View>: View {
     var title: String
     var note: String?
     @ViewBuilder var content: () -> Content
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title.uppercased()).font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(AppAppearance.tertiary)
-                Spacer()
-                if let note { Text(note).font(.system(size: 11.5)).foregroundStyle(AppAppearance.tertiary) }
-            }.padding(.bottom, 8)
-            content()
+        Panel(title: title, subtitle: note.map { [TextRun($0)] } ?? []) {
+            VStack(alignment: .leading, spacing: 0) { content() }.frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 20).padding(.vertical, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(AppCardSurface())
     }
 }
 
@@ -31,22 +23,23 @@ struct UsageBreakdownBars: View {
     var rows: [UsageBreakdownRow]
     /// Rows drawn amber (a model whose limit is low).
     var highlighted: Set<String> = []
+    @State private var width: CGFloat = 400
+    /// Below this the bar goes under the name, so a third-width panel never cuts the figures off.
+    private static let narrowBelow: CGFloat = 380
     var body: some View {
         let largest = max(1, rows.map(\.tokens).max() ?? 1)
+        let narrow = width < Self.narrowBelow
         VStack(spacing: 0) {
             ForEach(rows) { row in
-                HStack(spacing: 12) {
-                    Text(row.title).font(.system(size: 13)).foregroundStyle(row.isRest ? AppAppearance.secondary : AppAppearance.text)
-                        .lineLimit(1).truncationMode(.middle).frame(width: 150, alignment: .leading)
-                    GeometryReader { geometry in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(AppAppearance.raised)
-                            Capsule().fill(highlighted.contains(row.id) ? AppAppearance.amber : (row.isRest ? AppAppearance.tertiary : AppAppearance.secondary))
-                                .frame(width: max(4, geometry.size.width * row.tokens / largest))
+                Group {
+                    if narrow {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 10) { name(row).frame(maxWidth: .infinity, alignment: .leading); figures(row) }
+                            bar(row, largest: largest)
                         }
-                    }.frame(height: 10)
-                    Text(UsagePageText.tokens(row.tokens)).frame(width: 56, alignment: .trailing).foregroundStyle(AppAppearance.text)
-                    Text(row.apiValue.map(UsagePageText.cost) ?? "—").frame(width: 64, alignment: .trailing).foregroundStyle(AppAppearance.secondary)
+                    } else {
+                        HStack(spacing: 12) { name(row).frame(width: 150, alignment: .leading); bar(row, largest: largest); figures(row) }
+                    }
                 }
                 .font(.system(size: 13)).monospacedDigit().padding(.vertical, 6)
                 .accessibilityElement(children: .ignore)
@@ -54,12 +47,81 @@ struct UsageBreakdownBars: View {
             }
             Rectangle().fill(AppAppearance.separator).frame(height: 1).padding(.top, 6)
             HStack(spacing: 12) {
-                Text("Total").frame(width: 150, alignment: .leading)
+                Text("Total")
                 Spacer()
                 Text(UsagePageText.tokens(rows.reduce(0) { $0 + $1.tokens })).frame(width: 56, alignment: .trailing)
                 Text(UsagePageText.cost(rows.reduce(0) { $0 + ($1.apiValue ?? 0) })).frame(width: 64, alignment: .trailing)
             }.font(.system(size: 13, weight: .semibold)).monospacedDigit().foregroundStyle(AppAppearance.text).padding(.vertical, 7)
         }
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
+    }
+    private func name(_ row: UsageBreakdownRow) -> some View {
+        Text(row.title).foregroundStyle(row.isRest ? AppAppearance.secondary : AppAppearance.text).lineLimit(1).truncationMode(.middle)
+    }
+    private func figures(_ row: UsageBreakdownRow) -> some View {
+        HStack(spacing: 12) {
+            Text(UsagePageText.tokens(row.tokens)).frame(width: 56, alignment: .trailing).foregroundStyle(AppAppearance.text)
+            Text(row.apiValue.map(UsagePageText.cost) ?? "—").frame(width: 64, alignment: .trailing).foregroundStyle(AppAppearance.secondary)
+        }
+    }
+    private func bar(_ row: UsageBreakdownRow, largest: Double) -> some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(AppAppearance.raised)
+                Capsule().fill(highlighted.contains(row.id) ? AppAppearance.amber : (row.isRest ? AppAppearance.tertiary : AppAppearance.secondary))
+                    .frame(width: max(4, geometry.size.width * row.tokens / largest))
+            }
+        }.frame(height: narrowBar ? 4 : 10)
+    }
+    private var narrowBar: Bool { width < Self.narrowBelow }
+}
+
+/// One stacked bar of today's models (each a share of the day's tokens, the low-limit one amber)
+/// over a small table: a swatch, the model, tokens and estimated value, then the total.
+struct UsageModelsTable: View {
+    var rows: [UsageBreakdownRow]
+    var highlighted: Set<String> = []
+    var body: some View {
+        let total = max(1, rows.reduce(0) { $0 + $1.tokens })
+        VStack(alignment: .leading, spacing: 10) {
+            GeometryReader { geometry in
+                let gaps = CGFloat(max(0, rows.count - 1)) * 2
+                HStack(spacing: 2) {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                        Rectangle().fill(color(row, index))
+                            .frame(width: max(3, (geometry.size.width - gaps) * row.tokens / total))
+                    }
+                }
+                .clipShape(Capsule())
+            }
+            .frame(height: 10).accessibilityHidden(true)
+            VStack(spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    HStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 2).fill(color(row, index)).frame(width: 8, height: 8)
+                        Text(row.title).foregroundStyle(row.isRest ? AppAppearance.secondary : AppAppearance.text)
+                            .lineLimit(1).truncationMode(.middle).frame(maxWidth: .infinity, alignment: .leading)
+                        Text(UsagePageText.tokens(row.tokens)).frame(width: 50, alignment: .trailing)
+                        Text(row.apiValue.map(UsagePageText.cost) ?? "—").frame(width: 56, alignment: .trailing).foregroundStyle(AppAppearance.secondary)
+                    }
+                    .font(.system(size: 12.5)).monospacedDigit().padding(.vertical, 5)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(row.title), \(UsagePageText.tokens(row.tokens)) tokens, \(row.apiValue.map(UsagePageText.cost) ?? "no estimate")")
+                }
+                Rectangle().fill(AppAppearance.separator).frame(height: 1).padding(.top, 4)
+                HStack(spacing: 8) {
+                    Text("Total").frame(maxWidth: .infinity, alignment: .leading)
+                    Text(UsagePageText.tokens(rows.reduce(0) { $0 + $1.tokens })).frame(width: 50, alignment: .trailing)
+                    Text(UsagePageText.cost(rows.reduce(0) { $0 + ($1.apiValue ?? 0) })).frame(width: 56, alignment: .trailing)
+                }.font(.system(size: 12.5, weight: .semibold)).monospacedDigit().foregroundStyle(AppAppearance.text).padding(.vertical, 6)
+            }
+        }
+    }
+    /// Greys from strong to faint by rank; a low-limit model amber.
+    private func color(_ row: UsageBreakdownRow, _ index: Int) -> Color {
+        if highlighted.contains(row.id) { return AppAppearance.amber }
+        if row.isRest { return AppAppearance.raised }
+        return AppAppearance.text.opacity([0.62, 0.42, 0.28, 0.18, 0.12][min(index, 4)])
     }
 }
 
@@ -96,7 +158,7 @@ struct UsageModelsCard: View {
             if let week, !week.todayModels.isEmpty {
                 let rows = Self.rows(week.todayModels)
                 let low = Self.lowModels(week.todayModels, alerts: alerts)
-                UsageBreakdownBars(rows: rows, highlighted: Set(rows.filter { row in low.contains { $0.title == row.title } }.map(\.id)))
+                UsageModelsTable(rows: rows, highlighted: Set(rows.filter { row in low.contains { $0.title == row.title } }.map(\.id)))
                 if let first = low.first, let today = week.today, today.tokens > 0 {
                     let share = Int((first.tokens / today.tokens * 100).rounded())
                     UsageCardNote(text: "\(UsageWeek.modelTitle(first.model)) is \(share)% of today’s tokens and has a low limit.").padding(.top, 4)

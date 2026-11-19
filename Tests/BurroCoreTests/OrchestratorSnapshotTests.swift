@@ -18,19 +18,35 @@ import XCTest
 
         let now = Date()
         let (store, budget) = try sampleStore(now: now)
-        for dark in [true, false] {
-            let suffix = dark ? "dark" : "light"
-            try render(OrchestratorPageLayout(store: store, budget: budget, now: now), size: CGSize(width: 1440, height: 856), dark: dark,
-                       to: out.appendingPathComponent("orchestrator-1440-\(suffix).png"))
-        }
-        try render(OrchestratorPageLayout(store: store, budget: budget, now: now), size: CGSize(width: 1040, height: 820), dark: true,
-                   to: out.appendingPathComponent("orchestrator-1040-dark.png"))
-        try render(OrchestratorPageLayout(store: store, budget: budget, now: now), size: CGSize(width: 760, height: 1100), dark: true,
-                   to: out.appendingPathComponent("orchestrator-760-dark.png"))
-
         let (empty, emptyBudget) = try sampleStore(now: now, empty: true)
-        try render(OrchestratorPageLayout(store: empty, budget: emptyBudget, now: now), size: CGSize(width: 1440, height: 856), dark: true,
-                   to: out.appendingPathComponent("orchestrator-empty-1440-dark.png"))
+        let (paused, pausedBudget) = try sampleStore(now: now, paused: true)
+        let (unconfirmed, unconfirmedBudget) = try sampleStore(now: now, unconfirmed: true)
+        // Content widths of a 1000, 1240 and 1440 pt window beside the sidebar; the window's height.
+        for width: CGFloat in [935, 1015, 1215] {
+            for dark in [true, false] {
+                let suffix = "\(Int(width))-\(dark ? "dark" : "light")"
+                let size = CGSize(width: width, height: 860)
+                try render(OrchestratorPageLayout(store: store, budget: budget, now: now), size: size, dark: dark,
+                           to: out.appendingPathComponent("orchestrator-brief-\(suffix).png"))
+                try render(OrchestratorPageLayout(store: empty, budget: emptyBudget, now: now), size: size, dark: dark,
+                           to: out.appendingPathComponent("orchestrator-empty-\(suffix).png"))
+                try render(OrchestratorPageLayout(store: paused, budget: pausedBudget, now: now), size: size, dark: dark,
+                           to: out.appendingPathComponent("orchestrator-paused-\(suffix).png"))
+                try render(OrchestratorPageLayout(store: store, budget: budget, now: now, tab: .memory), size: size, dark: dark,
+                           to: out.appendingPathComponent("orchestrator-memory-\(suffix).png"))
+                try render(OrchestratorPageLayout(store: store, budget: budget, now: now, tab: .runs), size: size, dark: dark,
+                           to: out.appendingPathComponent("orchestrator-runs-\(suffix).png"))
+                try render(OrchestratorPageLayout(store: unconfirmed, budget: unconfirmedBudget, now: now), size: size, dark: dark,
+                           to: out.appendingPathComponent("orchestrator-unconfirmed-page-\(suffix).png"))
+            }
+        }
+        // A tall window shows the whole right column (Budget, Runs); a short one; the one-column layout.
+        try render(OrchestratorPageLayout(store: paused, budget: pausedBudget, now: now), size: CGSize(width: 1215, height: 1800), dark: true,
+                   to: out.appendingPathComponent("orchestrator-paused-tall-1215-dark.png"))
+        try render(OrchestratorPageLayout(store: store, budget: budget, now: now), size: CGSize(width: 935, height: 680), dark: true,
+                   to: out.appendingPathComponent("orchestrator-short-935-dark.png"))
+        try render(OrchestratorPageLayout(store: store, budget: budget, now: now), size: CGSize(width: 700, height: 1100), dark: true,
+                   to: out.appendingPathComponent("orchestrator-700-dark.png"))
 
         // Proposals whose Send Burro couldn't confirm (invented): a start on another machine and a reply.
         var remoteStart = OrchestratorAction(kind: .start, createdAt: now.addingTimeInterval(-600),
@@ -52,7 +68,7 @@ import XCTest
         }
     }
 
-    private func sampleStore(now: Date, empty: Bool = false) throws -> (AppStore, OrchestratorBudget) {
+    private func sampleStore(now: Date, empty: Bool = false, paused: Bool = false, unconfirmed: Bool = false) throws -> (AppStore, OrchestratorBudget) {
         let suite = "burro.orch.snapshot.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
@@ -77,8 +93,11 @@ import XCTest
 
         let draftA = OrchestratorAction(kind: .reply, createdAt: ago(4), text: "Merge it now, then run the device check on staging.",
                                         chatID: streak, chatTitle: "Streak ladder config", machine: "This Mac", conversation: BriefDrafts.triageConversation)
-        let draftB = OrchestratorAction(kind: .reply, createdAt: ago(1), text: "Approved. Push it and open a draft PR against main.",
+        var draftB = OrchestratorAction(kind: .reply, createdAt: ago(1), text: "Approved. Push it and open a draft PR against main.",
                                         chatID: alerts, chatTitle: "Support dashboard alerts", machine: "This Mac", conversation: BriefDrafts.triageConversation)
+        if unconfirmed {
+            draftB.recordSend(text: draftB.text, outcome: .failure(ReplyNotConfirmed("Codex's app server didn't answer in time.")), now: now)
+        }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("burro-orch-snapshot-\(UUID().uuidString)/focustown")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: folder.deletingLastPathComponent()) }
@@ -113,8 +132,9 @@ import XCTest
             BriefItem(chatID: "codex:t5", chatTitle: "Audit repository security", kind: .done, headline: "clean, two updates suggested.", sourceHash: "e", createdAt: ago(50)),
             BriefItem(chatID: "claude:t6", chatTitle: "Godot shader warm-up", machine: "Other Mac", kind: .stuck, headline: "No new output for 52 min",
                       sourceHash: "f", createdAt: ago(5)),
-        ]), runsToday: 9, lastRun: ago(3))
-        let budget = OrchestratorBudget(runsToday: 9, cap: 150, runs: store.orchestrator.runsToday, claude: windows, enabled: true, gate: .open)
+        ]), runsToday: paused ? 150 : 9, lastRun: ago(3), gate: paused ? .dailyCap(150) : .open)
+        let budget = OrchestratorBudget(runsToday: paused ? 150 : 9, cap: 150, runs: store.orchestrator.runsToday, claude: windows, enabled: true,
+                                        gate: paused ? .dailyCap(150) : .open)
         return (store, budget)
     }
 

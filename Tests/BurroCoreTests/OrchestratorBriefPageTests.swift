@@ -86,9 +86,11 @@ final class OrchestratorBriefPageTests: XCTestCase {
     }
 
     func testColumnsCollapseAtNarrowWidths() {
-        XCTAssertEqual(OrchestratorPageColumns.count(width: 1384), 3)
-        XCTAssertEqual(OrchestratorPageColumns.count(width: 1000), 2)
+        XCTAssertEqual(OrchestratorPageColumns.count(width: 1143), 2)
+        XCTAssertEqual(OrchestratorPageColumns.count(width: 863), 2)
         XCTAssertEqual(OrchestratorPageColumns.count(width: 700), 1)
+        XCTAssertEqual(OrchestratorPageColumns.sideWidth(width: 1143), 380)
+        XCTAssertEqual(OrchestratorPageColumns.sideWidth(width: 863), 360)
     }
 
     // MARK: The store's "Run triage now"

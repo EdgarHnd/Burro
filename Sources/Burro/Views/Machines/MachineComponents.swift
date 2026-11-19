@@ -1,117 +1,14 @@
-// The Machines page body and its cards. Each machine is a card you can act on: name and OS, the
-// existing status line with its working / needs-you counts, the chats working or waiting for you
-// there (a row opens the chat in Chats; a Claude chat on another machine also offers Attach), the
-// agent tools installed there with Update where the tool has an updater, Burro's cache for that
-// machine with Clear, and New chat here plus Open in Terminal (this Mac) or Open SSH (another
-// machine). A machine that stopped answering is a quieter dashed card: since when, when Burro
-// retries, how many of its chats can still be read from the local copy, its address and last
-// error, Retry now and Forget machine. Below the cards, "Add a machine" takes an SSH address and
-// opens the existing editor prefilled, and Tailscale devices that aren't set up yet offer Add over
-// SSH. Cards share a row height and wrap to fewer columns in a narrow window.
+// The Machines page's cells. Each machine is a cell of the joined surface you can act on: name and
+// OS, the existing status line with its working / needs-you counts, the chats working or waiting for
+// you there (a row opens the chat in Chats; a Claude chat on another machine also offers Attach),
+// the agent tools installed there with Update where the tool has an updater, and New chat here plus
+// Open in Terminal (this Mac) or Open SSH (another machine). Burro's cache for a machine and Clear
+// live in the Local copies panel under the cells (MachinesPageContent.swift). A machine that
+// stopped answering is a quieter hatched cell: since when, when Burro retries, how many of its chats
+// can still be read from the local copy, its address and last error, Retry now and Forget machine.
+// State is a dot and plain words; OS and model names are plain grey text, not filled tags.
 import SwiftUI
 import BurroCore
-
-/// The header: title, the one-line headline and Check all now.
-struct MachinesHeader: View {
-    var model: MachinesPageModel
-    var actions: MachinesActions
-    var body: some View {
-        PageHeader(title: "Machines", subtitle: model.headline) {
-            if model.checking { ProgressView().controlSize(.small).accessibilityLabel("Checking machines") }
-            PillButton(title: "Check all now", symbol: "arrow.clockwise", action: actions.checkAll)
-                .help("Check every machine's chats and tools now")
-        }
-    }
-}
-
-struct MachinesPage: View {
-    var model: MachinesPageModel
-    var actions: MachinesActions
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            if let message = model.message {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: "info.circle").foregroundStyle(AppAppearance.tertiary)
-                    Text(message).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).textSelection(.enabled)
-                    Spacer(minLength: 8)
-                    Button(action: actions.dismissMessage) { Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)) }
-                        .buttonStyle(.plain).foregroundStyle(AppAppearance.tertiary)
-                        .accessibilityLabel("Dismiss message").help("Dismiss")
-                }
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .modifier(AppCardSurface(radius: 10))
-            }
-            MachinesCardGrid(spacing: 16) {
-                ForEach(model.cards) { card in
-                    if card.reach == .unreachable {
-                        UnreachableMachineCard(card: card, actions: actions).layoutValue(key: MachineCardFlex.self, value: (260, 3))
-                    } else {
-                        MachineCardView(card: card, attaching: model.attaching, actions: actions)
-                    }
-                }
-            }
-            AddMachineRow(add: actions.add)
-            if !model.tailnet.isEmpty { TailnetDevices(peers: model.tailnet, add: actions.addTailnet) }
-            VStack(alignment: .leading, spacing: 4) {
-                if !model.tailscaleInstalled {
-                    Text("Install Tailscale to see every device on your tailnet here.")
-                }
-                Text("Versions are read on each machine with the tool's own --version; latest releases come from npm. Update runs the tool's own updater after you confirm.")
-            }
-            .font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary).fixedSize(horizontal: false, vertical: true)
-        }
-    }
-}
-
-// MARK: Layout
-
-/// How wide a card wants to be: its narrowest width and its share of spare room in its row.
-struct MachineCardFlex: LayoutValueKey {
-    static let defaultValue: (basis: CGFloat, grow: CGFloat) = (440, 5)
-}
-
-/// Cards wrap like CSS flex-wrap: as many fit on a row as their narrowest widths allow, the row's
-/// spare width is shared by each card's grow factor, and every card in a row gets the row's height.
-struct MachinesCardGrid: SwiftUI.Layout {
-    var spacing: CGFloat
-
-    private struct Row { var indices: [Int]; var widths: [CGFloat]; var height: CGFloat }
-    private func rows(_ subviews: Subviews, width: CGFloat) -> [Row] {
-        var groups: [[Int]] = [], current: [Int] = [], used: CGFloat = 0
-        for index in subviews.indices {
-            let basis = subviews[index][MachineCardFlex.self].basis
-            let needed = current.isEmpty ? basis : used + spacing + basis
-            if !current.isEmpty && needed > width { groups.append(current); current = [index]; used = basis }
-            else { current.append(index); used = needed }
-        }
-        if !current.isEmpty { groups.append(current) }
-        return groups.map { indices in
-            let flex = indices.map { subviews[$0][MachineCardFlex.self] }
-            let free = width - flex.map(\.basis).reduce(0, +) - spacing * CGFloat(indices.count - 1)
-            let grow = max(1, flex.map(\.grow).reduce(0, +))
-            let widths = flex.map { max(0, indices.count == 1 ? width : $0.basis + free * $0.grow / grow) }
-            let height = zip(indices, widths).map { subviews[$0.0].sizeThatFits(ProposedViewSize(width: $0.1, height: nil)).height }.max() ?? 0
-            return Row(indices: indices, widths: widths, height: height)
-        }
-    }
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? 1000
-        let rows = rows(subviews, width: width)
-        return CGSize(width: width, height: rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1)))
-    }
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var y = bounds.minY
-        for row in rows(subviews, width: bounds.width) {
-            var x = bounds.minX
-            for (index, width) in zip(row.indices, row.widths) {
-                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: width, height: row.height))
-                x += width + spacing
-            }
-            y += row.height + spacing
-        }
-    }
-}
 
 // MARK: Machine card
 
@@ -119,15 +16,16 @@ struct MachineCardView: View {
     var card: MachineCardModel
     var attaching: Set<String>
     var actions: MachinesActions
+    @Environment(\.panelFill) private var fill
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 Image(systemName: MachineSymbol.name(card)).font(.system(size: 17, weight: .medium)).foregroundStyle(AppAppearance.secondary)
                     .frame(width: 22).accessibilityHidden(true)
-                Text(card.name).font(.system(size: 18, weight: .semibold)).lineLimit(1)
-                if let os = card.os { AppTag(text: os).fixedSize() }
-                else if card.probing { AppTag(text: "Checking…").fixedSize() }
+                Text(card.name).font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                if let os = card.os { MachineTextTag(text: os) }
+                else if card.probing { MachineTextTag(text: "Checking…") }
                 Spacer(minLength: 4)
                 if card.host != nil { MachineEditButton(card: card, edit: actions.edit) }
             }
@@ -161,16 +59,6 @@ struct MachineCardView: View {
                     if index > 0 { MachineRule() }
                     MachineHarnessLine(row: row) { actions.update(row.harness, card) }
                 }
-                if let bytes = card.cacheBytes, bytes > 0 {
-                    if !card.harnesses.isEmpty { MachineRule() }
-                    MachineKeyValue(key: "Cache") {
-                        Text(MachineFormat.size(bytes)).font(.system(size: 12, design: .monospaced))
-                        Text("chats, transcripts and media copied here").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
-                        Spacer(minLength: 6)
-                        MachineButton(title: "Clear", style: .ghost, small: true) { actions.clearCache(card) }
-                            .help("Removes what Burro copied from \(card.name): last-seen chats, transcript copies, images and videos")
-                    }
-                }
             }
             Spacer(minLength: 0)
             FlowLayout(spacing: 8) {
@@ -178,7 +66,7 @@ struct MachineCardView: View {
                     MachineButton(title: "Resume checks", symbol: "play") { actions.resume(card) }
                         .help("Start checking \(card.name) again")
                 } else {
-                    MachineButton(title: "New chat here", symbol: "plus", style: card.isLocal ? .primary : .normal) { actions.newChat(card) }
+                    MachineButton(title: "New chat here", symbol: "plus") { actions.newChat(card) }
                         .help(card.isLocal ? "Start a chat on this Mac" : "Start a chat on \(card.name)")
                 }
                 if card.isLocal {
@@ -190,9 +78,9 @@ struct MachineCardView: View {
                 }
             }
         }
-        .padding(.horizontal, 20).padding(.vertical, 18)
+        .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .modifier(AppCardSurface())
+        .background(fill)
         .accessibilityElement(children: .contain).accessibilityLabel(card.name)
     }
 
@@ -200,20 +88,25 @@ struct MachineCardView: View {
     private var statusRow: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
-                statusText.fixedSize()
+                statusText(withCounts: true).fixedSize()
                 Spacer(minLength: 12)
                 destinationText
             }
             VStack(alignment: .leading, spacing: 3) {
-                statusText.fixedSize(horizontal: false, vertical: true)
+                statusText(withCounts: false).fixedSize(horizontal: false, vertical: true)
+                if card.counts.working + card.counts.needYou > 0 {
+                    // Drop the leading " · " so the counts start their own line.
+                    countsText(lead: false).font(.system(size: 13)).padding(.leading, 16)
+                }
                 destinationText.padding(.leading, 16)
             }
         }
     }
-    private var statusText: some View {
+    private func statusText(withCounts: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Circle().fill(statusColor).frame(width: 8, height: 8).accessibilityHidden(true)
-            (Text(card.isLocal ? "Online" : card.statusLine).foregroundStyle(AppAppearance.text) + countsText).font(.system(size: 13))
+            (Text(card.isLocal ? "Online" : card.statusLine).foregroundStyle(AppAppearance.text) + (withCounts ? countsText(lead: true) : Text("")))
+                .font(.system(size: 13))
         }
     }
     @ViewBuilder private var destinationText: some View {
@@ -222,13 +115,16 @@ struct MachineCardView: View {
                 .lineLimit(1).truncationMode(.middle).textSelection(.enabled).help(destination)
         }
     }
-    private var countsText: Text {
+    /// "· 2 working · 1 needs you": only the needs-you count in amber.
+    private func countsText(lead: Bool) -> Text {
         var text = Text("")
+        var first = !lead
         if card.counts.working > 0 {
-            text = text + Text("  ·  ").foregroundStyle(AppAppearance.tertiary) + Text("\(card.counts.working) working").foregroundStyle(AppAppearance.green)
+            text = text + Text(first ? "" : "  ·  ").foregroundStyle(AppAppearance.tertiary) + Text("\(card.counts.working) working").foregroundStyle(AppAppearance.secondary)
+            first = false
         }
         if card.counts.needYou > 0 {
-            text = text + Text("  ·  ").foregroundStyle(AppAppearance.tertiary)
+            text = text + Text(first ? "" : "  ·  ").foregroundStyle(AppAppearance.tertiary)
                 + Text("\(card.counts.needYou) need\(card.counts.needYou == 1 ? "s" : "") you").foregroundStyle(AppAppearance.amber)
         }
         return text
@@ -251,13 +147,10 @@ struct MachineChatRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Button { actions.openChat(session) } label: {
-                HStack(spacing: 10) {
-                    Circle().fill(session.state == .waiting ? AppAppearance.amber : AppAppearance.green).frame(width: 8, height: 8)
-                    Text(session.title.isEmpty ? "Untitled chat" : session.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                        .frame(width: 170, alignment: .leading)
-                    Text(MachinesOverview.detail(session)).font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    AppTag(text: AquariumFish.modelName(session.model) ?? (session.provider == .codex ? "Codex" : "Claude Code")).fixedSize()
+                // The title keeps a column when the row is wide enough; in a narrow cell it gets less room.
+                ViewThatFits(in: .horizontal) {
+                    line(titleWidth: 170)
+                    stacked
                 }
                 .padding(.vertical, 8).padding(.horizontal, 6)
                 .background(hovering ? AppAppearance.hover : .clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
@@ -276,6 +169,39 @@ struct MachineChatRow: View {
             }
         }
         .padding(.horizontal, -6)
+    }
+
+    /// A narrow cell: the title and model on the first line, the state and folder under it.
+    private var stacked: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Circle().fill(session.state == .waiting ? AppAppearance.amber : AppAppearance.green).frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    title.frame(maxWidth: .infinity, alignment: .leading)
+                    MachineTextTag(text: model)
+                }
+                Text(MachinesOverview.detail(session)).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).lineLimit(1)
+            }
+        }
+    }
+
+    private var model: String { AquariumFish.modelName(session.model) ?? (session.provider == .codex ? "Codex" : "Claude Code") }
+
+    private var title: some View {
+        // Bold only for a chat that needs you.
+        Text(session.title.isEmpty ? "Untitled chat" : session.title)
+            .font(.system(size: 13, weight: session.state == .waiting ? .semibold : .regular)).lineLimit(1)
+    }
+
+    private func line(titleWidth: CGFloat) -> some View {
+        HStack(spacing: 10) {
+            Circle().fill(session.state == .waiting ? AppAppearance.amber : AppAppearance.green).frame(width: 8, height: 8)
+            title.frame(width: titleWidth, alignment: .leading)
+            // A small ideal width, so every row of a cell picks the same form and the detail truncates instead.
+            Text(MachinesOverview.detail(session)).font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).lineLimit(1)
+                .frame(minWidth: 40, idealWidth: 40, maxWidth: .infinity, alignment: .leading)
+            MachineTextTag(text: model)
+        }
     }
 }
 
@@ -311,8 +237,8 @@ struct UnreachableMachineCard: View {
             HStack(spacing: 10) {
                 Image(systemName: "wifi.slash").font(.system(size: 16, weight: .medium)).foregroundStyle(AppAppearance.tertiary)
                     .frame(width: 22).accessibilityHidden(true)
-                Text(card.name).font(.system(size: 18, weight: .semibold)).foregroundStyle(AppAppearance.secondary).lineLimit(1)
-                if let os = card.os { AppTag(text: os).fixedSize() }
+                Text(card.name).font(.system(size: 16, weight: .semibold)).foregroundStyle(AppAppearance.secondary).lineLimit(1)
+                if let os = card.os { MachineTextTag(text: os) }
                 Spacer(minLength: 4)
                 MachineEditButton(card: card, edit: actions.edit)
             }
@@ -360,88 +286,39 @@ struct UnreachableMachineCard: View {
                     .help("Remove \(card.name) from Burro and delete what Burro copied from it (asks first)")
             }
         }
-        .padding(.horizontal, 20).padding(.vertical, 18)
+        .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(AppAppearance.background.opacity(0.6), in: RoundedRectangle(cornerRadius: AppAppearance.cardRadius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: AppAppearance.cardRadius, style: .continuous)
-            .strokeBorder(AppAppearance.hairline, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
+        .background(MachineHatch())
         .accessibilityElement(children: .contain).accessibilityLabel("\(card.name), unreachable")
     }
 }
 
-// MARK: Add a machine, tailnet devices
-
-struct AddMachineRow: View {
-    var add: (String) -> Void
-    @State private var destination = ""
-    private var trimmed: String { destination.trimmingCharacters(in: .whitespacesAndNewlines) }
-
-    var body: some View {
-        FlowLayout(spacing: 14) {
-            HStack(spacing: 14) {
-                Image(systemName: "plus").font(.system(size: 13, weight: .bold)).foregroundStyle(AppAppearance.secondary)
-                    .frame(width: 30, height: 30).background(AppAppearance.raised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Add a machine").font(.system(size: 13, weight: .semibold))
-                    Text("Needs an SSH login from this Mac with a key, Python 3, and Claude Code or Codex there. Burro installs nothing.")
-                        .font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).fixedSize(horizontal: false, vertical: true)
-                }.frame(maxWidth: 520, alignment: .leading)
-            }
-            HStack(spacing: 8) {
-                HStack(spacing: 6) {
-                    Text("ssh").foregroundStyle(AppAppearance.tertiary)
-                    TextField("", text: $destination, prompt: Text("user@host or Tailscale name").foregroundStyle(AppAppearance.tertiary))
-                        .textFieldStyle(.plain).onSubmit(submit)
-                        .accessibilityLabel("SSH address")
-                }
-                .font(.system(size: 12, design: .monospaced))
-                .padding(.horizontal, 10).padding(.vertical, 7).frame(width: 280)
-                .background(AppAppearance.background, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(AppAppearance.separator))
-                MachineButton(title: "Connect…", action: submit).disabled(trimmed.isEmpty)
-                    .help("Opens the machine editor with this address, where you confirm the name and port")
-            }
-        }
-        .padding(.horizontal, 18).padding(.vertical, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(RoundedRectangle(cornerRadius: AppAppearance.cardRadius, style: .continuous)
-            .strokeBorder(AppAppearance.hairline, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
-    }
-    private func submit() {
-        add(trimmed)
-        destination = ""
-    }
-}
-
-struct TailnetDevices: View {
-    var peers: [TailscalePeer]
-    var add: (TailscalePeer) -> Void
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MachinesSectionLabel(text: "Also on your tailnet")
-            VStack(spacing: 0) {
-                ForEach(Array(peers.enumerated()), id: \.element.id) { index, peer in
-                    if index > 0 { MachineRule() }
-                    HStack(spacing: 10) {
-                        Circle().fill(peer.online ? AppAppearance.green : AppAppearance.tertiary).frame(width: 7, height: 7).accessibilityHidden(true)
-                        Text(peer.hostName).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                        Text([peer.os.isEmpty ? nil : peer.os, peer.online ? "Online" : peer.lastSeen.map { "Seen \(RemoteStatusLine.ago($0, now: Date()))" } ?? "Offline"]
-                            .compactMap { $0 }.joined(separator: " · "))
-                            .font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
-                        Spacer(minLength: 8)
-                        MachineButton(title: "Add over SSH", style: .ghost, small: true) { add(peer) }
-                            .help("Monitor this device's Codex and Claude chats over SSH (needs an SSH login from this Mac)")
-                    }.padding(.vertical, 8)
-                }
-            }
-            .padding(.horizontal, 18).padding(.vertical, 4)
-            .modifier(AppCardSurface())
-        }
-    }
-}
-
 // MARK: Small pieces
+
+/// An OS or model name as plain grey text (no filled pill).
+struct MachineTextTag: View {
+    var text: String
+    var body: some View {
+        Text(text).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).lineLimit(1).fixedSize()
+    }
+}
+
+/// The unreachable cell's quiet fill: fine diagonal lines in the separator colour.
+struct MachineHatch: View {
+    var body: some View {
+        Canvas { context, size in
+            var path = Path()
+            var x: CGFloat = -size.height
+            while x < size.width {
+                path.move(to: CGPoint(x: x, y: size.height))
+                path.addLine(to: CGPoint(x: x + size.height, y: 0))
+                x += 9
+            }
+            context.stroke(path, with: .color(AppAppearance.separator.opacity(0.55)), lineWidth: 1)
+        }
+        .allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
 
 struct MachinesSectionLabel: View {
     var text: String

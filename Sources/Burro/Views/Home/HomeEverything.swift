@@ -49,10 +49,11 @@ struct CoverBackdrop: View {
     }
 }
 
-/// The top of the page, on the backdrop: the greeting and one summary sentence (HomeBoard.sentence),
-/// with the cover-style menu at the trailing edge. The counts themselves live in the sections below.
+/// The top of the page, straight on the backdrop (no surface, so the water around it stays
+/// hoverable): the greeting and one summary sentence (HomeBoard.sentenceRuns, the needs-you count in
+/// amber), with the cover-style menu at the trailing edge. The counts themselves are in the KPI strip.
 struct HomeCover: View {
-    var sentence: String
+    var sentence: [TextRun]
     /// Before the first agent check.
     var checking = false
     var now: Date = .now
@@ -65,8 +66,8 @@ struct HomeCover: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(greeting).font(.system(size: 30, weight: .bold)).tracking(-0.4).foregroundStyle(AppAppearance.text)
-                Text(checking ? "Checking on your agents…" : sentence)
-                    .font(.system(size: 15)).foregroundStyle(AppAppearance.secondary)
+                TextRuns.text(checking ? [TextRun("Checking on your agents…")] : sentence)
+                    .font(.system(size: 15))
                     .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 680, alignment: .leading)
                     .textSelection(.enabled)
             }
@@ -232,14 +233,19 @@ private struct CountPill: View {
 
 // MARK: Notes and scratchpad
 
-/// Notes and Scratchpad share a plain card with the quiet section-header treatment.
+/// Notes and Scratchpad share a plain card with the quiet section-header treatment; unframed (inside
+/// a Home panel, which has the title) it is the content alone.
 private struct NoteCardShell<Content: View>: View {
     var title: String
     var symbol: String
     var count: Int?
     var add: (() -> Void)?
+    var framed = true
     @ViewBuilder var content: () -> Content
     var body: some View {
+        if framed { card } else { content().padding(.horizontal, -16).padding(.top, -8).frame(maxWidth: .infinity, alignment: .leading) }
+    }
+    private var card: some View {
         VStack(spacing: 0) {
             HomeSectionHeader(title: title) {
                 HStack(spacing: 10) {
@@ -262,9 +268,10 @@ private struct NoteCardShell<Content: View>: View {
 struct HomeNotesCard: View {
     var notes: NotesStore
     var startChat: ((HomeNote) -> Void)? = nil
+    var framed = true
     var open: (NotesTarget) -> Void
     var body: some View {
-        NoteCardShell(title: "Notes", symbol: "square.and.pencil", count: notes.sorted.count, add: { open(.new) }) {
+        NoteCardShell(title: "Notes", symbol: "square.and.pencil", count: notes.sorted.count, add: { open(.new) }, framed: framed) {
             VStack(alignment: .leading, spacing: 0) {
                 if notes.sorted.isEmpty {
                     Text("Keep the context agents and future you will need. ⌥P opens Notes from any app.")

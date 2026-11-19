@@ -130,4 +130,117 @@ public struct DayRibbonLayout: Sendable {
         if cursor < interval.end || out.isEmpty { out.append((DateInterval(start: cursor, end: max(cursor, interval.end)), false)) }
         return out
     }
+
+    // MARK: Lanes panel
+
+    /// The lanes panel's window: a past day is the whole day; today runs from the hour of the
+    /// earliest thing drawn (at least an hour before now) to now.
+    public static func laneWindow(day: DateInterval, earliest: Date?, now: Date?, calendar: Calendar) -> DateInterval {
+        guard let now, day.contains(now) else { return day }
+        let floor = { (date: Date) in calendar.dateInterval(of: .hour, for: date)?.start ?? date }
+        let start = max(day.start, min(floor(earliest ?? now), floor(now.addingTimeInterval(-3600))))
+        return DateInterval(start: start, end: max(start.addingTimeInterval(60), now))
+    }
+
+    /// The lanes window and how much drawn time it leaves out before its start.
+    public struct LaneWindow: Sendable, Equatable {
+        public var window: DateInterval
+        /// Drawn time (stretches, tracked blocks) before `window.start` that the window leaves out.
+        public var cut: TimeInterval
+        public init(window: DateInterval, cut: TimeInterval) { self.window = window; self.cut = cut }
+    }
+
+    /// The lanes window from everything drawn (`pieces`: chat stretches, tracked blocks, and marks
+    /// and shipped ticks as zero-length intervals). A short early piece followed by 3 hours or more
+    /// with nothing drawn (one block just after midnight, then nothing until 10:00) is left out: the
+    /// window starts at the hour of the first thing after that gap and `cut` says how much was left
+    /// out. Only a lead of under `earlyLimit` of drawn time is cut, so real morning work is never
+    /// hidden. Today runs from there (at least an hour before now) to now; a past day from there to
+    /// the hour after its last piece (00–24 when nothing was drawn).
+    public static func laneWindow(day: DateInterval, pieces: [DateInterval], now: Date?, calendar: Calendar,
+                                  gap: TimeInterval = 3 * 3600, earlyLimit: TimeInterval = 3600) -> LaneWindow {
+        let today = now.map { day.contains($0) } ?? false
+        let limit = today ? (now ?? day.end) : day.end
+        let merged = ActivityCoverage.merged(pieces.compactMap { piece -> DateInterval? in
+            let start = max(piece.start, day.start), end = min(piece.end, limit)
+            return start <= end ? DateInterval(start: start, end: end) : nil
+        })
+        guard let lastPiece = merged.last else {
+            return LaneWindow(window: today ? laneWindow(day: day, earliest: nil, now: now, calendar: calendar) : day, cut: 0)
+        }
+        var keep = 0, longest: TimeInterval = 0, lead: TimeInterval = 0
+        for index in 0..<(merged.count - 1) {
+            lead += merged[index].duration
+            let empty = merged[index + 1].start.timeIntervalSince(merged[index].end)
+            if empty >= gap && lead < earlyLimit && empty > longest { longest = empty; keep = index + 1 }
+        }
+        let cut = merged[..<keep].reduce(0) { $0 + $1.duration }
+        let first = merged[keep].start
+        if today {
+            return LaneWindow(window: laneWindow(day: day, earliest: first, now: now, calendar: calendar), cut: cut)
+        }
+        let floor = calendar.dateInterval(of: .hour, for: first)?.start ?? first
+        let lastHour = calendar.dateInterval(of: .hour, for: lastPiece.end)
+        let ceiling = lastHour.map { $0.start == lastPiece.end ? $0.start : $0.end } ?? lastPiece.end
+        let start = max(day.start, floor), end = min(day.end, max(ceiling, start.addingTimeInterval(3600)))
+        return LaneWindow(window: DateInterval(start: start, end: end), cut: cut)
+    }
+
+    /// A chat's stretches as drawn: stretches whose on-screen gap is under `joinBelow` points are one
+    /// piece, and every piece is at least `minWidth` wide, so a busy hour of short bursts reads as a
+    /// bar rather than a row of specks. Drawing only: totals use the stretches themselves.
+    public struct DrawnPiece: Sendable, Equatable {
+        /// From the first joined stretch's start to the last one's end.
+        public var interval: DateInterval
+        /// Seconds actually active inside it.
+        public var active: TimeInterval
+        public var x: Double
+        public var width: Double
+        public var maxX: Double { x + width }
+    }
+
+    public func drawn(_ intervals: [DateInterval], joinBelow: Double = 4, minWidth: Double = 3) -> [DrawnPiece] {
+        guard width > 0 else { return [] }
+        var pieces: [DrawnPiece] = []
+        for interval in intervals.sorted(by: { $0.start < $1.start }) where interval.end >= window.start && interval.start <= window.end {
+            let from = x(interval.start), to = x(interval.end)
+            if var last = pieces.last, from - last.maxX < joinBelow {
+                last.interval = DateInterval(start: last.interval.start, end: max(last.interval.end, interval.end))
+                last.active += interval.duration
+                last.width = max(last.width, to - last.x)
+                pieces[pieces.count - 1] = last
+            } else {
+                pieces.append(DrawnPiece(interval: interval, active: interval.duration, x: from, width: to - from))
+            }
+        }
+        return pieces.map { piece in
+            var piece = piece
+            let wide = min(width, max(minWidth, piece.width))
+            piece.x = max(0, min(piece.x, width - wide)); piece.width = wide
+            return piece
+        }
+    }
+
+    /// The drawn piece under `x`, allowing `tolerance` points either side (thin bars are hard to hit).
+    public func piece(atX x: Double, in intervals: [DateInterval], tolerance: Double = 3) -> DrawnPiece? {
+        drawn(intervals).first { x >= $0.x - tolerance && x <= $0.maxX + tolerance }
+    }
+
+    /// The stretch drawn under `x` (the whole joined piece), allowing `tolerance` points either side.
+    public func stretch(atX x: Double, in intervals: [DateInterval], tolerance: Double = 3) -> DateInterval? {
+        piece(atX: x, in: intervals, tolerance: tolerance)?.interval
+    }
+
+    /// The time under `x`.
+    public func date(atX x: Double) -> Date {
+        guard width > 0 else { return window.start }
+        return window.start.addingTimeInterval(min(width, max(0, x)) / width * window.duration)
+    }
+
+    /// The lane under `y` when lanes of `height` are stacked from the top, or nil outside them.
+    public static func lane(atY y: Double, height: Double, count: Int) -> Int? {
+        guard height > 0, y >= 0 else { return nil }
+        let index = Int(y / height)
+        return index < count ? index : nil
+    }
 }

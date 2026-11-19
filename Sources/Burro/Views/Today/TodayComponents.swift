@@ -1,38 +1,24 @@
-// Pieces of the Today page: the date header (on the page background, the time to the minute; the
-// arrow keys step a day) and the summary (one headline number and one quiet line of facts that
-// wraps, led by the agents' time while you were away when there is any). The tracked-activity
-// pieces are in TodayActivity.swift and TodayDayView.swift; the ribbon, cards and chat columns in
-// TodayRibbon.swift and TodayCards.swift.
+// Pieces of the Today page: the header's day stepper (← the day pill →; the arrow keys step a day),
+// the titled card the List view's side card uses, and the tracked day's smaller facts. The lanes are
+// in AgentLanes.swift, the panel contents in TodayCards.swift, the tracked-activity pieces in
+// TodayActivity.swift and TodayDayView.swift.
 import SwiftUI
 import BurroCore
 
-struct TodayHeader: View {
+/// The header's trailing control: ← the day pill (a calendar) →, the arrow keys step a day; a past
+/// day adds "Back to today".
+struct TodayDayStepper: View {
     var today: TodayStore
     var body: some View {
-        HStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(today.isToday ? "TODAY" : today.day.formatted(.dateTime.weekday(.wide)).uppercased())
-                    .font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(AppAppearance.secondary)
-                Text(today.day, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day())
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                if today.isToday {
-                    TimelineView(.everyMinute) { context in
-                        Text(context.date, format: .dateTime.hour().minute())
-                            .font(.system(size: 15, weight: .medium)).monospacedDigit().foregroundStyle(AppAppearance.secondary)
-                    }
-                } else {
-                    Button("Back to today") { today.show(Date()) }.buttonStyle(.plain)
-                        .font(.system(size: 13, weight: .medium)).foregroundStyle(AppAppearance.blue)
-                }
+        HStack(spacing: 8) {
+            if !today.isToday {
+                Button("Back to today") { today.show(Date()) }.buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .medium)).foregroundStyle(AppAppearance.secondary).padding(.trailing, 4)
             }
-            Spacer()
-            HStack(spacing: 8) {
-                stepButton("chevron.left", "Previous day", key: .leftArrow, enabled: true) { today.step(-1) }
-                DayPill(today: today)
-                stepButton("chevron.right", "Next day", key: .rightArrow, enabled: today.canGoForward) { today.step(1) }
-            }
+            stepButton("chevron.left", "Previous day", key: .leftArrow, enabled: true) { today.step(-1) }
+            DayPill(today: today)
+            stepButton("chevron.right", "Next day", key: .rightArrow, enabled: today.canGoForward) { today.step(1) }
         }
-        .padding(.horizontal, 2)
     }
     private func stepButton(_ symbol: String, _ label: String, key: KeyEquivalent, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -86,119 +72,19 @@ struct TodayCard<Content: View>: View {
     }
 }
 
-/// The day's numbers as one headline and one line of facts. With tracking on, tracked focus is the
-/// headline ("4h 58m focused of 6h 10m tracked"); with tracking off, the time from your first to your
-/// last message leads instead ("With agents"). The facts line (Break, longest focus, messages, to-dos,
-/// questions) leaves out anything with nothing to say and wraps on narrow windows; it starts with
-/// "Agents worked 2h 40m while you were away" ("about 2h 40m" when partial) when tracking can tell. Questions waiting on you now
-/// are the only amber.
-struct TodaySummaryRow: View {
-    struct Todos { var done: Int; var open: Int; var added: Int }
-    var activity: DailyActivity?
-    var tracked: ActivityDay?
-    var tracking: Bool
-    var isToday: Bool
-    /// Today only.
-    var todos: Todos?
-    var waitingNow: Int
-    /// Agent work while you were away, from AgentAwayTime.
-    var away: AgentAwayTime.Summary? = nil
-
-    struct Fact: Identifiable {
-        var text: String
-        var help: String
-        var needsYou = false
-        var id: String { text }
-    }
-
-    var body: some View {
-        let facts = self.facts
-        VStack(alignment: .leading, spacing: 6) {
-            if tracking { trackedHeadline } else { chatSpanHeadline }
-            if !facts.isEmpty {
-                FlowLayout(spacing: 0) {
-                    ForEach(Array(facts.enumerated()), id: \.element.id) { index, fact in
-                        HStack(spacing: 0) {
-                            if index > 0 { Text("  ·  ").foregroundStyle(AppAppearance.tertiary) }
-                            Text(fact.text).foregroundStyle(fact.needsYou ? AppAppearance.amber : AppAppearance.secondary)
-                                .help(fact.help)
-                        }
-                        .font(.system(size: 13)).monospacedDigit().lineLimit(1)
-                    }
-                }
-            }
+/// The tracked day's smaller facts, which the Most time panel's subtitle carries: the not-recorded
+/// note, the longest focus stretch and Break.
+enum TodayFacts {
+    static func tracked(_ day: ActivityDay?) -> [TextRun] {
+        guard let day else { return [] }
+        var parts: [String] = []
+        if let note = day.notRecordedNote { parts.append(note) }
+        if day.total > 0, let longest = day.focus.longest {
+            parts.append("Longest focus \(TodaySummary.duration(longest.duration)) (\(ActivityStyle.range(longest.start, longest.end)))")
         }
-        .padding(.horizontal, 2)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var day: ActivityDay? { tracked.flatMap { $0.total > 0 ? $0 : nil } }
-
-    @ViewBuilder private var trackedHeadline: some View {
-        headline(value: day.map { TodaySummary.duration($0.focused) },
-                 caption: day.map { "focused of \(TodaySummary.duration($0.total)) tracked" } ?? "focused · nothing tracked\(isToday ? " yet" : "")")
-            .help("Focused: tracked time outside Break on this Mac. Tracked: everything Burro recorded; idle time and the lock screen don't count.")
-    }
-
-    @ViewBuilder private var chatSpanHeadline: some View {
-        headline(value: activity?.span.map(TodaySummary.duration),
-                 caption: activity?.firstTurn.flatMap { first in activity?.lastTurn.map { "with agents, \(ActivityStyle.range(first, $0))" } }
-                     ?? (activity == nil ? "with agents · reading your logs…" : "with agents · no messages yet"))
-            .help("From your first to your last message to an agent.")
-    }
-
-    /// A large number with its caption on the same baseline; the caption wraps under itself if it must.
-    private func headline(value: String?, caption: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(value ?? "—").font(.system(size: 32, weight: .semibold, design: .rounded)).monospacedDigit()
-                .foregroundStyle(value == nil ? AppAppearance.tertiary : AppAppearance.text)
-                .lineLimit(1).fixedSize()
-            Text(caption).font(.system(size: 15)).foregroundStyle(AppAppearance.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    var facts: [Fact] {
-        var facts: [Fact] = []
-        if tracking, let away, away.total >= 60 {
-            facts.append(Fact(text: "Agents worked \(away.totalText) while you were away",
-                              help: "Wall-clock time any agent was active while Burro was recording and you weren't at the Mac"
-                                  + (away.span.map { " (\(ActivityStyle.range($0.start, $0.end)))" } ?? "") + "; time Burro wasn't recording isn't counted."
-                                  + (away.partial ? " Some chats couldn't be read, so this is approximate." : "")))
-        }
-        if tracking, let note = tracked?.notRecordedNote {
-            facts.append(Fact(text: note, help: "Burro was closed or tracking was paused then, so nothing was recorded. Time away from the Mac isn't counted here."))
-        }
-        if tracking, let day {
-            let breakTime = day.categories.first { $0.category == .break }?.seconds ?? 0
-            if breakTime >= 60 {
-                facts.append(Fact(text: "Break \(TodaySummary.duration(breakTime))",
-                                  help: "\(Int((breakTime / day.total * 100).rounded()))% of tracked time went to Break."))
-            }
-            if let longest = day.focus.longest {
-                facts.append(Fact(text: "Longest focus \(TodaySummary.duration(longest.duration)) (\(ActivityStyle.range(longest.start, longest.end)))",
-                                  help: "A focus stretch is time outside Break; idle time or a break under 2 minutes doesn't end it."))
-            }
-        }
-        if let activity {
-            let help = "Messages you sent and agent replies, across Codex and Claude on this Mac."
-            if activity.turns > 0 { facts.append(Fact(text: "\(activity.turns) sent", help: help)) }
-            if activity.replies > 0 { facts.append(Fact(text: "\(activity.replies) repl\(activity.replies == 1 ? "y" : "ies")", help: help)) }
-        }
-        if let todos, todos.done + todos.open > 0 {
-            facts.append(Fact(text: "\(todos.done)/\(todos.done + todos.open) to-dos",
-                              help: "\(todos.done) done today, \(todos.open) still open, and \(todos.added) added today."))
-        }
-        let decision = TodaySummary.decisions(asked: activity?.questions ?? 0, waitingNow: waitingNow)
-        let questionsHelp = "Explicit questions agents asked (Codex request_user_input, Claude AskUserQuestion) and chats waiting on you now. Approval prompts aren't logged by the tools, so they aren't included."
-        if decision.answered > 0 {
-            facts.append(Fact(text: "\(decision.answered) question\(decision.answered == 1 ? "" : "s") answered", help: questionsHelp))
-        }
-        if waitingNow > 0 {
-            facts.append(Fact(text: "\(waitingNow) question\(waitingNow == 1 ? "" : "s") waiting", help: questionsHelp, needsYou: true))
-        }
-        return facts
+        let breakTime = day.categories.first { $0.category == .break }?.seconds ?? 0
+        if breakTime >= 60 { parts.append("Break \(TodaySummary.duration(breakTime))") }
+        return parts.isEmpty ? [] : [TextRun(parts.joined(separator: " · "))]
     }
 }
 

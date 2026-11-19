@@ -1,4 +1,4 @@
-// Keep Awake controls: a card on Mac Health (status, a segmented control of the options, linger and permission),
+// Keep Awake controls: a panel on Mac Health (status, a segmented control of the options, linger and permission),
 // a group in Settings → Machines and a notch line.
 import SwiftUI
 import BurroCore
@@ -7,7 +7,7 @@ extension KeepAwakeStore {
     var symbol: String { awake ? "cup.and.saucer.fill" : "moon.zzz" }
 }
 
-/// The Mac Health card: whether the Mac is kept awake and why, a segmented control for the existing options
+/// The Mac Health panel: whether the Mac is kept awake and why, a segmented control for the existing options
 /// (a duration, until you stop, or while agents work), the linger after agents, and the one-time permission.
 struct KeepAwakeCard: View {
     @Bindable var keepAwake: KeepAwakeStore
@@ -15,21 +15,27 @@ struct KeepAwakeCard: View {
     @AppStorage("macHealth.keepAwakePick") private var picked: Double = 0
     @AppStorage("macHealth.keepAwakePickedAt") private var pickedAt: Double = 0
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        Panel(title: "Keep awake") {
             HStack(spacing: 8) {
-                Image(systemName: keepAwake.symbol).foregroundStyle(keepAwake.awake ? AppAppearance.green : AppAppearance.tertiary)
-                    .accessibilityHidden(true)
-                MacHealthLabel("Keep awake")
                 if keepAwake.lidClosedActive {
-                    Text("Lid closed").font(.caption.weight(.semibold)).foregroundStyle(AppAppearance.secondary)
-                        .padding(.horizontal, 7).padding(.vertical, 2).background(AppAppearance.raised, in: Capsule())
+                    Text("Lid closed").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
                         .help("pmset disablesleep is on; Burro's watchdog turns it back off")
                 }
-                Spacer(minLength: 8)
                 if keepAwake.busy { ProgressView().controlSize(.small).accessibilityLabel("Working") }
-                Text(keepAwake.awake ? "On" : "Off").font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(keepAwake.awake ? AppAppearance.green : AppAppearance.tertiary)
+                HStack(spacing: 5) {
+                    Circle().fill(keepAwake.awake ? AppAppearance.green : AppAppearance.tertiary).frame(width: 7, height: 7).accessibilityHidden(true)
+                    Text(keepAwake.awake ? "On" : "Off").font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(keepAwake.awake ? AppAppearance.text : AppAppearance.tertiary)
+                }
+                .help(keepAwake.awake ? "This Mac is being kept awake" : "This Mac sleeps as usual")
             }
+        } content: {
+            content
+        }
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(keepAwake.awake || keepAwake.decision.reason != .off ? keepAwake.headline : "The Mac sleeps as usual").fontWeight(.semibold).fixedSize(horizontal: false, vertical: true)
@@ -87,7 +93,7 @@ struct KeepAwakeCard: View {
             Text(footnote).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).fixedSize(horizontal: false, vertical: true)
                 .help("Sleep comes back on when you stop, when the agents are done, 30 seconds after Burro quits, if Burro stops responding for 15 minutes, or below \(KeepAwakePolicy.lowBatteryPercent)% battery.")
         }
-        .padding(.horizontal, 18).padding(.vertical, 16).frame(maxWidth: .infinity, alignment: .leading).modifier(AppCardSurface())
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
     private var selected: KeepAwakeChoice? {
         KeepAwakeChoice.selected(manualUntil: keepAwake.manualUntil, agentsMode: keepAwake.agentsMode, picked: picked > 0 ? picked : nil,

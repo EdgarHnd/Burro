@@ -1,15 +1,11 @@
-// The Orchestrator's own page. Under the title, a line with what the Brief holds and when triage
-// last ran, and "Run triage now", which looks through the newest chats waiting on you or unread and
-// triages up to five not triaged since they last changed, at once, through the Brief's own gate
-// (off, the caps or Claude's limits queue nothing and say why; "Nothing new to triage" when so);
-// then the Brief · Memory · Runs tabs. The Brief tab has three columns: the Brief queue on the left
-// (OrchestratorBriefQueue.swift); today's conversation in the middle (each question, the steps it
-// took, its answer, the reply or chat it proposed as a card to send or discard, and any to-do it
-// changed as a line with Undo; proposals no visible turn shows wait under their own heading), with
-// the composer, its model and effort menus and the reminder that proposals wait for you; and the
-// Memory and Budget cards on the right (OrchestratorSideCards.swift). Below about 1180 points the
-// side cards move under the queue, and below about 860 everything stacks in one scrolling column.
-// The conversation card's header reads back an earlier day ("Earlier days") and holds New
+// The Orchestrator's own page: the wrapper that feeds the layout (OrchestratorPageLayout.swift: the
+// header with its sentence and Run triage now, the strip, the Brief · Memory · Runs tabs and the
+// Brief tab's joined surface) its budget and the minute clock, and loads history, memory and runs
+// when it appears. This file also holds the conversation column: today's conversation (each
+// question, the steps it took, its answer, the reply or chat it proposed as a card to send or
+// discard, and any to-do it changed as a line with Undo; proposals no visible turn shows wait under
+// their own heading), with the composer, its model and effort menus and the reminder that proposals
+// wait for you. The conversation's header reads back an earlier day ("Earlier days") and holds New
 // conversation and whether it may read your notes.
 import SwiftUI
 import BurroCore
@@ -41,137 +37,10 @@ enum OrchestratorTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// The page with everything it shows passed in, so it can also be drawn offscreen with sample data.
-struct OrchestratorPageLayout: View {
-    @Bindable var store: AppStore
-    var budget: OrchestratorBudget
-    var now: Date
-    @State private var tab = OrchestratorTab.brief
-    @State private var triageNote: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header.padding(.horizontal, 28).padding(.top, 22)
-            switch tab {
-            case .brief: briefTab
-            case .memory: OrchestratorMemoryView(store: store)
-            case .runs: OrchestratorRunsView(store: store)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear(perform: takeTabRequest)
-        .onChange(of: store.orchestratorTabRequest) { _, _ in takeTabRequest() }
-    }
-
-    /// Settings can ask for a tab (Memory); show it once and clear the request.
-    private func takeTabRequest() {
-        guard let request = store.orchestratorTabRequest else { return }
-        tab = request
-        store.orchestratorTabRequest = nil
-    }
-
-    // MARK: Header
-
-    private var header: some View {
-        let brief = store.brief
-        let summary = OrchestratorPageSummary.line(needs: brief.needsYou.count, finished: brief.finished.count, stuck: brief.stuck.count,
-                                                   lastTriage: brief.lastRunAt, triaging: brief.triaging, now: now)
-        let gate = brief.gate
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Orchestrator").font(.system(size: 28, weight: .bold, design: .rounded)).foregroundStyle(AppAppearance.text)
-                    .fixedSize()
-                Text(summary).font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).lineLimit(1).truncationMode(.tail)
-                Spacer(minLength: 8)
-                if let triageNote {
-                    Text(triageNote).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
-                }
-                Button(brief.checkingNow ? "Looking…" : "Run triage now") { runTriage() }
-                    .buttonStyle(OrchButtonStyle(kind: .ghost, large: true)).fixedSize()
-                    .disabled(!gate.allowsRun || brief.triaging > 0 || brief.checkingNow)
-                    .help(gate == .off ? "Automatic triage is off: turn it on in Budget first."
-                          : gate.reason ?? (brief.triaging > 0 ? "Triage is reading chats now."
-                          : "Triage up to five of the newest chats waiting on you or unread that haven't been triaged since they last changed, now (counted toward today's cap)."))
-            }
-            HStack(spacing: 4) {
-                ForEach(OrchestratorTab.allCases) { item in
-                    Button { tab = item } label: {
-                        Text(item.rawValue).font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(tab == item ? AppAppearance.text : AppAppearance.secondary)
-                            .padding(.horizontal, 12).frame(height: 34)
-                            .overlay(alignment: .bottom) {
-                                Rectangle().fill(tab == item ? AppAppearance.text : .clear).frame(height: 2)
-                            }
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(tab == item ? .isSelected : [])
-                }
-                Spacer()
-            }
-            .overlay(alignment: .bottom) { Rectangle().fill(AppAppearance.separator).frame(height: 1) }
-        }
-    }
-
-    private func runTriage() {
-        Task {
-            let outcome = await store.brief.runNow()
-            triageNote = outcome.message
-            try? await Task.sleep(for: .seconds(6))
-            if triageNote == outcome.message { triageNote = nil }
-        }
-    }
-
-    // MARK: Brief tab
-
-    private var briefTab: some View {
-        GeometryReader { proxy in
-            let columns = OrchestratorPageColumns.count(width: Double(proxy.size.width))
-            let openMemory = { tab = .memory }
-            Group {
-                switch columns {
-                case 3:
-                    HStack(alignment: .top, spacing: 20) {
-                        ScrollView { OrchestratorBriefQueue(store: store, now: now).padding(.bottom, 24) }
-                            .scrollIndicators(.never).frame(width: 350)
-                        OrchestratorTodayCard(store: store, now: now).padding(.bottom, 24)
-                        ScrollView { sideCards(openMemory).padding(.bottom, 24) }
-                            .scrollIndicators(.never).frame(width: 290)
-                    }
-                case 2:
-                    HStack(alignment: .top, spacing: 20) {
-                        ScrollView {
-                            VStack(spacing: 18) { OrchestratorBriefQueue(store: store, now: now); sideCards(openMemory) }.padding(.bottom, 24)
-                        }
-                        .scrollIndicators(.never).frame(width: 330)
-                        OrchestratorTodayCard(store: store, now: now).padding(.bottom, 24)
-                    }
-                default:
-                    ScrollView {
-                        VStack(spacing: 18) {
-                            OrchestratorBriefQueue(store: store, now: now)
-                            OrchestratorTodayCard(store: store, now: now).frame(height: 620)
-                            sideCards(openMemory)
-                        }
-                        .padding(.bottom, 24)
-                    }
-                }
-            }
-            .padding(.horizontal, 28).padding(.top, 18)
-        }
-    }
-
-    private func sideCards(_ openMemory: @escaping () -> Void) -> some View {
-        VStack(spacing: 14) {
-            OrchestratorMemoryCard(store: store, openMemory: openMemory)
-            OrchestratorBudgetCard(budget: budget, enabled: Bindable(store.brief).autoTriage, now: now)
-        }
-    }
-}
-
 // MARK: Today's conversation
 
-/// The middle card: today's conversation (or an earlier day's), then the composer.
+/// The tall left column: today's conversation (or an earlier day's), then the composer. It draws no
+/// card of its own; it sits on the Brief tab's joined surface.
 struct OrchestratorTodayCard: View {
     @Bindable var store: AppStore
     var now: Date
@@ -186,8 +55,6 @@ struct OrchestratorTodayCard: View {
             OrchestratorAskBox(orchestrator: orchestrator)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .modifier(OrchCard())
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func cardHeader(_ orchestrator: OrchestratorStore) -> some View {
@@ -208,7 +75,7 @@ struct OrchestratorTodayCard: View {
             }
             moreMenu(orchestrator)
         }
-        .padding(.horizontal, 16).frame(height: 46)
+        .padding(.horizontal, 20).frame(height: 46)
     }
 
     private func earlierMenu(_ orchestrator: OrchestratorStore) -> some View {

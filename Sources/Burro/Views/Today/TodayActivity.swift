@@ -10,19 +10,29 @@ import BurroCore
 
 struct TodayActivityCard: View {
     var today: TodayStore
+    /// False inside a dashboard panel, which draws the title and the surface.
+    var framed = true
+
+    private static let explanation = "Turn it on to see focused time, a timeline of your day and where it went. Notes the app you're in, its window title and a browser's site (host only). Never the screen. Stays on this Mac for a year."
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                Label("Activity tracking is off", systemImage: "waveform.path.ecg").font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(AppAppearance.secondary).fixedSize()
+        if framed {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Label("Activity tracking is off", systemImage: "waveform.path.ecg").font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(AppAppearance.secondary).fixedSize()
+                    ActivityControls(today: today)
+                }
+                Text(Self.explanation).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(Self.explanation).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
                 ActivityControls(today: today)
             }
-            Text("Turn it on to see focused time, a timeline of your day and where it went. Notes the app you're in, its window title and a browser's site (host only). Never the screen. Stays on this Mac for a year.")
-                .font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
         }
-        .padding(18).frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
     }
 }
 

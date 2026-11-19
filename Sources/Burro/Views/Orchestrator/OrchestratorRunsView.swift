@@ -1,7 +1,8 @@
 // The Orchestrator page's Runs tab: how many model runs it made today and what they cost (as Claude
 // Code reports it), then the latest runs with their trigger, model, time taken and tokens. Read from
 // the runs log, which also holds automatic triage runs. Token counts read "500K", "1.2M" in every
-// language (`TokenCount`).
+// language (`TokenCount`). One panel on a joined surface; the page scrolls it and reloads the log
+// when the tab opens.
 import SwiftUI
 import BurroCore
 
@@ -9,7 +10,8 @@ struct OrchestratorRunsView: View {
     @Bindable var store: AppStore
     var body: some View {
         let orchestrator = store.orchestrator
-        ScrollView {
+        JoinedPanels {
+            Panel(title: "Runs") {
             VStack(alignment: .leading, spacing: 22) {
                 HStack(spacing: 28) {
                     stat("\(orchestrator.runsToday.count)", "runs today")
@@ -21,7 +23,8 @@ struct OrchestratorRunsView: View {
                     if orchestrator.recentRuns.isEmpty {
                         Text("No runs yet.").font(.system(size: 12.5)).foregroundStyle(AppAppearance.tertiary)
                     }
-                    ForEach(Array(orchestrator.recentRuns.enumerated()), id: \.offset) { _, run in
+                    ForEach(Array(orchestrator.recentRuns.enumerated()), id: \.offset) { index, run in
+                        if index > 0 { QueueRule() }
                         HStack(spacing: 12) {
                             Text(run.at.formatted(date: Calendar.current.isDateInToday(run.at) ? .omitted : .abbreviated, time: .shortened))
                                 .frame(width: 120, alignment: .leading)
@@ -33,17 +36,14 @@ struct OrchestratorRunsView: View {
                             Text(Self.cost(run.costUSD)).frame(width: 60, alignment: .trailing)
                         }
                         .font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.secondary)
-                        .padding(.horizontal, 12).frame(height: 30)
-                        .background(AppAppearance.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .frame(height: 30)
                     }
                 }
                 Text("Costs are what Claude Code reports for each run, at API prices; on a subscription they count toward your usage windows instead.")
                     .font(.system(size: 11.5)).foregroundStyle(AppAppearance.tertiary).fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 36).padding(.vertical, 18)
-            .frame(maxWidth: 780).frame(maxWidth: .infinity)
+            }
         }
-        .onAppear { orchestrator.reloadRuns() }
     }
 
     private func stat(_ value: String, _ label: String) -> some View {

@@ -1,11 +1,12 @@
-// The Machines page: one card per machine you work on (this Mac and every configured SSH machine),
-// headed by "N of M reachable · X working · Y need you" and Check all now. This view wires the
+// The Machines page: one cell per machine you work on (this Mac and every configured SSH machine) in
+// the dashboard layout (MachinesPageContent.swift), headed by "N of M reachable · X working · Y need
+// you" and Check all now. This view wires the
 // page's values (`MachinesPageBuilder`) and actions to the existing store functions: a chat row
 // opens the chat in Chats; Attach checks a remote Claude chat is a background session and opens
 // the existing Attach; New chat here opens the New chat sheet with that machine (this Mac: the
 // current or main project); Open in Terminal opens the main project folder, Open SSH a Terminal
 // login with remote monitoring's strict options; Update asks first, then runs the tool's updater;
-// Clear empties Burro's cache for that machine; Retry now and Check all now check machines at once;
+// Clear asks, then empties Burro's cache for that machine; Retry now and Check all now check machines at once;
 // Forget machine asks, then removes it; the pencil and "Add a machine" open the existing editor;
 // Tailscale devices offer Add over SSH. Work runs only while the page is on screen: tool versions
 // and Tailscale every minute (the store spaces them out), the status lines every 5 seconds, and
@@ -20,6 +21,7 @@ struct MachinesView: View {
     @State private var copiesVersion = 0
     @State private var editing: RemoteHost?
     @State private var forgetting: RemoteHost?
+    @State private var clearing: MachineCardModel?
     @State private var pendingUpdate: (harness: Harness, card: MachineCardModel)?
     private var machines: MachinesStore { store.machines }
 
@@ -28,11 +30,8 @@ struct MachinesView: View {
         let actions = self.actions
         ScrollView {
             MachinesPage(model: model, actions: actions)
-                .padding(.horizontal, 30).padding(.top, 6).padding(.bottom, 28)
-                .frame(maxWidth: 1340).frame(maxWidth: .infinity)
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            MachinesHeader(model: model, actions: actions).frame(maxWidth: 1340).frame(maxWidth: .infinity).background(AppAppearance.background)
+                .padding(.horizontal, 36).padding(.vertical, 28)
+                .frame(maxWidth: 1240).frame(maxWidth: .infinity)
         }
         .background(AppAppearance.background)
         .background(WindowOcclusionReader { onScreen = $0 })
@@ -75,6 +74,17 @@ struct MachinesView: View {
         } message: {
             Text("Burro stops checking it and deletes what it copied from it: last-seen chats, transcript copies, images and videos. Nothing on the machine itself changes. You can add it again later.")
         }
+        .confirmationDialog(clearing.map { "Clear what Burro copied from \($0.name)?" } ?? "",
+                            isPresented: Binding(get: { clearing != nil }, set: { if !$0 { clearing = nil } }),
+                            titleVisibility: .visible) {
+            Button("Clear") {
+                if let host = clearing?.host { Task { await store.clearRemoteCache(host.id); copiesVersion += 1 } }
+                clearing = nil
+            }
+            Button("Cancel", role: .cancel) { clearing = nil }
+        } message: {
+            Text("Removes last-seen chats, transcript copies, images and videos Burro copied to this Mac. Nothing on the machine itself changes.")
+        }
     }
 
     private var actions: MachinesActions {
@@ -92,10 +102,7 @@ struct MachinesView: View {
             else { machines.openTerminal(folder: NSHomeDirectory()) }
         }
         actions.update = { harness, card in pendingUpdate = (harness, card) }
-        actions.clearCache = { card in
-            guard let host = card.host else { return }
-            Task { await store.clearRemoteCache(host.id); copiesVersion += 1 }
-        }
+        actions.clearCache = { card in if card.host != nil { clearing = card } }
         actions.retry = { card in if let host = card.host { store.requestRemoteCheck(host.id) } }
         actions.resume = { card in
             guard var host = card.host else { return }

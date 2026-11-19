@@ -1,5 +1,6 @@
 // The Orchestrator page's Memory tab: the standing notes it is given every turn, global ones first,
 // then per project, each marked as yours or noted by it. Add a note, edit one in place, or delete it.
+// One panel on a joined surface; the page scrolls it and reloads the notes when the tab opens.
 import SwiftUI
 import BurroCore
 
@@ -11,15 +12,15 @@ struct OrchestratorMemoryView: View {
         let orchestrator = store.orchestrator
         let entries = orchestrator.memory
         let scopes = [OrchestratorMemoryEntry.global] + Array(Set(entries.map(\.scope).filter { $0 != OrchestratorMemoryEntry.global })).sorted()
-        ScrollView {
+        JoinedPanels {
+            Panel(title: entries.isEmpty ? "Memory" : "Memory · \(entries.count) notes",
+                  subtitle: [TextRun("Notes it reads at the start of every answer: global ones, then your main project's. It can add its own with “remember”; you can change or delete any of them.")]) {
             VStack(alignment: .leading, spacing: 22) {
-                Text("Notes it reads at the start of every answer: global ones, then your main project's. It can add its own with “remember”; you can change or delete any of them.")
-                    .font(.system(size: 12.5)).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
                     TextField("Add a note, e.g. “Prefer small PRs”", text: $draft)
                         .textFieldStyle(.plain).font(.system(size: 13))
                         .padding(.horizontal, 12).frame(height: 32)
-                        .background(AppAppearance.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(AppAppearance.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(AppAppearance.separator))
                         .onSubmit(add)
                     Picker("", selection: $scope) {
@@ -34,17 +35,18 @@ struct OrchestratorMemoryView: View {
                     Text("No notes yet.").font(.system(size: 12.5)).foregroundStyle(AppAppearance.tertiary)
                 }
                 ForEach(scopes.filter { scope in entries.contains { $0.scope == scope } }, id: \.self) { scope in
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 0) {
                         Text((scope == OrchestratorMemoryEntry.global ? "Global" : URL(fileURLWithPath: scope).lastPathComponent).uppercased())
-                            .font(.system(size: 10.5, weight: .semibold)).tracking(0.7).foregroundStyle(AppAppearance.tertiary)
-                        ForEach(entries.filter { $0.scope == scope }) { entry in MemoryRow(store: store, entry: entry) }
+                            .font(.system(size: 10.5, weight: .semibold)).tracking(0.7).foregroundStyle(AppAppearance.tertiary).padding(.bottom, 4)
+                        ForEach(Array(entries.filter { $0.scope == scope }.enumerated()), id: \.element.id) { index, entry in
+                            if index > 0 { QueueRule() }
+                            MemoryRow(store: store, entry: entry)
+                        }
                     }
                 }
             }
-            .padding(.horizontal, 36).padding(.vertical, 18)
-            .frame(maxWidth: 780).frame(maxWidth: .infinity)
+            }
         }
-        .onAppear { orchestrator.reloadMemory() }
     }
 
     private func add() {
@@ -80,9 +82,8 @@ private struct MemoryRow: View {
                 }
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
-        .background(AppAppearance.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(AppAppearance.separator))
+        .padding(.vertical, 9)
+        .contentShape(Rectangle())
         .onHover { hovering = $0 }
     }
 

@@ -86,6 +86,15 @@ public struct HomeBoard: Sendable, Equatable {
         return HomeBoard(needsYou: needs, working: working, toRead: toRead)
     }
 
+    /// The same board straight from a session sample (HomeSummary's lists), for surfaces that need
+    /// Home's sections or numbers without building the whole summary (the sidebar's line, Today).
+    public static func build(sessions: [AgentSession], briefNeeds: [BriefItem] = [], briefFinished: [BriefItem] = [],
+                             briefStuck: [BriefItem] = [], all: [AgentSession] = [], previews: [String: String] = [:]) -> HomeBoard {
+        let lists = HomeSummary.chatLists(sessions)
+        return build(waiting: lists.needsYou, running: lists.running, unread: lists.unread, briefNeeds: briefNeeds,
+                     briefFinished: briefFinished, briefStuck: briefStuck, all: all, previews: previews)
+    }
+
     private static func clean(_ text: String?) -> String? {
         guard let text else { return nil }
         let line = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")

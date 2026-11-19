@@ -21,13 +21,16 @@ struct UsageBudget: Equatable {
 struct UsageBudgetCard: View {
     var budget: UsageBudget?
     var body: some View {
+        Panel(title: "Orchestrator budget", subtitle: [TextRun("Triage runs against the daily cap")]) {
+            SettingsLink { Text("Settings") }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
+                .help("Open Burro settings: the Brief’s daily cap and automatic triage")
+        } content: {
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("ORCHESTRATOR BUDGET").font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(AppAppearance.tertiary)
-                Spacer()
-                SettingsLink { Text("Settings") }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
-                    .help("Open Burro settings: the Brief’s daily cap and automatic triage")
-            }
             if let budget {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("\(budget.triageRuns)").font(.system(size: 26, weight: .bold, design: .rounded)).monospacedDigit()
@@ -60,9 +63,7 @@ struct UsageBudgetCard: View {
                 Text("The Orchestrator’s runs appear here.").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
             }
         }
-        .padding(.horizontal, 20).padding(.vertical, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(AppCardSurface())
     }
 
     private func row<V: View>(_ title: String, @ViewBuilder value: () -> V) -> some View {
@@ -74,8 +75,6 @@ struct UsageBudgetCard: View {
     }
 
     private func tag(_ text: String) -> some View {
-        Text(text).font(.system(size: 11.5)).foregroundStyle(AppAppearance.secondary).lineLimit(1)
-            .padding(.horizontal, 7).padding(.vertical, 2)
-            .background(AppAppearance.raised, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        Text(text).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).lineLimit(1).truncationMode(.middle)
     }
 }

@@ -1,5 +1,5 @@
-// The Worktrees page drawn from plain values (WorktreeBoardModel) and callbacks, so it can be
-// rendered with sample data in tests: the summary strip, the filter chips (including Protected),
+// The Worktrees page's parts drawn from plain values (WorktreeBoardModel) and callbacks, so it can be
+// rendered with sample data in tests (WorktreePage.swift lays them out): the filter chips (including Protected),
 // the scope menu (all repositories, one bench or one repository: the store's own scope) and the
 // sort menu, the table
 // card with one group per repository (header, repository-health line with Run git gc, rows, "Show
@@ -62,76 +62,6 @@ struct WorktreeBoardActions {
     var terminal: (Worktree) -> Void = { _ in }
     var copyPath: (Worktree) -> Void = { _ in }
     var protect: (Worktree) -> Void = { _ in }
-}
-
-// MARK: Header
-
-struct WorktreePageHeader: View {
-    var title: String
-    var scanned: String
-    var body: some View {
-        HStack(alignment: .lastTextBaseline, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(.system(size: 28, weight: .bold, design: .rounded)).foregroundStyle(AppAppearance.text)
-                Text("Nothing is removed while a chat uses it or while it holds uncommitted work. Branches are always kept.")
-                    .font(.system(size: 15)).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 12)
-            Text(scanned).font(.system(size: 13)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
-                .help("Worktrees on this Mac. Repositories are read when this page opens or you refresh (⌘R).")
-        }
-    }
-}
-
-// MARK: Summary
-
-struct WorktreeSummaryStrip: View {
-    var summary: WorktreeBoardSummary
-    /// Rows whose state is "Uncommitted work" (in-use rows with changes are counted as in use here).
-    var idleUncommitted: Int
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 36) { numbers; bar.frame(minWidth: 160, maxWidth: .infinity) }
-            VStack(alignment: .leading, spacing: 14) { FlowLayout(spacing: 28) { numbers }; bar }
-        }
-        .padding(.horizontal, 20).padding(.vertical, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(AppCardSurface())
-    }
-    @ViewBuilder private var numbers: some View {
-        number("\(summary.total)", summary.total == 1 ? "worktree" : "worktrees")
-        number("\(summary.safe)", "safe to clean")
-        number(WorktreeBoardFormat.bytes(summary.reclaimable), "reclaimable")
-            .help(summary.reclaimable == nil ? "Measuring the safe folders…" : "Disk space the safe folders take. It is freed when you empty the Trash.")
-        number("\(summary.uncommitted)", "with uncommitted work", color: summary.uncommitted > 0 ? AppAppearance.amber : AppAppearance.text)
-    }
-    private func number(_ value: String, _ label: String, color: Color = AppAppearance.text) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(value).font(.system(size: 26, weight: .bold)).monospacedDigit().foregroundStyle(color)
-            Text(label).font(.system(size: 13)).foregroundStyle(AppAppearance.secondary)
-        }.fixedSize().accessibilityElement(children: .combine)
-    }
-    /// In use, safe, uncommitted (not in use), and the rest, in proportion.
-    private var bar: some View {
-        let parts: [(Int, Color)] = [(summary.inUse, AppAppearance.green), (summary.safe, AppAppearance.tertiary),
-                                     (idleUncommitted, AppAppearance.amber)]
-        let rest = max(0, summary.total - parts.map(\.0).reduce(0, +))
-        return GeometryReader { proxy in
-            let all = parts + [(rest, AppAppearance.raised)]
-            let total = max(1, all.map(\.0).reduce(0, +))
-            let gaps = CGFloat(max(0, all.filter { $0.0 > 0 }.count - 1)) * 2
-            HStack(spacing: 2) {
-                ForEach(Array(all.enumerated()), id: \.offset) { _, part in
-                    if part.0 > 0 {
-                        RoundedRectangle(cornerRadius: 3).fill(part.1)
-                            .frame(width: max(3, (proxy.size.width - gaps) * CGFloat(part.0) / CGFloat(total)))
-                    }
-                }
-            }
-        }
-        .frame(height: 10)
-        .accessibilityHidden(true)
-    }
 }
 
 // MARK: Filters
@@ -278,8 +208,6 @@ struct WorktreeTableCard: View {
                 WorktreeGroupSection(model: model, group: group, actions: actions, compact: compact)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: AppAppearance.cardRadius, style: .continuous))
-        .modifier(AppCardSurface())
     }
     private var header: some View {
         WorktreeColumnsLayout(compact: compact) {
@@ -522,27 +450,27 @@ struct WorktreeRowView: View {
     }
 }
 
+/// The row's state as a dot and plain words: green in use, grey safe to clean, amber uncommitted
+/// work, no dot for the other blockers (their status words).
 struct WorktreeStateChip: View {
     var row: WorktreeBoardRow
     var body: some View {
-        let (fore, back) = colors
-        Text(row.stateTitle).font(.system(size: 11, weight: .semibold)).lineLimit(1)
-            .foregroundStyle(fore)
-            .padding(.horizontal, 8).padding(.vertical, 2)
-            .background(back, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay {
-                if row.kind == .blocked { RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(AppAppearance.hairline) }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .help(row.eligibility.reasons.joined(separator: "\n"))
-            .accessibilityLabel("State: \(row.stateTitle)")
+        HStack(spacing: 6) {
+            if let dot { Circle().fill(dot).frame(width: 7, height: 7).accessibilityHidden(true) }
+            Text(row.stateTitle).font(.system(size: 12.5)).lineLimit(1)
+                .foregroundStyle(row.kind == .blocked ? AppAppearance.tertiary : AppAppearance.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(row.eligibility.reasons.joined(separator: "\n"))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("State: \(row.stateTitle)")
     }
-    private var colors: (Color, Color) {
+    private var dot: Color? {
         switch row.kind {
-        case .inUse: (AppAppearance.green, AppAppearance.green.opacity(0.14))
-        case .safe: (AppAppearance.secondary, AppAppearance.raised)
-        case .uncommitted: (AppAppearance.amber, AppAppearance.amber.opacity(0.14))
-        case .blocked: (AppAppearance.secondary, .clear)
+        case .inUse: AppAppearance.green
+        case .safe: AppAppearance.tertiary
+        case .uncommitted: AppAppearance.amber
+        case .blocked: nil
         }
     }
 }

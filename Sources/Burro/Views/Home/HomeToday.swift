@@ -1,4 +1,4 @@
-// Today's to-dos on Home: tick, type to add, double-click to edit; hovering an open to-do shows
+// Today's to-dos on Home (the bottom row's To-dos panel, `framed: false`): tick, type to add, double-click to edit; hovering an open to-do shows
 // "Start chat" (also in its context menu), which opens the New chat sheet prefilled with it (it
 // never starts the chat by itself). Shared with Maurice through
 // Convex when sync is set up; otherwise kept on this Mac until it is.
@@ -8,16 +8,20 @@ import BurroCore
 struct HomeTodayCard: View {
     @Bindable var todos: TodoStore
     var startChat: ((TodoItem) -> Void)? = nil
+    /// False inside Home's To-dos panel, which has the title and count: no header, no card surface.
+    var framed = true
     @State private var draft = ""
     @State private var editing: String?
     @State private var editText = ""
     @FocusState private var adding: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HomeSectionHeader(title: "To-dos") {
-                if todos.openCount > 0 {
-                    Text("\(todos.openCount) open").monospacedDigit().foregroundStyle(AppAppearance.tertiary)
+        let list = VStack(alignment: .leading, spacing: 10) {
+            if framed {
+                HomeSectionHeader(title: "To-dos") {
+                    if todos.openCount > 0 {
+                        Text("\(todos.openCount) open").monospacedDigit().foregroundStyle(AppAppearance.tertiary)
+                    }
                 }
             }
             VStack(alignment: .leading, spacing: 1) {
@@ -38,8 +42,12 @@ struct HomeTodayCard: View {
             }
             syncFooter
         }
-        .padding(.horizontal, 16).padding(.vertical, 14).frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(HomeCardSurface())
+        if framed {
+            list.padding(.horizontal, 16).padding(.vertical, 14).frame(maxWidth: .infinity, alignment: .leading)
+                .modifier(HomeCardSurface())
+        } else {
+            list.frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private func row(_ item: TodoItem) -> some View {

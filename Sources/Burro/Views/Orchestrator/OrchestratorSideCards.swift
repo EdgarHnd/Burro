@@ -1,10 +1,12 @@
-// The Orchestrator page's right column. Memory: the first standing notes it reads every turn
+// The Orchestrator page's right column under the Brief queue, as stacked panels on the joined
+// surface (no card of their own). Memory: the first standing notes it reads every turn
 // (global ones, then the main project's), a field that adds a global note on Return, and "All N",
 // which opens the Memory tab to edit or delete them. Budget: triage runs today of the daily cap,
 // what today's runs cost (the Orchestrator's own and triage's, from the runs log), Claude's session
 // and weekly windows as meters with when they reset (amber once below the floor where triage
 // pauses; hidden while Burro doesn't know them), the floors in words, why triage is paused if it
-// is, and the switch that turns automatic triage on or off (the same switch as Settings).
+// is, and the switch that turns automatic triage on or off (the same switch as Settings). Runs: the
+// latest three runs (when, what started it, model, cost) and "All runs", which opens the Runs tab.
 import SwiftUI
 import BurroCore
 
@@ -12,13 +14,14 @@ struct OrchestratorMemoryCard: View {
     @Bindable var store: AppStore
     var openMemory: () -> Void
     @State private var draft = ""
+    @Environment(\.panelFill) private var fill
 
     var body: some View {
         let entries = store.orchestrator.memory
         let shown = OrchestratorMemory.preview(entries, mainProject: store.mainProject?.path)
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                OrchSectionLabel(title: "Memory", dot: nil)
+                Text("Memory").font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.text)
                 Spacer(minLength: 6)
                 Button(entries.isEmpty ? "Open" : "All \(entries.count)", action: openMemory)
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
@@ -42,9 +45,9 @@ struct OrchestratorMemoryCard: View {
                 .onSubmit(add)
                 .accessibilityLabel("Add a standing note")
         }
-        .padding(.horizontal, 16).padding(.vertical, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(OrchCard())
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(fill)
     }
 
     private func add() {
@@ -60,11 +63,12 @@ struct OrchestratorBudgetCard: View {
     @Binding var enabled: Bool
     var now: Date
     var calendar: Calendar = .current
+    @Environment(\.panelFill) private var fill
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                OrchSectionLabel(title: "Budget", dot: nil)
+                Text("Budget").font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.text)
                 Spacer(minLength: 6)
                 Text(enabled ? "On" : "Off").font(.system(size: 12, weight: .medium))
                     .foregroundStyle(enabled ? AppAppearance.green : AppAppearance.tertiary)
@@ -101,9 +105,9 @@ struct OrchestratorBudgetCard: View {
             Text(budget.floorsLine).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 16).padding(.vertical, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(OrchCard())
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(fill)
     }
 
     private func meterView(_ meter: OrchestratorBudget.Meter) -> some View {
@@ -126,5 +130,42 @@ struct OrchestratorBudgetCard: View {
                 Text(reset).font(.system(size: 11)).foregroundStyle(AppAppearance.tertiary)
             }
         }
+    }
+}
+
+/// The last three runs, newest first, with "All runs" for the Runs tab.
+struct OrchestratorRecentRunsCard: View {
+    var runs: [OrchestratorRun]
+    var openRuns: () -> Void
+    @Environment(\.panelFill) private var fill
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Runs").font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.text)
+                Spacer(minLength: 6)
+                Button("All runs", action: openRuns)
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
+                    .help("Every recent run with its tokens on the Runs tab")
+            }
+            if runs.isEmpty {
+                Text("No runs yet.").font(.system(size: 12.5)).foregroundStyle(AppAppearance.tertiary)
+            }
+            ForEach(Array(runs.prefix(3).enumerated()), id: \.offset) { index, run in
+                if index > 0 { QueueRule() }
+                HStack(spacing: 8) {
+                    Text(run.at.formatted(date: Calendar.current.isDateInToday(run.at) ? .omitted : .abbreviated, time: .shortened))
+                        .foregroundStyle(AppAppearance.secondary)
+                    Text(run.trigger).foregroundStyle(AppAppearance.text)
+                    Text(Orchestrator.modelTitle(run.model)).foregroundStyle(AppAppearance.tertiary).lineLimit(1)
+                    Spacer(minLength: 6)
+                    Text(OrchestratorRunsView.cost(run.costUSD)).foregroundStyle(AppAppearance.secondary)
+                }
+                .font(.system(size: 12)).monospacedDigit().padding(.vertical, 4)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(fill)
     }
 }

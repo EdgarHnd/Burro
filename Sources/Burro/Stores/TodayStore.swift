@@ -15,6 +15,9 @@
 // agent scan reused when under 100 seconds old, otherwise redone without previews (cheaper; the
 // Today page rescans with previews when it needs them).
 // Neither is logged, stored or sent anywhere; both are nil when tracking is off or nothing can be said.
+// `todayActivity` is today's scan as last read (whatever day the page shows), for Home's lanes;
+// with tracking off Home keeps it fresh with `refreshTodayActivity()` (the same preview-free scan,
+// reused when under 100 seconds old, and no tracked-day read).
 import Foundation
 import Observation
 import BurroCore
@@ -33,6 +36,10 @@ import BurroCore
     private(set) var awayAgentTimePartial = false
     /// Today's tracked day as last read, for Home's card (one read serves both).
     private(set) var todayTracked: ActivityDay?
+    /// Today's agent activity as last scanned, whatever day the page shows (Home's lanes). Nil until
+    /// the first scan of today answers.
+    private(set) var todayActivity: DailyActivity?
+    @ObservationIgnored private var todayActivityAt: Date?
     private var scanningDays: Set<Date> = []
     /// The day shown is being scanned.
     var scanning: Bool { scanningDays.contains(day) }
@@ -91,6 +98,15 @@ import BurroCore
         let today = calendar.startOfDay(for: Date())
         refreshTracked(today)
         scan(today, force: false, previews: false, maxAge: 100)
+        updateAway()
+    }
+
+    /// For Home's lanes with activity tracking off: today's agent scan only (no tracked day), reused
+    /// when under 100 seconds old, otherwise redone without previews. Called from Home's own
+    /// on-screen loop; it adds no timer.
+    func refreshTodayActivity() {
+        followCalendar()
+        scan(calendar.startOfDay(for: Date()), force: false, previews: false, maxAge: 100)
         updateAway()
     }
 
@@ -177,6 +193,9 @@ import BurroCore
         if partial != awayAgentTimePartial { awayAgentTimePartial = partial }
         let todayDay = trackedCache[today]?.day
         if todayDay != todayTracked { todayTracked = todayDay }
+        // Compared by scan time: a new scan of today replaces it, a new day clears it.
+        let todayScan = activityCache[today]
+        if todayScan?.at != todayActivityAt { todayActivityAt = todayScan?.at; todayActivity = todayScan?.activity }
     }
 
     /// Marks a day as just used, for eviction.

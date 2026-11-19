@@ -68,15 +68,18 @@ import XCTest
             scopeRepositories: [("/sample/burro/main", "burro"), ("/sample/ledger/main", "ledger"), ("/sample/lighthouse/main", "lighthouse")])
     }
 
-    private func page(_ model: WorktreeBoardModel, compact: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
-            WorktreePageHeader(title: "Worktrees", scanned: "This Mac · scanned 2 min ago")
-            WorktreeSummaryStrip(summary: model.summary, idleUncommitted: model.rows.filter { $0.kind == .uncommitted }.count)
-            WorktreeFilterBar(model: model, actions: WorktreeBoardActions())
-            WorktreeTableCard(model: model, actions: WorktreeBoardActions(), compact: compact)
+    /// The page as WorktreeListView lays it out at a content width (padding 36), with the bulk bar
+    /// that its safe-area inset shows while rows are ticked.
+    private func page(_ model: WorktreeBoardModel, width: CGFloat, phase: WorktreePageData.Phase = .board,
+                      scanned: String = "This Mac · scanned 2 min ago", scope: String? = nil) -> some View {
+        let data = WorktreePageData(phase: phase, title: scope ?? "Worktrees", scopeName: scope, scanned: scanned, model: model,
+                                    compact: WorktreePageData.compact(tableWidth: width - 72),
+                                    warnings: phase == .board ? ["2 repositories could not be read: permission denied"] : [])
+        return VStack(alignment: .leading, spacing: 14) {
+            WorktreePage(data: data, actions: WorktreeBoardActions()) { EmptyView() }
             if !model.selection.isEmpty { WorktreeBulkBar(model: model, actions: WorktreeBoardActions()) }
         }
-        .padding(.horizontal, 28).padding(.vertical, 26)
+        .padding(.horizontal, 36).padding(.vertical, 28)
         .modifier(AppTheme())
     }
 
@@ -86,25 +89,34 @@ import XCTest
         let out = ProcessInfo.processInfo.environment["BURRO_SNAPSHOT_DIR"].map { URL(fileURLWithPath: $0) }
             ?? root.appendingPathComponent("dist/screenshots")
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
-        let full = model()
-        XCTAssertFalse(full.bulk.isEmpty)
-        XCTAssertTrue(full.bulk.allSatisfy { tree in full.rows.first { $0.id == tree.path }?.eligibility.allowed == true })
-        for dark in [true, false] {
-            let suffix = dark ? "dark" : "light"
-            try render(page(full, compact: false), width: 1440, dark: dark, to: out.appendingPathComponent("worktrees-1440-\(suffix).png"))
+        let ticked = model()
+        XCTAssertFalse(ticked.bulk.isEmpty)
+        XCTAssertTrue(ticked.bulk.allSatisfy { tree in ticked.rows.first { $0.id == tree.path }?.eligibility.allowed == true })
+        let mixed = model(selectSafe: false)
+        var noMatch = model(filter: .protected, selectSafe: false)
+        noMatch.groups = []
+        let scanning = model(selectSafe: false)
+        // Content widths of a 1000, 1240 and 1440 pt window beside the sidebar.
+        for width in [935, 1015, 1215] {
+            for dark in [true, false] {
+                let suffix = "\(width)-\(dark ? "dark" : "light")"
+                try render(page(mixed, width: CGFloat(width)), width: CGFloat(width), dark: dark, to: out.appendingPathComponent("worktrees-mixed-\(suffix).png"))
+                try render(page(ticked, width: CGFloat(width)), width: CGFloat(width), dark: dark, to: out.appendingPathComponent("worktrees-ticked-\(suffix).png"))
+                try render(page(noMatch, width: CGFloat(width)), width: CGFloat(width), dark: dark, to: out.appendingPathComponent("worktrees-nomatch-\(suffix).png"))
+                try render(page(scanning, width: CGFloat(width), phase: .scanning, scanned: "This Mac · scanning…"), width: CGFloat(width), dark: dark,
+                           to: out.appendingPathComponent("worktrees-scanning-\(suffix).png"))
+            }
         }
-        try render(page(full, compact: false), width: 1000, dark: true, to: out.appendingPathComponent("worktrees-1000-dark.png"))
         var scoped = model(filter: .protected, selectSafe: false)
         scoped.scope = .repository("/sample/lighthouse/main"); scoped.scopeTitle = "lighthouse"
-        try render(page(scoped, compact: false), width: 1000, dark: true, to: out.appendingPathComponent("worktrees-1000-scoped-protected-dark.png"))
-        try render(page(full, compact: true), width: 860, dark: true, to: out.appendingPathComponent("worktrees-860-dark.png"))
+        try render(page(scoped, width: 1015, scope: "lighthouse"), width: 1015, dark: true, to: out.appendingPathComponent("worktrees-scoped-1015-dark.png"))
         try render(page(model(filter: .uncommitted, selectSafe: false, measured: false,
-                              gc: ["/sample/lighthouse/main": .running(started: now.addingTimeInterval(-90))]), compact: false),
-                   width: 1440, dark: true, to: out.appendingPathComponent("worktrees-filtered-gc-dark.png"))
+                              gc: ["/sample/lighthouse/main": .running(started: now.addingTimeInterval(-90))]), width: 1215),
+                   width: 1215, dark: true, to: out.appendingPathComponent("worktrees-filtered-gc-1215-dark.png"))
         try render(page(model(selectSafe: false, gc: ["/sample/lighthouse/main": .finished(
-                        before: RepositoryObjectStats(loose: 104_212, packs: 267), after: RepositoryObjectStats(loose: 12, packs: 2))]),
-                        compact: false),
-                   width: 1440, dark: false, to: out.appendingPathComponent("worktrees-gc-done-light.png"))
+                        before: RepositoryObjectStats(loose: 104_212, packs: 267), after: RepositoryObjectStats(loose: 12, packs: 2))]), width: 1015),
+                   width: 1015, dark: false, to: out.appendingPathComponent("worktrees-gc-done-1015-light.png"))
+        try render(page(mixed, width: 1015, phase: .empty), width: 1015, dark: true, to: out.appendingPathComponent("worktrees-empty-1015-dark.png"))
     }
 
     private func render<V: View>(_ view: V, width: CGFloat, dark: Bool, to url: URL) throws {

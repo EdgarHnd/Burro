@@ -166,40 +166,54 @@ import XCTest
         .modifier(AppTheme())
     }
 
-    /// Home's cover and chat sections from plain values over the aquarium, laid out as HomeView does
-    /// (HomeView itself would check Claude chats and read the Orchestrator's history).
+    /// Home's dashboard from plain values over the aquarium, laid out as HomeView does (HomeView
+    /// itself would check Claude chats and read the Orchestrator's history, to-dos and notes): the
+    /// store's own board, lanes without bars (no scan here), temporary to-dos and notes.
     private func homeStandIn(_ store: AppStore) -> some View {
         let summary = store.homeSummary
         let fish = AquariumFish.school(running: summary.running, waiting: summary.needsYou, scheduled: summary.scheduled, today: summary.today)
-        let board = HomeBoardData(
-            needsYou: [HomeNeedsCardData(id: "a", title: "Streak ladder config", tags: ["This Mac · focustown", "Codex · gpt-5.5"],
-                                         when: "asked 4 min ago", message: "Merge #412 into staging now that CI is green, or wait for the device check?",
-                                         draft: HomeDraftData(text: "Merge it now, then run the device check on staging.", label: "Draft", sendHelp: "Send"),
-                                         handOff: nil, dismissable: true),
-                       HomeNeedsCardData(id: "b", title: "Support dashboard alerts", tags: ["This Mac · support-console", "Claude · Opus 5.5"],
-                                         when: "waiting 1 min", message: "Waiting for your approval", draft: nil, handOff: "Open in Claude", dismissable: false)],
-            needsTotal: 2,
-            working: [HomeWorkingCardData(id: "w1", title: "iOS hang on resume", state: "Working in focustown", machine: "This Mac", time: "turn 18 min", stop: .stop),
-                      HomeWorkingCardData(id: "w2", title: "Godot shader warm-up", state: "Working in autumn-scene", machine: "This Mac", time: "turn 41 min", stop: .stop),
-                      HomeWorkingCardData(id: "w3", title: "Android 2.2.24 release notes", state: "Working in focustown", machine: "This Mac", time: "turn 1 min", stop: .stop)],
-            workingTotal: 3,
-            toRead: [HomeReadRowData(id: "r1", title: "Twitter link setup", outcome: "Opened PR #1412, tests pass.", time: "21:17"),
-                     HomeReadRowData(id: "r2", title: "Study with friends layout", outcome: "Three layout options written up.", time: "20:20")],
-            toReadTotal: 2)
+        let board = HomeBoard.build(waiting: summary.needsYou, running: summary.running, unread: summary.unread)
+        let calendar = Calendar.current, start = calendar.startOfDay(for: now)
+        let day = DateInterval(start: start, duration: 86_400)
+        let place: (AgentSession) -> String = { [$0.remote?.hostName ?? "This Mac", URL(fileURLWithPath: $0.cwd).lastPathComponent].joined(separator: " · ") }
+        let lanes = TodayLanes.build(HomeLanes.inputs(board, place: place, turnStart: { _ in nil }), activity: nil, needsSince: HomeLanes.needsSince(board),
+                                     brief: [], window: day, isToday: true, now: now, calendar: calendar)
+        let stats = HomeStats.cells(working: board.working.count, longestTurn: nil, machines: board.working.map { _ in "This Mac" },
+                                    waiting: board.needsYou.count, oldestWaiting: board.needsYou.map(\.since).min(), activity: nil,
+                                    toRead: board.toRead.count, stuck: 0, newestToRead: board.toRead.map(\.session.updatedAt).max(),
+                                    day: .value(dollars: nil, tokens: nil), calendar: calendar)
+        let data = HomePageData(
+            now: now, sentence: HomeBoard.sentenceRuns(needsYou: board.needsYou.count, working: board.working.count, toRead: board.toRead.count),
+            stats: HomePage<EmptyView, EmptyView>.statCells(stats, waiting: board.needsYou.count,
+                                                            avatars: board.needsYou.compactMap { $0.session.map { ($0.id, $0.provider) } },
+                                                            tracked: nil, tracking: false, paused: false, openToday: {}),
+            lanes: lanes, laneWindow: DayRibbonLayout.laneWindow(day: day, pieces: HomeLanes.pieces(lanes), now: now, calendar: calendar).window,
+            day: day, scanned: false,
+            board: HomeBoardData(
+                needsYou: board.needsYou.map { HomeNeedsCardData(id: $0.id, title: $0.title, tags: ["This Mac · focustown", "Codex · gpt-5.5"],
+                                                                  when: "asked 4 min ago", message: "Waiting for your approval", draft: nil,
+                                                                  handOff: "Open in Codex", dismissable: false) },
+                needsTotal: board.needsYou.count,
+                working: board.working.map { HomeWorkingCardData(id: $0.id, title: $0.session.title, state: "Working in focustown", machine: "This Mac",
+                                                                 time: "turn 18 min", stop: .stop) },
+                workingTotal: board.working.count,
+                toRead: board.toRead.map { HomeReadRowData(id: $0.id, title: $0.session.title, outcome: nil, time: "21:17") }, toReadTotal: board.toRead.count),
+            machines: [HomeMachineRowData(id: "local", name: "This Mac", reachable: true, line: "\(board.working.count) working", local: true)])
+        let todos = TodoStore(cacheURL: FileManager.default.temporaryDirectory.appendingPathComponent("burro-chrome-todos-\(UUID().uuidString).json"), config: nil)
+        let notes = NotesStore(folder: FileManager.default.temporaryDirectory.appendingPathComponent("burro-chrome-notes-\(UUID().uuidString)"))
         return GeometryReader { geometry in
             ZStack(alignment: .top) {
                 CoverBackdrop(running: summary.counts.running, waiting: summary.counts.waiting, fish: fish, hover: AquariumHover(), animate: false)
-                let wide = geometry.size.width >= HomeView.twoColumnWidth
-                let left = (min(geometry.size.width, 1220) - 56) - (wide ? HomeView.sideWidth + 28 : 0)
-                HStack(alignment: .top, spacing: 28) {
-                    VStack(alignment: .leading, spacing: 26) {
-                        HomeCover(sentence: HomeBoard.sentence(needsYou: 2, working: 3, toRead: 2), now: self.now)
-                        HomeBoardContent(data: board, actions: HomeBoardActions(), columns: left >= 780 ? 3 : left >= 460 ? 2 : 1)
+                ScrollView {
+                    HomePage(data: data, actions: HomePageActions(), todos: todos, notes: notes, queueTab: .constant(nil)) {
+                        HomeAskCardContent(data: HomeAskCardData(footer: "Triage: 3 today · On", footerHelp: ""), inline: true) { HomeSnapshotFixture.composer }
+                    } below: {
+                        HomeSnapshotFixture.below
                     }
-                    if wide { Color.clear.frame(width: HomeView.sideWidth, height: 1) }
+                    .padding(.horizontal, 28).padding(.top, 34)
+                    .frame(maxWidth: 1220).frame(maxWidth: .infinity)
+                    .frame(minHeight: geometry.size.height, alignment: .top)
                 }
-                .padding(.horizontal, 28).padding(.top, 34)
-                .frame(maxWidth: 1220).frame(maxWidth: .infinity)
             }
         }
         .background(AppAppearance.background)

@@ -1,40 +1,21 @@
-// The cards under the Today page's day ribbon, and its chats. While you were away: the agents'
-// wall-clock time while Burro was recording and you weren't at the Mac ("about" when the scan
-// was partial or some chats' stretches are unknown), with each chat's share and its outcome line (the Brief's headline for it, else its latest reply when previews are on); or one
-// quiet line saying why there is nothing to say. Most time: the apps and sites with the most
-// tracked time, bars relative to the first (right-click to recategorise). Shipped: the day's merged
-// pull requests and production deploys in time order (click opens one on GitHub), with Details to
-// show the full Shipped section (summary, recap, pushes) underneath. Chats: today's chats in
-// compact columns by status (or project), each row opening its chat, with how long a waiting chat
-// has waited, how long a working chat's current stretch has run, or when a chat last moved.
+// The Today page's panel contents and its chats. While you were away (the queue's second tab):
+// the agents' wall-clock time while Burro was recording and you weren't at the Mac ("about" when the
+// scan was partial or some chats' stretches are unknown), with each chat's share and its outcome
+// line (the Brief's headline for it, else its latest reply when previews are on); or one quiet line
+// saying why there is nothing to say. Most time on: the apps and sites with the most tracked time,
+// bars relative to the first (right-click to recategorise). Shipped: the day's merged pull requests
+// and production deploys in time order (click opens one on GitHub), with Details to show the full
+// Shipped section (summary, recap, pushes) underneath. Chats by project: each project's chats and
+// their merged active time. Chats: today's chats in compact columns by status (or project), each row
+// opening its chat, with how long a waiting chat has waited, how long a working chat's current
+// stretch has run, or when a chat last moved.
 import AppKit
 import SwiftUI
 import BurroCore
 
-/// A card with an uppercase section label, a quiet note on the right, and its content.
-struct TodayRibbonCardFrame<Accessory: View, Content: View>: View {
-    var title: String
-    @ViewBuilder var accessory: () -> Accessory
-    @ViewBuilder var content: () -> Content
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(title.uppercased()).font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(AppAppearance.tertiary)
-                Spacer(minLength: 8)
-                accessory().font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-            }
-            .padding(.bottom, 2)
-            content()
-        }
-        .padding(.horizontal, 16).padding(.vertical, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .modifier(AppCardSurface(radius: HomeStyle.cardRadius))
-    }
-}
-
 // MARK: While you were away
 
-struct TodayAwayCard: View {
+struct TodayAwayList: View {
     struct Row: Identifiable {
         var id: String
         var title: String
@@ -47,51 +28,53 @@ struct TodayAwayCard: View {
     var rows: [Row]
     /// Why there's no summary, shown instead.
     var reason: String
+    var limit = 5
 
     var body: some View {
-        TodayRibbonCardFrame(title: "While you were away") {
-            if let span = summary?.span, (summary?.total ?? 0) >= 60 {
-                Text(ActivityStyle.range(span.start, span.end)).monospacedDigit()
-            }
-        } content: {
+        VStack(alignment: .leading, spacing: 4) {
             if let summary, summary.total >= 60 {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if summary.partial { Text("About").foregroundStyle(AppAppearance.secondary) }
-                    Text(TodaySummary.duration(summary.total)).font(.system(size: 26, weight: .bold)).monospacedDigit()
+                    Text(TodaySummary.duration(summary.total)).font(.system(size: 13, weight: .semibold)).monospacedDigit()
                     Text("of agent work, \(summary.chats.count) chat\(summary.chats.count == 1 ? "" : "s")").foregroundStyle(AppAppearance.secondary)
+                    Spacer(minLength: 4)
+                    if let span = summary.span {
+                        Text(ActivityStyle.range(span.start, span.end)).monospacedDigit().foregroundStyle(AppAppearance.tertiary)
+                    }
                 }
-                .padding(.vertical, 4)
+                .font(.system(size: 12.5)).padding(.bottom, 4)
                 .help("Wall-clock time any agent was active while Burro was recording and you weren't at the Mac (idle, away or the screen locked); time Burro wasn't recording isn't counted. Chats working at once count once, so their own times can add up to more."
                       + (summary.partial ? " Some chats couldn't be read, so this is approximate." : ""))
                 VStack(spacing: 0) {
-                    ForEach(Array(rows.prefix(4).enumerated()), id: \.element.id) { index, row in
-                        if index > 0 { Divider().overlay(AppAppearance.separator) }
-                        AwayRow(row: row)
+                    ForEach(Array(rows.prefix(limit).enumerated()), id: \.element.id) { index, row in
+                        if index > 0 { Rectangle().fill(AppAppearance.separator).frame(height: 1) }
+                        TodayAwayRow(row: row)
                     }
                 }
-                if rows.count > 4 {
-                    Text("and \(rows.count - 4) more").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).padding(.top, 4)
+                if rows.count > limit {
+                    Text("and \(rows.count - limit) more").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).padding(.top, 4)
                 }
             } else {
                 Text(summary == nil ? reason : "Agents weren't working while you were away.")
-                    .font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
+                    .font(.system(size: 13)).foregroundStyle(AppAppearance.tertiary).fixedSize(horizontal: false, vertical: true)
                     .padding(.vertical, 4)
             }
         }
     }
 }
 
-private struct AwayRow: View {
-    var row: TodayAwayCard.Row
+/// A chat that worked while you were away: its state dot, title, outcome line and its share.
+struct TodayAwayRow: View {
+    var row: TodayAwayList.Row
     @State private var hovering = false
     var body: some View {
         Button { row.open?() } label: {
             HStack(alignment: .top, spacing: 10) {
                 Circle().fill(row.status.color).frame(width: 8, height: 8).padding(.top, 5).opacity(row.status == .idle ? 0.6 : 1)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(row.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.text).lineLimit(1)
+                    Text(row.title).font(.system(size: 13)).foregroundStyle(AppAppearance.text).lineLimit(1)
                     if let outcome = row.outcome {
-                        Text(outcome).font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).lineLimit(2)
+                        Text(outcome).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -108,17 +91,18 @@ private struct AwayRow: View {
 
 // MARK: Most time
 
-struct TodayMostTimeCard: View {
+struct TodayMostTimeList: View {
     var day: ActivityDay
     var tracker: ActivityTracker
 
+    var limit = 6
     private var items: [(item: ActivityDay.Item, site: Bool)] {
-        Array((day.apps.map { ($0, false) } + day.sites.map { ($0, true) }).sorted { $0.0.seconds > $1.0.seconds }.prefix(7))
+        Array((day.apps.map { ($0, false) } + day.sites.map { ($0, true) }).sorted { $0.0.seconds > $1.0.seconds }.prefix(limit))
     }
 
     var body: some View {
         let items = self.items, top = max(1, items.first?.item.seconds ?? 1)
-        TodayRibbonCardFrame(title: "Most time") { EmptyView() } content: {
+        VStack(alignment: .leading, spacing: 0) {
             if items.isEmpty {
                 Text("Only moments under a minute so far.").font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).padding(.vertical, 4)
             }
@@ -128,14 +112,14 @@ struct TodayMostTimeCard: View {
                     Text(site && item.name.hasPrefix("www.") ? String(item.name.dropFirst(4)) : item.name)
                         .font(.system(size: 13)).lineLimit(1).truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    Capsule().fill(AppAppearance.raised).frame(width: 90, height: 6)
+                    Capsule().fill(AppAppearance.raised).frame(width: 60, height: 5)
                         .overlay(alignment: .leading) {
-                            Capsule().fill(ActivityStyle.color(item.category)).frame(width: max(3, 90 * item.seconds / top), height: 6)
+                            Capsule().fill(ActivityStyle.color(item.category)).frame(width: max(3, 60 * item.seconds / top), height: 5)
                         }
-                    Text(TodaySummary.duration(item.seconds)).font(.system(size: 12, design: .monospaced)).foregroundStyle(AppAppearance.tertiary)
-                        .frame(width: 56, alignment: .trailing)
+                    Text(TodaySummary.duration(item.seconds)).font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.tertiary)
+                        .frame(width: 50, alignment: .trailing)
                 }
-                .padding(.vertical, 6).contentShape(Rectangle())
+                .padding(.vertical, 5).contentShape(Rectangle())
                 .help("\(item.category.title)\(site ? " · a site" : "") · right-click to change")
                 .contextMenu {
                     if item.category != .private, site || !DayflowImport.isGroup(bundleID: item.id) {
@@ -149,7 +133,7 @@ struct TodayMostTimeCard: View {
 
 // MARK: Shipped
 
-struct TodayShippedCard: View {
+struct TodayShippedList: View {
     enum State {
         case loading
         case noProject
@@ -159,12 +143,16 @@ struct TodayShippedCard: View {
     var state: State
     var isToday: Bool
     @Binding var details: Bool
+    var limit = 5
+
+    /// The panel's subtitle: the repository's short name.
+    static func source(_ state: State) -> String {
+        if case .loaded(let day) = state { return day.repository.split(separator: "/").last.map { "\($0) on GitHub" } ?? "from GitHub" }
+        return "from GitHub"
+    }
 
     var body: some View {
-        TodayRibbonCardFrame(title: "Shipped") {
-            if case .loaded(let day) = state { Text(day.repository.split(separator: "/").last.map(String.init) ?? "from GitHub").lineLimit(1) }
-            else { Text("from GitHub") }
-        } content: {
+        VStack(alignment: .leading, spacing: 0) {
             switch state {
             case .loading:
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Reading GitHub…") }
@@ -180,13 +168,13 @@ struct TodayShippedCard: View {
                     note(isToday ? "Nothing merged or deployed yet today." : "Nothing merged or deployed that day.")
                 }
                 VStack(spacing: 0) {
-                    ForEach(Array(rows.prefix(6).enumerated()), id: \.element.id) { index, row in
+                    ForEach(Array(rows.prefix(limit).enumerated()), id: \.element.id) { index, row in
                         if index > 0 { Divider().overlay(AppAppearance.separator) }
                         ShipRow(row: row)
                     }
                 }
                 HStack(spacing: 8) {
-                    if rows.count > 6 { Text("\(rows.count - 6) more").foregroundStyle(AppAppearance.tertiary) }
+                    if rows.count > limit { Text("\(rows.count - limit) more").foregroundStyle(AppAppearance.tertiary) }
                     Spacer()
                     if !day.isEmpty {
                         Button(details ? "Hide details" : "Details") { details.toggle() }.buttonStyle(.plain).foregroundStyle(AppAppearance.blue)
@@ -232,7 +220,7 @@ struct TodayShippedCard: View {
 }
 
 private struct ShipRow: View {
-    var row: TodayShippedCard.Row
+    var row: TodayShippedList.Row
     @State private var hovering = false
     var body: some View {
         if row.url == nil {
@@ -248,7 +236,7 @@ private struct ShipRow: View {
 
     private var content: some View {
             HStack(spacing: 10) {
-                Text(TodayRibbonCard.clock(row.at)).font(.system(size: 12, design: .monospaced)).foregroundStyle(AppAppearance.tertiary)
+                Text(TodayRibbonStyle.clock(row.at)).font(.system(size: 12, design: .monospaced)).foregroundStyle(AppAppearance.tertiary)
                     .frame(width: 42, alignment: .leading)
                 if row.deploy {
                     DeployDiamond(color: TodayShipStyle.color(row.status), size: 10).padding(.horizontal, 3)
@@ -267,6 +255,38 @@ private struct ShipRow: View {
             }
             .foregroundStyle(AppAppearance.text)
             .padding(.vertical, 7).contentShape(Rectangle())
+    }
+}
+
+// MARK: Chats by project
+
+/// Each project's chats and merged active time, a bar relative to the busiest.
+struct TodayProjectsList: View {
+    var rows: [TodayProjectRow]
+    var limit = 6
+    var body: some View {
+        let top = max(1, rows.compactMap(\.active).max() ?? 1)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(rows.prefix(limit)) { row in
+                HStack(spacing: 10) {
+                    Text(row.name).font(.system(size: 13)).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
+                    Text("\(row.chats)").font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.tertiary)
+                        .help("\(row.chats) chat\(row.chats == 1 ? "" : "s")")
+                    Capsule().fill(AppAppearance.raised).frame(width: 44, height: 5)
+                        .overlay(alignment: .leading) {
+                            if let active = row.active { Capsule().fill(AppAppearance.tertiary).frame(width: max(3, 44 * active / top), height: 5) }
+                        }
+                    Text(row.active.map { AgentAwayTime.phrase($0, partial: row.approximate) } ?? "—")
+                        .font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.tertiary).lineLimit(1).fixedSize()
+                }
+                .padding(.vertical, 5)
+                .help(row.active == nil ? "When these chats worked isn't known (another machine, or Burro's helper didn't say)."
+                      : "Active time of its chats on this Mac, chats working at once counted once" + (row.approximate ? "; some chats' times are unknown" : ""))
+            }
+            if rows.count > limit {
+                Text("and \(rows.count - limit) more").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).padding(.top, 4)
+            }
+        }
     }
 }
 
@@ -336,7 +356,7 @@ private struct TodayCompactChatRow: View {
         switch row.status {
         case .needsYou: TodayChatTime.elapsed(row.lastAt, now: now)
         case .working: TodayChatTime.elapsed(row.activeSince ?? row.lastAt, now: now)
-        case .toRead, .idle: TodayRibbonCard.clock(row.lastAt)
+        case .toRead, .idle: TodayRibbonStyle.clock(row.lastAt)
         }
     }
 

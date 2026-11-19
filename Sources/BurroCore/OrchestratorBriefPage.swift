@@ -3,7 +3,7 @@
 // (triage runs today of the daily cap, today's cost from the runs log, Claude's session and weekly
 // windows with the floors triage pauses below, and when each resets), which chats "Run triage now"
 // queues and what it says back, the first memory notes the side card shows, and how many columns
-// the page uses at a given width. Nothing here reads files or starts anything.
+// the page uses at a given width (two from 760 points, one below). Nothing here reads files or starts anything.
 import Foundation
 
 public enum OrchestratorPageSummary {
@@ -170,12 +170,11 @@ extension OrchestratorMemory {
     }
 }
 
-/// How many columns the Brief tab uses: queue, conversation and side cards side by side when wide,
-/// the side cards under the queue when narrower, one column below about 860 points.
+/// How the Brief tab is laid out on one joined surface: the conversation in a tall left column with
+/// the Brief queue and side panels in a right column beside it from 760 points of content width
+/// (380 points wide from 1050, else 360); below that, one scrolling column with the conversation at
+/// a fixed height first.
 public enum OrchestratorPageColumns {
-    public static func count(width: Double) -> Int {
-        if width >= 1180 { return 3 }
-        if width >= 860 { return 2 }
-        return 1
-    }
+    public static func count(width: Double) -> Int { width >= 760 ? 2 : 1 }
+    public static func sideWidth(width: Double) -> Double { width >= 1050 ? 380 : 360 }
 }

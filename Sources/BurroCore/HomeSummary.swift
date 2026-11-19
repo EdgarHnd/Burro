@@ -132,10 +132,7 @@ public struct HomeSummary: Sendable, Equatable {
                         lastSeen: $0.lastSeen)
         }
         let newest: (AgentSession, AgentSession) -> Bool = { $0.updatedAt != $1.updatedAt ? $0.updatedAt > $1.updatedAt : $0.id < $1.id }
-        // Sub-agents are answered through their parent chat: never listed as needing you.
-        let needsYou = unique.filter { $0.state == .waiting && $0.remote?.stale != true && $0.isSubagent != true }.sorted(by: newest)
-        let unread = unique.filter(\.isDone).sorted(by: newest)
-        let running = unique.filter { $0.state == .working }.sorted(by: newest)
+        let (needsYou, unread, running) = chatLists(unique)
         let scheduled = unique.filter { $0.state == .scheduled }.sorted(by: newest)
         let dayStart = Calendar.current.startOfDay(for: now)
         let today = unique.filter { $0.updatedAt >= dayStart }.sorted(by: newest)
@@ -147,6 +144,18 @@ public struct HomeSummary: Sendable, Equatable {
         return HomeSummary(counts: counts, projects: sortedProjects, machines: machines, needsYou: needsYou,
                            unread: unread, running: running, sentence: sentence, scheduled: scheduled, today: today)
     }
+    /// Home's chat lists from a sample, newest first: waiting on you (sub-agents never, they are
+    /// answered through their parent chat; stale remote waits never), unread results, and working.
+    /// `HomeBoard.build(sessions:…)` uses the same lists, so the sidebar's line counts what Home counts.
+    public static func chatLists(_ sessions: [AgentSession]) -> (needsYou: [AgentSession], unread: [AgentSession], running: [AgentSession]) {
+        var unique: [AgentSession] = [], seen: Set<String> = []
+        for session in sessions where seen.insert(session.id).inserted { unique.append(session) }
+        let newest: (AgentSession, AgentSession) -> Bool = { $0.updatedAt != $1.updatedAt ? $0.updatedAt > $1.updatedAt : $0.id < $1.id }
+        return (unique.filter { $0.state == .waiting && $0.remote?.stale != true && $0.isSubagent != true }.sorted(by: newest),
+                unique.filter(\.isDone).sorted(by: newest),
+                unique.filter { $0.state == .working }.sorted(by: newest))
+    }
+
     private static func latest(_ a: Date?, _ b: Date?) -> Date? {
         switch (a, b) { case let (a?, b?): max(a, b); case let (a?, nil): a; case let (nil, b): b }
     }

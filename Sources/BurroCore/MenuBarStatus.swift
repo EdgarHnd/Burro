@@ -10,9 +10,25 @@ public enum MenuBarStatus: Equatable, Sendable {
     case running(Int)
     case needsYou(waiting: Int, running: Int)
 
+    /// The menu-bar item: chats waiting on an input request and chats working, on Home's rules
+    /// (HomeSummary.chatLists): a sub-agent is neither, it belongs to its parent chat. The raw
+    /// `AgentActivitySnapshot` counts include sub-agents, which made the sidebar read "7 working"
+    /// while Home said "5 chats are working".
     public init(_ activity: AgentActivitySnapshot) {
-        if activity.waitingCount > 0 { self = .needsYou(waiting: activity.waitingCount, running: activity.workingCount) }
-        else if activity.workingCount > 0 { self = .running(activity.workingCount) }
+        let lists = HomeSummary.chatLists(activity.sessions)
+        self.init(needsYou: lists.needsYou.count, working: lists.running.filter { $0.isSubagent != true }.count)
+    }
+
+    /// Home's own numbers: the board's Needs you (waiting chats plus chats triage found ending a
+    /// turn on a question) and Working sections. The window sidebar's line uses this so it says
+    /// exactly what Home's sentence says.
+    public init(_ board: HomeBoard) {
+        self.init(needsYou: board.needsYou.count, working: board.working.count)
+    }
+
+    public init(needsYou: Int, working: Int) {
+        if needsYou > 0 { self = .needsYou(waiting: needsYou, running: working) }
+        else if working > 0 { self = .running(working) }
         else { self = .idle }
     }
 

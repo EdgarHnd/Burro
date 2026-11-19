@@ -1,5 +1,7 @@
-// The Orchestrator page's left column, the Brief queue, from what triage keeps in `store.brief`.
-// Needs you (amber): one card per chat with its title, machine and age, the question it ends on and,
+// The Brief queue, the first panel of the Orchestrator page's right column, from what triage keeps
+// in `store.brief`: one cell of the joined surface with Needs you, Finished and Stuck as sections
+// divided by hairlines, each item a row (state as a dot, bold only for what needs you, machine and
+// "Closed" as plain grey words). Needs you (amber): one row per chat with its title, machine and age, the question it ends on and,
 // when the chat has a draft (triage's, or a reply the Orchestrator proposed), the draft inline with
 // Send / Edit / Discard. Send goes through the proposal card's own path (`sendOrchestratorAction`);
 // Edit swaps in the full proposal card to edit in place; Discard drops the draft. A chat without a
@@ -21,52 +23,65 @@ struct OrchestratorBriefQueue: View {
     var now: Date
     @State private var editing: String?
 
+    @Environment(\.panelFill) private var fill
+
     var body: some View {
         let brief = store.brief
         let needs = brief.needsYou, finished = brief.finished, stuck = brief.stuck
-        VStack(alignment: .leading, spacing: 18) {
+        let sections = [!needs.isEmpty, !finished.isEmpty, !stuck.isEmpty]
+        VStack(alignment: .leading, spacing: 0) {
             if needs.isEmpty && finished.isEmpty && stuck.isEmpty {
                 emptyCard(brief)
             }
             if !needs.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    OrchSectionLabel(title: "Needs you · \(needs.count)", dot: AppAppearance.amber, tint: AppAppearance.amber)
-                    ForEach(needs) { item in needsCard(item) }
+                section {
+                    QueueHeading(title: "Needs you", count: needs.count, dot: AppAppearance.amber, countColor: AppAppearance.amber)
+                    ForEach(Array(needs.enumerated()), id: \.element.id) { index, item in
+                        if index > 0 { QueueRule() }
+                        needsCard(item)
+                    }
                 }
             }
             if !finished.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        OrchSectionLabel(title: "Finished · \(finished.count)", dot: AppAppearance.blue)
-                        Spacer(minLength: 6)
+                if sections[0] { QueueRule() }
+                section {
+                    QueueHeading(title: "Finished", count: finished.count, dot: AppAppearance.blue) {
                         Button("Mark read") { markRead(finished) }
                             .buttonStyle(OrchButtonStyle(kind: .ghost))
                             .help("Mark these results read in Burro and clear them from the Brief. Codex and Claude keep their own unread marks.")
                     }
-                    VStack(spacing: 0) {
-                        ForEach(Array(finished.prefix(8).enumerated()), id: \.element.id) { index, item in
-                            if index > 0 { Rectangle().fill(AppAppearance.separator).frame(height: 1) }
-                            finishedRow(item)
-                        }
-                        if finished.count > 8 {
-                            Rectangle().fill(AppAppearance.separator).frame(height: 1)
-                            Text("and \(finished.count - 8) more").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
-                        }
+                    ForEach(Array(finished.prefix(8).enumerated()), id: \.element.id) { index, item in
+                        if index > 0 { QueueRule() }
+                        finishedRow(item)
                     }
-                    .padding(.horizontal, 14).padding(.vertical, 2)
-                    .modifier(OrchCard())
+                    if finished.count > 8 {
+                        QueueRule()
+                        Text("and \(finished.count - 8) more").font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+                    }
                 }
             }
             if !stuck.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    OrchSectionLabel(title: "Stuck · \(stuck.count)", dot: AppAppearance.tertiary)
-                    ForEach(stuck) { item in stuckCard(item) }
+                if sections[0] || sections[1] { QueueRule() }
+                section {
+                    QueueHeading(title: "Stuck", count: stuck.count, dot: AppAppearance.tertiary)
+                    ForEach(Array(stuck.enumerated()), id: \.element.id) { index, item in
+                        if index > 0 { QueueRule() }
+                        stuckCard(item)
+                    }
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(fill)
         // Claude app links for items whose chat has left Burro's list (closed chats).
         .task(id: unlisted(brief)) { await ClosedChatLinks.shared.refresh(unlisted(brief)) }
+    }
+
+    private func section<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) { content() }
+            .padding(.horizontal, 20).padding(.vertical, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Needs you
@@ -82,8 +97,8 @@ struct OrchestratorBriefQueue: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
                         Text(item.chatTitle ?? "A chat").font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.text).lineLimit(1)
-                        if let machine = item.machine { AppTag(text: machine) }
-                        if let closed { AppTag(text: closed.tag) }
+                        if let machine = item.machine { QueueTag(text: machine) }
+                        if let closed { QueueTag(text: closed.tag) }
                         Spacer(minLength: 6)
                         Text(Self.age(item.updatedAt, now: now)).font(.system(size: 12)).monospacedDigit().foregroundStyle(AppAppearance.tertiary)
                     }
@@ -117,8 +132,7 @@ struct OrchestratorBriefQueue: View {
                 }
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 12)
-        .modifier(OrchCard(stroke: AppAppearance.amber.opacity(0.4)))
+        .padding(.vertical, 8)
         .contextMenu { rowMenu(item) }
     }
 
@@ -174,7 +188,7 @@ struct OrchestratorBriefQueue: View {
 
     private func finishedRow(_ item: BriefItem) -> some View {
         Button { open(item) } label: {
-            (Text(item.chatTitle ?? "A chat").font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.text)
+            (Text(item.chatTitle ?? "A chat").font(.system(size: 13)).foregroundStyle(AppAppearance.text)
              + Text(" · " + item.headline).font(.system(size: 13)).foregroundStyle(AppAppearance.secondary))
                 .lineLimit(2).multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -187,28 +201,26 @@ struct OrchestratorBriefQueue: View {
     private func stuckCard(_ item: BriefItem) -> some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.chatTitle ?? "A chat").font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.text).lineLimit(1)
+                Text(item.chatTitle ?? "A chat").font(.system(size: 13)).foregroundStyle(AppAppearance.text).lineLimit(1)
                 Text([item.headline, item.machine].compactMap { $0 }.joined(separator: " · "))
                     .font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).lineLimit(2)
             }
             Spacer(minLength: 6)
             openButton(item, closed: closed(item), kind: .ghost)
         }
-        .padding(.horizontal, 14).padding(.vertical, 12)
-        .modifier(OrchCard())
+        .padding(.vertical, 8)
         .contextMenu { rowMenu(item) }
     }
 
     private func emptyCard(_ brief: OrchestratorBriefStore) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            OrchSectionLabel(title: "Brief", dot: nil)
+            Text("Brief").font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.text)
             Text(brief.autoTriage ? "Nothing needs you. Triage reads each chat when it stops and lists what it finds here."
                                   : "Automatic triage is off, so nothing new is read. Turn it on in Budget to keep this current.")
                 .font(.system(size: 13)).foregroundStyle(AppAppearance.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14).padding(.vertical, 12)
-        .modifier(OrchCard())
+        .padding(.horizontal, 20).padding(.vertical, 16)
     }
 
     // MARK: Helpers
@@ -270,6 +282,43 @@ struct OrchestratorBriefQueue: View {
 
 // MARK: Small shared pieces of this page
 
+/// A queue section's heading: its dot, a 13-point title and the count ("Needs you 2"), then any trailing control.
+struct QueueHeading<Trailing: View>: View {
+    var title: String
+    var count: Int
+    var dot: Color
+    var countColor: Color = AppAppearance.tertiary
+    @ViewBuilder var trailing: () -> Trailing
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(dot).frame(width: 7, height: 7).accessibilityHidden(true)
+            Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.text)
+            Text("\(count)").font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(countColor)
+            Spacer(minLength: 6)
+            trailing()
+        }
+        .padding(.bottom, 4)
+        .accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader)
+    }
+}
+
+extension QueueHeading where Trailing == EmptyView {
+    init(title: String, count: Int, dot: Color, countColor: Color = AppAppearance.tertiary) {
+        self.init(title: title, count: count, dot: dot, countColor: countColor, trailing: { EmptyView() })
+    }
+}
+
+/// A hairline between queue rows (inset) or between sections (edge to edge).
+struct QueueRule: View {
+    var body: some View { Rectangle().fill(AppAppearance.separator).frame(height: 1).accessibilityHidden(true) }
+}
+
+/// A machine name or "Closed" as plain grey words, not a filled pill.
+struct QueueTag: View {
+    var text: String
+    var body: some View { Text(text).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary).lineLimit(1).fixedSize() }
+}
+
 /// "NEEDS YOU · 2" with its status dot.
 struct OrchSectionLabel: View {
     var title: String
@@ -280,17 +329,6 @@ struct OrchSectionLabel: View {
             if let dot { Circle().fill(dot).frame(width: 8, height: 8).accessibilityHidden(true) }
             Text(title.uppercased()).font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(tint)
         }
-    }
-}
-
-/// The page's flat cards: surface fill and a hairline, no shadow.
-struct OrchCard: ViewModifier {
-    var stroke: Color = AppAppearance.separator
-    var fill: Color = AppAppearance.surface
-    func body(content: Content) -> some View {
-        content
-            .background(fill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(stroke))
     }
 }
 

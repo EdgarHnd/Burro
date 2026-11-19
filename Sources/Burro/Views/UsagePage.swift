@@ -1,12 +1,17 @@
-// The Usage page, top to bottom: an amber line only when some limit is low (UsageAlert's rule:
-// used up, running out within three hours at this pace, or 10% or less and not lasting to its
-// reset); the title with one sentence on what runs out at this pace and today's local tokens; a
-// card per provider with its limits as wide meters (UsageLimitCard), each ending in a collapsed
-// "Local history (30 days)" that reads this Mac's logs only when opened; today by project and today by
-// model; the last seven days; and the Orchestrator's triage budget. Every forecast is worded "at
-// this pace". Below about 900 points the paired cards stack. Takes plain values besides the
-// UsageStore, so tests can render it with invented data. Token counts read "500K", "1.2M" in every
-// language (`TokenCount`); money keeps the Mac's format.
+// The Usage page in the dashboard layout (Today's). The shared page header: one sentence whose
+// first run, in amber, is the most urgent low limit when there is one (UsageAlert's rule: used up,
+// running out within three hours at this pace, or 10% or less and not lasting to its reset), then
+// what runs out at this pace and today's local tokens; Settings and Refresh trailing with when the
+// limits were read. A strip: each shown provider's tightest window, its second window when only one
+// provider is shown, and today's API value (UsageComposition). Then one joined surface: the main row
+// 2:1 (stacked below Today's 880 points) with every provider's limits as rows (UsageLimitCard,
+// unframed: account menu, staleness, problem actions, meters with the even-pace tick, reset and
+// forecast, extras, links, quota history and "Local history (30 days)") beside Low limits when any,
+// else Last 7 days; the bottom row 1:1:1 (stacked below 690) with today by project, today by model
+// and the Orchestrator budget; while a limit is low, Last 7 days sits under Low limits in that column.
+// Every forecast is worded "at this pace". `UsagePage` takes plain values besides the UsageStore and
+// no scroll view, so tests can render it with invented data. Token counts read "500K", "1.2M" in
+// every language (`TokenCount`); money keeps the Mac's format.
 import SwiftUI
 import BurroCore
 
@@ -18,6 +23,7 @@ struct UsagePageExtras {
     var budget: UsageBudget? = nil
 }
 
+/// The scrolling shell around `UsagePage`.
 struct UsagePageContent: View {
     @Bindable var usage: UsageStore
     var extras: UsagePageExtras
@@ -25,77 +31,81 @@ struct UsagePageContent: View {
     var calendar: Calendar = .current
     var localHistory: UsageLocalHistoryState = .shared
     var openSettings: () -> Void
-    @State private var width: CGFloat = 1200
 
-    private var wide: Bool { width >= 900 }
+    var body: some View {
+        ScrollView {
+            UsagePage(usage: usage, extras: extras, now: now, calendar: calendar, localHistory: localHistory, openSettings: openSettings)
+                .padding(.horizontal, 36).padding(.vertical, 28)
+                .frame(maxWidth: 1240).frame(maxWidth: .infinity)
+        }
+    }
+}
+
+struct UsagePage: View {
+    @Bindable var usage: UsageStore
+    var extras: UsagePageExtras
+    var now: Date
+    var calendar: Calendar = .current
+    var localHistory: UsageLocalHistoryState = .shared
+    var openSettings: () -> Void
+    @State private var limitsWidth: CGFloat = 700
+
+    nonisolated static var mainStackBelow: CGFloat { 880 }
+    nonisolated static var bottomStackBelow: CGFloat { 690 }
+    /// Below this inner width a limit's meter puts its reset and forecast under the bar.
+    nonisolated static var meterCompactBelow: CGFloat { 620 }
+
     private var providers: [ProviderUsage] { usage.snapshot.providers }
     private var alerts: [UsageAlert] {
         usage.enabled ? UsageAlert.alerts(providers, now: now, modelLimits: usage.preferences.modelLimits) : []
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                if let alert = alerts.first { alertLine(alert, more: alerts.count - 1) }
-                header
-                if let message = usage.message { messageLine(message) }
-                if !usage.enabled {
-                    AppEmptyState(title: "Usage is paused", symbol: "pause.circle",
-                                  detail: "Connect your coding accounts to see their limits and reset times.") {
-                        Button("Enable usage") { usage.enabled = true }
-                    }.modifier(AppCardSurface())
-                } else if usage.snapshot.availability == .loading {
-                    loading
-                } else {
-                    ForEach(providers) { provider in
-                        UsageLimitCard(usage: usage, provider: provider, alerts: alerts, now: now, calendar: calendar, compact: !wide,
-                                       localHistory: localHistory)
-                    }
-                    if providers.isEmpty {
-                        AppEmptyState("Every provider is paused", symbol: "pause.circle", detail: "Turn one on in Usage settings.")
-                            .modifier(AppCardSurface())
+        let alerts = self.alerts
+        VStack(alignment: .leading, spacing: 20) {
+            PageHeader(title: "Usage", inset: 0, eyebrow: "Limits and tokens",
+                       sentence: UsageComposition.sentence(alerts: alerts, providers: providers, summary: summary, now: now, calendar: calendar),
+                       top: 0, bottom: 0) { headerControls }
+            if let message = usage.message { messageLine(message) }
+            StatStrip(cells: cells)
+            JoinedPanels {
+                JoinedRow(weights: [2, 1], stackBelow: Self.mainStackBelow) {
+                    limitsPanel(alerts)
+                    if alerts.isEmpty {
+                        UsageWeekCard(week: usage.week, scanning: usage.scanningWeek, calendar: calendar)
+                    } else {
+                        // Low limits is short and Limits is tall, so the week sits under it, not in a row of its own.
+                        JoinedRow(weights: [], stackBelow: .infinity) {
+                            UsageLowLimitsPanel(alerts: alerts, providers: providers, now: now, calendar: calendar)
+                            UsageWeekCard(week: usage.week, scanning: usage.scanningWeek, calendar: calendar)
+                        }
                     }
                 }
-                pair {
+                JoinedRow(weights: [1, 1, 1], stackBelow: Self.bottomStackBelow) {
                     UsageProjectsCard(rows: extras.projects, partial: extras.projectsPartial)
-                } second: {
                     UsageModelsCard(week: usage.week, scanning: usage.scanningWeek, alerts: alerts)
-                }
-                pair(firstWeight: 2.4) {
-                    UsageWeekCard(week: usage.week, scanning: usage.scanningWeek, calendar: calendar)
-                } second: {
                     UsageBudgetCard(budget: extras.budget)
                 }
-                Text("Quotas follow each account, across all its machines; token estimates are this Mac’s.")
-                    .font(.system(size: 11.5)).foregroundStyle(AppAppearance.tertiary)
-                    .help("Burro connects directly to each provider. Quotas follow the account shown on each card; local session activity and token estimates belong to this Mac.")
             }
-            .padding(.horizontal, wide ? 28 : 18).padding(.top, 26).padding(.bottom, 40)
-            .frame(maxWidth: 1240).frame(maxWidth: .infinity)
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
+            Text("Quotas follow each account, across all its machines; token estimates are this Mac’s.")
+                .font(.system(size: 11.5)).foregroundStyle(AppAppearance.tertiary)
+                .help("Burro connects directly to each provider. Quotas follow the account shown with each provider; local session activity and token estimates belong to this Mac.")
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: Header
+    // MARK: Header and strip
 
-    private var header: some View {
-        HStack(alignment: .bottom, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Usage").font(.system(size: 28, weight: .bold, design: .rounded)).foregroundStyle(AppAppearance.text)
-                Text(summary).font(.system(size: 14)).foregroundStyle(AppAppearance.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+    private var headerControls: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            HStack(spacing: 8) {
+                PillButton(title: "Settings", symbol: "slider.horizontal.3", action: openSettings).help("Usage settings")
+                PillButton(title: usage.checking ? "Refreshing…" : "Refresh", symbol: "arrow.clockwise") {
+                    Task { await usage.refresh(force: true) }
+                }.disabled(usage.checking || !usage.enabled).help("Read every provider’s limits again")
             }
-            Spacer(minLength: 12)
-            VStack(alignment: .trailing, spacing: 8) {
-                HStack(spacing: 8) {
-                    PillButton(title: "Settings", symbol: "slider.horizontal.3", action: openSettings).help("Usage settings")
-                    PillButton(title: usage.checking ? "Refreshing…" : "Refresh", symbol: "arrow.clockwise") {
-                        Task { await usage.refresh(force: true) }
-                    }.disabled(usage.checking || !usage.enabled).help("Read every provider’s limits again")
-                }
-                if let updated = UsagePageText.updated(providers.compactMap(\.updatedAt).max(), now: now) {
-                    Text(updated).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
-                }
+            if let updated = UsagePageText.updated(providers.compactMap(\.updatedAt).max(), now: now) {
+                Text(updated).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
             }
         }
     }
@@ -114,34 +124,49 @@ struct UsagePageContent: View {
             let cost = (usage.week?.pricedRecords ?? 0) > 0 ? ", about \(UsagePageText.cost(today.apiValue))" : ""
             parts.append("Today on this Mac: \(UsagePageText.tokens(today.tokens)) tokens\(cost).")
         }
-        return parts.isEmpty ? "Every limit in one place" : parts.joined(separator: " ")
+        return parts.isEmpty ? "Every limit in one place." : parts.joined(separator: " ")
     }
 
-    // MARK: Alert
+    private var cells: [StatCellData] {
+        UsageComposition.stats(providers: usage.snapshot.availability == .loading ? [] : providers, enabled: usage.enabled,
+                               modelLimits: usage.preferences.modelLimits, pace: usage.preferences.pace, week: usage.week,
+                               scanning: usage.scanningWeek, now: now, calendar: calendar,
+                               cost: UsagePageText.cost, tokens: UsagePageText.tokens).map { stat in
+            StatCellData(id: stat.id, label: stat.label, value: stat.value, muted: stat.unknown, sub: stat.sub, help: stat.help)
+        }
+    }
 
-    private func alertLine(_ alert: UsageAlert, more: Int) -> some View {
-        let left = Int((alert.forecast.left ?? 0).rounded())
-        let reset = UsageClock.reset(alert.forecast.resetsAt, duration: providers.first { $0.id == alert.provider }?
-            .windows.first { $0.id == alert.windowID }?.duration, now: now, calendar: calendar)
-        let lead = alert.forecast.outcome == .usedUp ? "\(alert.title): used up" : "\(alert.title): \(left)% left"
-        var pace: String?
-        if case .runsOut(let date) = alert.forecast.outcome {
-            pace = "at this pace it runs out around \(UsageClock.moment(date, now: now, calendar: calendar))"
-        }
-        return HStack(spacing: 10) {
-            Circle().fill(AppAppearance.amber).frame(width: 8, height: 8).accessibilityHidden(true)
-            (Text(lead + ", " + reset.prefix(1).lowercased() + reset.dropFirst()).fontWeight(.semibold).foregroundColor(AppAppearance.text)
-             + Text(pace.map { " · " + $0 } ?? "").foregroundColor(AppAppearance.secondary))
-                .font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            if more > 0 {
-                Text("+\(more) more low limit\(more == 1 ? "" : "s")").font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
+    // MARK: Limits
+
+    private func limitsPanel(_ alerts: [UsageAlert]) -> some View {
+        Panel(title: "Limits", subtitle: [TextRun(limitsSubtitle)]) {
+            VStack(alignment: .leading, spacing: 0) {
+                if !usage.enabled {
+                    AppEmptyState(title: "Usage is paused", symbol: "pause.circle",
+                                  detail: "Connect your coding accounts to see their limits and reset times.") {
+                        Button("Enable usage") { usage.enabled = true }
+                    }.frame(minHeight: 200)
+                } else if usage.snapshot.availability == .loading {
+                    loading
+                } else if providers.isEmpty {
+                    AppEmptyState("Every provider is paused", symbol: "pause.circle", detail: "Turn one on in Usage settings.").frame(minHeight: 200)
+                } else {
+                    ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
+                        if index > 0 { Rectangle().fill(AppAppearance.separator).frame(height: 1).padding(.vertical, 6) }
+                        UsageLimitCard(usage: usage, provider: provider, alerts: alerts, now: now, calendar: calendar,
+                                       compact: limitsWidth < Self.meterCompactBelow, localHistory: localHistory, framed: false)
+                    }
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { limitsWidth = $0 }
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(AppAppearance.amber.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(AppAppearance.amber.opacity(0.35)))
-        .accessibilityElement(children: .combine)
+    }
+
+    private var limitsSubtitle: String {
+        if !usage.enabled { return "Paused" }
+        let count = providers.count
+        return count == 0 ? "No provider is on" : "What’s left in each window, for \(count) account\(count == 1 ? "" : "s")"
     }
 
     private func messageLine(_ message: String) -> some View {
@@ -156,30 +181,57 @@ struct UsagePageContent: View {
     }
 
     private var loading: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             ForEach(0..<2, id: \.self) { _ in
-                VStack(alignment: .leading, spacing: 16) {
-                    RoundedRectangle(cornerRadius: 4).fill(AppAppearance.raised).frame(width: 160, height: 18)
+                VStack(alignment: .leading, spacing: 12) {
+                    RoundedRectangle(cornerRadius: 4).fill(AppAppearance.raised).frame(width: 160, height: 16)
                     RoundedRectangle(cornerRadius: 6).fill(AppAppearance.raised).frame(height: 12)
                     RoundedRectangle(cornerRadius: 6).fill(AppAppearance.raised).frame(height: 12)
-                }.padding(20).modifier(AppCardSurface())
+                }
             }.accessibilityHidden(true)
             Text("Loading usage limits…").font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
         }
     }
+}
 
-    /// Two cards side by side when wide, stacked when narrow.
-    @ViewBuilder private func pair<A: View, B: View>(firstWeight: CGFloat = 1, @ViewBuilder _ first: () -> A,
-                                                     @ViewBuilder second: () -> B) -> some View {
-        if wide {
-            HStack(alignment: .top, spacing: 16) {
-                first().frame(width: (min(width, 1240) - 56 - 16) * firstWeight / (firstWeight + 1))
-                second().frame(maxWidth: .infinity)
+/// The right-hand panel while some limit is low: each low window, most urgent first, with what is
+/// left (amber), the reset and the "at this pace" guess.
+struct UsageLowLimitsPanel: View {
+    var alerts: [UsageAlert]
+    var providers: [ProviderUsage]
+    var now: Date
+    var calendar: Calendar
+    var body: some View {
+        Panel(title: "Low limits", subtitle: [TextRun("\(alerts.count) limit\(alerts.count == 1 ? "" : "s") running low", .needsYou)]) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(alerts.enumerated()), id: \.element.id) { index, alert in
+                    if index > 0 { Rectangle().fill(AppAppearance.separator).frame(height: 1) }
+                    let text = UsageComposition.alertText(alert, providers: providers, now: now, calendar: calendar)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Circle().fill(AppAppearance.amber).frame(width: 7, height: 7).accessibilityHidden(true)
+                            Text(alert.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(AppAppearance.text).lineLimit(1)
+                            Spacer(minLength: 6)
+                            Text(alert.forecast.outcome == .usedUp ? "Used up" : "\(Int((alert.forecast.left ?? 0).rounded()))% left")
+                                .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(AppAppearance.amber).fixedSize()
+                        }
+                        Text(text.lead.components(separatedBy: ", ").dropFirst().joined(separator: ", ").capitalizedFirst)
+                            .font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).padding(.leading, 15)
+                        if let pace = text.pace {
+                            Text(pace.capitalizedFirst).font(.system(size: 12)).foregroundStyle(AppAppearance.tertiary)
+                                .fixedSize(horizontal: false, vertical: true).padding(.leading, 15)
+                        }
+                    }
+                    .padding(.vertical, 10)
+                    .accessibilityElement(children: .combine)
+                }
             }
-        } else {
-            VStack(alignment: .leading, spacing: 16) { first(); second() }
         }
     }
+}
+
+private extension String {
+    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
 }
 
 /// Number and time words shared by the Usage page's cards.

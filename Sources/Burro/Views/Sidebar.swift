@@ -23,10 +23,11 @@ struct Sidebar: View {
     static let headerHeight: CGFloat = 52
 
     var body: some View {
-        let crew = SidebarCrew.make(store.notchChatSessions, cap: collapsed ? SidebarLayout.railCrewCap : SidebarLayout.crewCap)
+        let chats = store.notchChatSessions
+        let crew = SidebarCrew.make(chats, cap: collapsed ? SidebarLayout.railCrewCap : SidebarLayout.crewCap)
         VStack(alignment: collapsed ? .center : .leading, spacing: 0) {
             header
-            brand.padding(.bottom, collapsed ? 6 : 4)
+            brand(chats).padding(.bottom, collapsed ? 6 : 4)
             ForEach(Array(SidebarLayout.groups.enumerated()), id: \.offset) { _, group in
                 section(group.label, pages: group.pages)
             }
@@ -58,9 +59,12 @@ struct Sidebar: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// Burro's mark and name, and the agents' state in a line ("2 need you · 5 working").
-    private var brand: some View {
-        let summary = MenuBarStatus(store.agentActivity).summary
+    /// Burro's mark and name, and the agents' state in a line ("2 need you · 5 working"), counted
+    /// from Home's own board so it says what Home's sentence says (sub-agents left out, chats
+    /// triage found ending on a question counted as needing you).
+    private func brand(_ chats: [AgentSession]) -> some View {
+        let board = HomeBoard.build(sessions: store.agentActivity.sessions, briefNeeds: store.brief.needsYou, all: chats)
+        let summary = MenuBarStatus(board).summary
         return HStack(spacing: 10) {
             Image(nsImage: BurroBrand.image).renderingMode(.template).resizable().interpolation(.high)
                 .frame(width: 20, height: 20).foregroundStyle(AppAppearance.text)

@@ -18,20 +18,33 @@ import XCTest
             ?? root.appendingPathComponent("dist/screenshots")
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
-        let busy = try health(leftovers: true)
-        let keepAwake = await awake(agents: 2)
-        for (width, height) in [(1440, 1000), (1000, 1250), (700, 1900)] {
-            try render(MacHealthPage(health: busy, keepAwake: keepAwake), width: width, height: height, dark: true,
-                       to: out.appendingPathComponent("health-\(width)-dark.png"))
-        }
-        try render(MacHealthPage(health: busy, keepAwake: keepAwake), width: 1440, height: 1000, dark: false,
-                   to: out.appendingPathComponent("health-1440-light.png"))
-
+        // Content widths of a 1000, 1240 and 1440 pt window beside the sidebar.
         let calm = try health(leftovers: false)
         let off = await awake(agents: nil)
-        try render(MacHealthPage(health: calm, keepAwake: off), width: 1440, height: 900, dark: true, to: out.appendingPathComponent("health-calm-dark.png"))
+        let pressured = try health(leftovers: true, pressure: true)
+        let busy = try health(leftovers: true)
+        let on = await awake(agents: 2)
+        let quiet = try health(leftovers: false)
+        quiet.ignored = ["devServer|ollama|~"]
+        quiet.agents = try health(leftovers: true).agents
+        let states: [(String, MacHealthStore, KeepAwakeStore)] = [("healthy", calm, off), ("pressure", pressured, off),
+                                                                  ("keepawake", busy, on), ("noleftovers", quiet, on)]
+        for (name, store, keep) in states {
+            for width in [935, 1015, 1215] {
+                for dark in [true, false] {
+                    try render(page(store, keep), width: width, dark: dark, to: out.appendingPathComponent("health-\(name)-\(width)-\(dark ? "dark" : "light").png"))
+                }
+            }
+        }
         let loading = MacHealthStore(defaults: try defaults())
-        try render(MacHealthPage(health: loading, keepAwake: off), width: 1440, height: 900, dark: true, to: out.appendingPathComponent("health-loading-dark.png"))
+        try render(page(loading, off), width: 1015, dark: true, to: out.appendingPathComponent("health-loading-1015-dark.png"))
+    }
+
+    /// The page as MacHealthPage lays it out inside its scroll view.
+    private func page(_ health: MacHealthStore, _ keepAwake: KeepAwakeStore) -> some View {
+        MacHealthPageContent(health: health, keepAwake: keepAwake)
+            .padding(.horizontal, 36).padding(.vertical, 28)
+            .modifier(AppTheme())
     }
 
     private func defaults() throws -> UserDefaults {
@@ -41,11 +54,11 @@ import XCTest
     }
 
     /// A store filled by hand: an hour of invented samples, five leftovers (one tied to a chat) and agent processes.
-    private func health(leftovers: Bool) throws -> MacHealthStore {
+    private func health(leftovers: Bool, pressure: Bool = false) throws -> MacHealthStore {
         let store = MacHealthStore(defaults: try defaults())
         let swapNow = leftovers ? 6.2 : 0.0
         let memory = MacHealthSnapshot.Memory(total: 36 * gigabyte, app: UInt64(22.4 * Double(gigabyte)), wired: 4 * gigabyte, compressed: 3 * gigabyte,
-            cached: 4 * gigabyte, free: gigabyte, swapTotal: 7 * gigabyte, swapUsed: UInt64(swapNow * Double(gigabyte)), pressure: .normal)
+            cached: 4 * gigabyte, free: gigabyte, swapTotal: 7 * gigabyte, swapUsed: UInt64(swapNow * Double(gigabyte)), pressure: pressure ? .warning : .normal)
         store.snapshot = MacHealthSnapshot(sampledAt: now, cores: 12, load: [4.1, 3.8, 3.5], cpuBusy: 0.38, memory: memory,
             storage: .init(total: 1_000_000_000_000, available: 212_000_000_000), thermal: .nominal, bootedAt: now.addingTimeInterval(-3 * 86400))
         var history = MacHealthHistory()
@@ -117,23 +130,28 @@ import XCTest
         return store
     }
 
-    private func render<V: View>(_ view: V, width: Int, height: Int, dark: Bool, to url: URL) throws {
-        let size = CGSize(width: width, height: height)
+    private func render<V: View>(_ view: V, width: Int, dark: Bool, to url: URL) throws {
         let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height).background(AppAppearance.background))
+        let host = NSHostingView(rootView: view.frame(width: CGFloat(width)).background(AppAppearance.background))
         host.appearance = appearance
-        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: width, height: 900), styleMask: [.borderless], backing: .buffered, defer: false)
         window.appearance = appearance
         window.contentView = host
-        host.frame.size = size
+        host.frame.size = host.fittingSize
+        window.setContentSize(host.fittingSize)
         host.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        // Widths measured after the first layout (the Left running table) can change the height.
+        host.frame.size = host.fittingSize
+        window.setContentSize(host.fittingSize)
         host.layoutSubtreeIfNeeded()
-        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width * 2, pixelsHigh: height * 2,
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        let bounds = host.bounds
+        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * 2), pixelsHigh: Int(bounds.height * 2),
                                                  bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                                  colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
-        rep.size = size
-        host.cacheDisplay(in: host.bounds, to: rep)
+        rep.size = bounds.size
+        host.cacheDisplay(in: bounds, to: rep)
         try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: url)
     }
 }

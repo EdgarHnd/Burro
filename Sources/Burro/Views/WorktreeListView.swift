@@ -1,5 +1,6 @@
-// The Worktrees page: a header saying what is never removed, a summary strip, filter chips with
-// counts and a sort menu, then one table group per repository with checkboxes, the linked chat,
+// The Worktrees page, in the dashboard layout (WorktreePage: the header sentence with what is never
+// removed and when the list was read, a strip of four numbers, then one joined surface with the
+// filter chips with counts, scope and sort menus, then one table group per repository with checkboxes, the linked chat,
 // a state chip, changes, last activity and size. Ticking rows shows a bulk bar whose "Move to
 // Trash…" opens the existing confirmation (WorktreeCleanupSheet via AppStore.reviewCleanup) with
 // only the rows cleanup eligibility allows; that sheet, AppStore.confirmCleanup and
@@ -31,15 +32,15 @@ struct WorktreeListView: View {
     var body: some View {
         let model = makeModel()
         ScrollView {
-            content(model).padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 28)
-                .frame(maxWidth: 1280).frame(maxWidth: .infinity)
+            content(model).padding(.horizontal, 36).padding(.vertical, 28)
+                .frame(maxWidth: 1240).frame(maxWidth: .infinity)
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if !model.selection.isEmpty {
                 WorktreeBulkBar(model: model, actions: actions(model))
-                    .padding(.horizontal, 28).padding(.bottom, 14)
-                    .frame(maxWidth: 1280).frame(maxWidth: .infinity)
+                    .padding(.horizontal, 36).padding(.bottom, 14)
+                    .frame(maxWidth: 1240).frame(maxWidth: .infinity)
             }
         }
         .background(AppAppearance.background)
@@ -78,73 +79,21 @@ struct WorktreeListView: View {
 
     // MARK: Content
 
-    @ViewBuilder private func content(_ model: WorktreeBoardModel) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
-            header
-            if !store.didScan {
-                loading
-            } else if store.snapshot.worktrees.isEmpty {
-                AppEmptyState(title: "Add your first repository", symbol: "arrow.triangle.branch",
-                              detail: "Burro finds local Codex and Claude workspaces. You can also choose a repository.") {
-                    Button("Add repository…") { store.addRepository() }
-                }.frame(minHeight: 320)
-            } else {
-                WorktreeSummaryStrip(summary: model.summary, idleUncommitted: model.rows.filter { $0.kind == .uncommitted }.count)
-                WorktreeFilterBar(model: model, actions: actions(model))
-                if let scope { scopeLine(scope) }
-                if !store.cleanupBatch.items.isEmpty { CleanupStatusView(store: store) }
-                if model.groups.isEmpty {
-                    AppEmptyState(title: store.cleaningWorktree ? "Cleanup is running" : "No worktrees match",
-                                  symbol: "line.3.horizontal.decrease.circle",
-                                  detail: store.cleaningWorktree ? "You can keep browsing while Burro rechecks and moves the selected folders."
-                                    : "Try another filter, or clear the search above the page.") {
-                        if filter != .all { Button("Show all") { filter = .all } }
-                    }
-                    .frame(minHeight: 220).modifier(AppCardSurface())
-                } else {
-                    WorktreeTableCard(model: model, actions: actions(model), compact: compact)
-                }
-                notices
-            }
+    private func content(_ model: WorktreeBoardModel) -> some View {
+        let data = WorktreePageData(phase: !store.didScan ? .scanning : (store.snapshot.worktrees.isEmpty ? .empty : .board),
+                                    title: scope?.name ?? "Worktrees", scopeName: scope?.name, scanned: scanned, model: model, compact: compact,
+                                    warnings: store.snapshot.warnings, showsCleanupStatus: !store.cleanupBatch.items.isEmpty)
+        return WorktreePage(data: data, actions: actions(model), addRepository: { store.addRepository() },
+                            showEveryRepository: { store.filter = .all }) {
+            CleanupStatusView(store: store)
         }
     }
 
-    private var compact: Bool { width - (inspectedTree == nil ? 0 : 340) < 900 }
-
-    private var header: some View { WorktreePageHeader(title: scope?.name ?? "Worktrees", scanned: scanned) }
+    /// The table's columns need about 924 points (its minimums plus padding); below that it goes compact.
+    private var compact: Bool { WorktreePageData.compact(tableWidth: width - (inspectedTree == nil ? 0 : 340) - 72) }
 
     private var scanned: String {
-        if store.scanning { return "This Mac · scanning…" }
-        guard store.didScan else { return "This Mac" }
-        return "This Mac · scanned " + WorktreeBoardFormat.ago(store.snapshot.scannedAt, now: Date(), calendar: .current)
-    }
-
-    private var loading: some View {
-        VStack(spacing: 14) {
-            ForEach(0..<6, id: \.self) { _ in
-                HStack {
-                    RoundedRectangle(cornerRadius: 3).fill(AppAppearance.raised).frame(width: 220, height: 12)
-                    Spacer()
-                    RoundedRectangle(cornerRadius: 3).fill(AppAppearance.raised).frame(width: 80, height: 12)
-                }
-            }
-            Text("Reading worktrees and agent sessions…").font(.system(size: 12)).foregroundStyle(AppAppearance.secondary)
-        }
-        .padding(20).modifier(AppCardSurface())
-        .accessibilityElement(children: .ignore).accessibilityLabel("Loading worktrees and agent sessions")
-    }
-
-    @ViewBuilder private var notices: some View {
-        if !store.snapshot.warnings.isEmpty {
-            DisclosureGroup("\(store.snapshot.warnings.count) monitoring notice\(store.snapshot.warnings.count == 1 ? "" : "s") · why some rows say Cannot verify") {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(store.snapshot.warnings, id: \.self) {
-                        Text($0).font(.system(size: 12)).foregroundStyle(AppAppearance.secondary).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }.padding(.top, 6)
-            }
-            .font(.system(size: 12)).foregroundStyle(AppAppearance.amber)
-        }
+        WorktreeComposition.scanned(didScan: store.didScan, scanning: store.scanning, scannedAt: store.snapshot.scannedAt, now: Date(), calendar: .current)
     }
 
     // MARK: Scope from Home (a repository or a bench)
@@ -154,12 +103,6 @@ struct WorktreeListView: View {
         case .repository(let path): (URL(fileURLWithPath: path).lastPathComponent, store.filter)
         case .bench(let id): (store.benches.bench(id)?.name ?? "Bench", store.filter)
         default: nil
-        }
-    }
-    private func scopeLine(_ scope: (name: String, filter: WorktreeFilter)) -> some View {
-        HStack(spacing: 8) {
-            Text("Showing only \(scope.name)").font(.system(size: 13)).foregroundStyle(AppAppearance.secondary)
-            Button("Show every repository") { store.filter = .all }.buttonStyle(.link).font(.system(size: 13))
         }
     }
     /// Status filters other pages set (the strip's cleanup button) become this page's chips.

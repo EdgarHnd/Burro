@@ -21,7 +21,7 @@ import XCTest
         return session
     }
 
-    private func model(narrowChats: Bool = false) -> MachinesPageModel {
+    private func model(narrowChats: Bool = false, away: Bool = true, outdated: Bool = true) -> MachinesPageModel {
         let local = [
             chat("Streak ladder config", .waiting, cwd: "/Users/me/Dev/ladder", minutesAgo: 3),
             chat("iOS hang on resume", .working, cwd: "/Users/me/Dev/mobile"),
@@ -35,7 +35,7 @@ import XCTest
             id: MachinesStore.localID, name: "This Mac", reach: .local, os: "macOS 26.2", statusLine: "Online", host: nil,
             chats: local, moreChats: 0, counts: .init(working: 2, needYou: 1),
             harnesses: [
-                MachineHarnessRow(harness: .claude, installed: "2.3.14", latest: "2.3.16", outdated: true, canUpdate: true, updating: false),
+                MachineHarnessRow(harness: .claude, installed: outdated ? "2.3.14" : "2.3.16", latest: "2.3.16", outdated: outdated, canUpdate: outdated, updating: false),
                 MachineHarnessRow(harness: .codex, installed: "0.61.0", latest: "0.61.0", outdated: false, canUpdate: false, updating: false),
             ],
             probing: false, cacheBytes: nil, localCopy: nil, lastError: nil)
@@ -44,26 +44,25 @@ import XCTest
             chats: narrowChats ? [] : remote, moreChats: 0, counts: narrowChats ? .init() : .init(working: 1, needYou: 1),
             harnesses: [
                 MachineHarnessRow(harness: .claude, installed: "2.3.16", latest: "2.3.16", outdated: false, canUpdate: false, updating: false),
-                MachineHarnessRow(harness: .codex, installed: "0.58.2", latest: "0.61.0", outdated: true, canUpdate: true, updating: false),
+                MachineHarnessRow(harness: .codex, installed: outdated ? "0.58.2" : "0.61.0", latest: "0.61.0", outdated: outdated, canUpdate: outdated, updating: false),
             ],
             probing: false, cacheBytes: 84_000_000, localCopy: nil, lastError: nil)
-        let away = MachineCardModel(
+        let awayCard = MachineCardModel(
             id: mini.id.uuidString, name: "Build Mini", reach: .unreachable, os: nil,
             statusLine: "Unreachable since 14:02 · retrying in 30 s · offline on Tailscale since 13:58", host: mini,
             chats: [], moreChats: 0, counts: .init(), harnesses: [], probing: false, cacheBytes: 12_000_000,
             localCopy: .init(chats: 6, lastSynced: now.addingTimeInterval(-3600)), lastError: "Connection timed out.")
         let peer = TailscalePeer(id: "p1", hostName: "pixel-tablet", dnsName: "pixel-tablet.tail4e2a.ts.net", os: "android",
                                  online: false, lastSeen: now.addingTimeInterval(-7200), isSelf: false)
-        return MachinesPageModel(headline: "2 of 3 reachable · 3 chats working · 2 need you", cards: [thisMac, other, away],
+        return MachinesPageModel(headline: "2 of 3 reachable · 3 chats working · 2 need you", cards: away ? [thisMac, other, awayCard] : [thisMac, other],
                                  tailnet: [peer], tailscaleInstalled: true, message: nil, checking: false, attaching: [])
     }
 
+    /// The page as MachinesView lays it out inside its scroll view.
     private func page(_ model: MachinesPageModel) -> some View {
-        VStack(spacing: 0) {
-            MachinesHeader(model: model, actions: MachinesActions())
-            MachinesPage(model: model, actions: MachinesActions()).padding(.horizontal, 30).padding(.top, 6).padding(.bottom, 28)
-        }
-        .frame(maxWidth: 1340).frame(maxWidth: .infinity)
+        MachinesPage(model: model, actions: MachinesActions())
+            .padding(.horizontal, 36).padding(.vertical, 28)
+            .modifier(AppTheme())
     }
 
     func testRenderMachinesSnapshots() throws {
@@ -72,16 +71,23 @@ import XCTest
             ?? URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent("dist/screenshots")
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
-        try render(page(model()), width: 1440, dark: true, to: out.appendingPathComponent("machines-1440-dark.png"))
-        try render(page(model()), width: 1440, dark: false, to: out.appendingPathComponent("machines-1440-light.png"))
-        try render(page(model(narrowChats: true)), width: 1100, dark: true, to: out.appendingPathComponent("machines-1100-dark.png"))
-        try render(page(model()), width: 760, dark: true, to: out.appendingPathComponent("machines-760-dark.png"))
-        var single = model()
+        var single = model(outdated: false)
         single.cards = [single.cards[0]]
         single.tailnet = []
         single.headline = "This Mac only · 2 chats working · 1 needs you"
         single.message = "Claude Code updated: 2.3.16"
-        try render(page(single), width: 1000, dark: true, to: out.appendingPathComponent("machines-single-dark.png"))
+        // All reachable and up to date; one unreachable; tools out of date; only this Mac.
+        let states: [(String, MachinesPageModel)] = [("reachable", model(away: false, outdated: false)), ("unreachable", model(outdated: false)),
+                                                     ("outdated", model(narrowChats: true, away: false)), ("single", single)]
+        // Content widths of a 1000, 1240 and 1440 pt window beside the sidebar.
+        for (name, state) in states {
+            for width: CGFloat in [935, 1015, 1215] {
+                for dark in [true, false] {
+                    try render(page(state), width: width, dark: dark, to: out.appendingPathComponent("machines-\(name)-\(Int(width))-\(dark ? "dark" : "light").png"))
+                }
+            }
+        }
+        try render(page(model()), width: 640, dark: true, to: out.appendingPathComponent("machines-narrow-640-dark.png"))
     }
 
     private func render<V: View>(_ view: V, width: CGFloat, dark: Bool, to url: URL) throws {
