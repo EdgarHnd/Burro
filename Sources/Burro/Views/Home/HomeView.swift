@@ -3,7 +3,7 @@
 // (HomeAttention.swift; one place per chat), then the main project, benches and projects as
 // before. Right column: Ask the Orchestrator (composer and triage footer), Today so far (with
 // activity tracking on), To-dos, Machines, Notes and the Scratchpad. Below about 900 pt the right
-// column's cards move under Ready to read. New chat lives in the top bar.
+// column's cards move under Ready to read. New chat lives in the sidebar.
 // Read-only like the rest of monitoring. While on screen it keeps Mac Health sampling, syncs
 // to-dos once a minute, rescans project activity every 90 seconds, and every 2 minutes (with
 // tracking on) asks TodayStore to re-read today's tracked day once (shared by Today so far and

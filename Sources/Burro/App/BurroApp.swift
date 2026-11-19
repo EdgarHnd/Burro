@@ -56,6 +56,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     .keyboardShortcut("r").disabled(store.refreshingCurrentPage)
                 Button("Show Agent Notch") { notch.show() }.keyboardShortcut("b", modifiers: [.command, .shift])
             }
+            // View ▸ Hide/Show Sidebar; in a narrow window it opens the sidebar only until it widens.
+            CommandGroup(replacing: .sidebar) {
+                Button(store.sidebarIsCollapsed ? "Show Sidebar" : "Hide Sidebar") { store.toggleSidebar() }
+                    .keyboardShortcut("s", modifiers: [.command, .control])
+            }
             CommandMenu("Go") {
                 ForEach(AppPage.navigable) { page in
                     Button(page.title) { store.go(to: page); notch.openDashboardWindow() }.keyboardShortcut(page.shortcut)
@@ -91,7 +96,8 @@ private struct DesktopRootView: View {
             .background(WindowProbe(onAttach: { window in
                 notch.registerDashboard(window)
                 AppLaunch.shared.windowAppeared(window) { open(id: "main") }
-                // The top bar replaces the title bar; macOS 14 has no drag gesture, so drag by the background.
+                // The sidebar header and the strip above the page replace the title bar; macOS 14 has no drag
+                // gesture, so drag by the background.
                 if #unavailable(macOS 15.0) { window.isMovableByWindowBackground = true }
             }, onVisibilityChange: store.dashboardVisibilityChanged))
             // Normally started at launch already; this only covers a window that comes first.

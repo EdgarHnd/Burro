@@ -113,6 +113,12 @@ import BurroCore
     }
     var filter: WorktreeFilter = .all
     var page: AppPage = .home { didSet { pageChanged(from: oldValue) } }
+    /// The sidebar as an icon rail by choice (its header button, View ▸ Hide Sidebar); saved.
+    var sidebarCollapsed: Bool { didSet { defaults.set(sidebarCollapsed, forKey: SidebarLayout.collapsedKey) } }
+    /// The window is too narrow for the full sidebar (AppShell reports it); never saved.
+    var sidebarNarrow = false
+    /// Opened while the window was narrow; forgotten when it widens.
+    var sidebarExpandedWhileNarrow = false
     /// Pages shown so far, for Back and Forward (AppStore+PageHistory.swift).
     var pageHistory = PageHistory<AppPage>(start: .home)
     @ObservationIgnored var pageChosenDirectly = false
@@ -178,6 +184,7 @@ import BurroCore
         today = TodayStore(defaults: defaults, tracker: activityTracker)
         notesShortcut = defaults.object(forKey: "notes.shortcut") as? Bool ?? true
         mainProjectPath = defaults.string(forKey: "home.mainProject")
+        sidebarCollapsed = defaults.bool(forKey: SidebarLayout.collapsedKey)
         self.notes = notes ?? NotesStore(folder: FileManager.default.temporaryDirectory.appendingPathComponent("burro-notes-\(UUID().uuidString)"))
         self.cleanupBatch = cleanupBatch ?? CleanupBatchStore()
         usage = UsageStore(defaults: defaults)

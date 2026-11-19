@@ -1,5 +1,6 @@
-// The desktop shell: Home is the landing page; every other page opens from it, the top bar,
-// or ⌘1–⌘8 (Home, Orchestrator, Today, Chats, Worktrees, Machines, Usage, Mac Health).
+// The desktop window: Home is the landing page; every other page opens from it, the sidebar,
+// or ⌘1–⌘8 (Home, Orchestrator, Today, Chats, Worktrees, Machines, Usage, Mac Health). AppShell
+// draws the sidebar and the strip above the page; this view picks the page and owns the sheets.
 import SwiftUI
 import BurroCore
 
@@ -7,8 +8,7 @@ struct ContentView: View {
     @Bindable var store: AppStore
     var notch: NotchController
     var body: some View {
-        VStack(spacing: 0) {
-            TopBar(store: store, notch: notch)
+        AppShell(store: store) {
             Group {
                 switch store.page {
                 case .home: HomeView(store: store, notch: notch)
@@ -22,9 +22,7 @@ struct ContentView: View {
                 case .timeline: ShippedTimelineView(store: store)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .ignoresSafeArea(.container, edges: .top)
         .navigationTitle(store.page == .home ? "Burro" : store.page.title)
         .toolbar(.hidden, for: .windowToolbar)
         .sheet(item: $store.cleanupTarget) { request in

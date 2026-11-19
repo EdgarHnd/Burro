@@ -4,10 +4,14 @@ import XCTest
 @testable import Burro
 @testable import BurroCore
 
-/// Renders the top bar, the compact and expanded notch and the menu-bar popover with invented
-/// chats to PNGs for a visual check. Skipped unless BURRO_CHROME_SNAPSHOTS=1; writes to
-/// dist/screenshots (gitignored) or BURRO_SNAPSHOT_DIR. Draws offscreen; never sends, checks or
-/// reads a real chat (drafts, questions, checks and turn times come from a fixture).
+/// Renders the window (sidebar, strip and page), the compact and expanded notch and the menu-bar
+/// popover with invented chats to PNGs for a visual check. Skipped unless BURRO_CHROME_SNAPSHOTS=1;
+/// writes to dist/screenshots (gitignored) or BURRO_SNAPSHOT_DIR. Draws offscreen; never sends,
+/// checks or reads a real chat (drafts, questions, checks and turn times come from a fixture). The
+/// window renders put AppShell around side-effect-free pages: a Home stand-in built from Home's
+/// plain-value views over the aquarium, the Chats list with no chat open (so no transcript is read
+/// and no Claude check runs), and Worktrees over invented worktrees. Grey dots stand in for the
+/// traffic lights, which an offscreen window doesn't draw.
 @MainActor final class ChromeSnapshotTests: XCTestCase {
     private let now = Date()
 
@@ -59,14 +63,50 @@ import XCTest
 
         for dark in [true, false] {
             let suffix = dark ? "dark" : "light"
-            try render(TopBar(store: store, notch: notch), size: CGSize(width: 1440, height: 52), dark: dark, to: out.appendingPathComponent("chrome-topbar-1440-\(suffix).png"))
-            try render(TopBar(store: store, notch: notch), size: CGSize(width: 1000, height: 52), dark: dark, to: out.appendingPathComponent("chrome-topbar-1000-\(suffix).png"))
             try render(MenuBarPopover(store: store, notch: notch, focusedToday: 4 * 3600 + 4 * 60, draftCount: 2), size: nil, dark: dark,
                        to: out.appendingPathComponent("chrome-menubar-\(suffix).png"))
         }
-        store.page = .worktrees
-        try render(TopBar(store: store, notch: notch), size: CGSize(width: 1000, height: 52), dark: true, to: out.appendingPathComponent("chrome-topbar-1000-worktrees-dark.png"))
-        store.page = .home
+
+        // The window: Home, Chats and Worktrees at a roomy and the minimum size, dark and light.
+        // 1000 points is under SidebarLayout's narrow threshold, so those show the rail.
+        let window = try makeStore(sessions)
+        window.didCheckAgents = false // Chats: keeps the no-chat pane from looking a chat up.
+        window.remoteSelection = "fixture:none"
+        window.didScan = true
+        window.snapshot = ScanSnapshot(worktrees: worktrees, agents: [], warnings: [], scannedAt: now, duration: 0.4)
+        let sizes = [CGSize(width: 1440, height: 900), CGSize(width: 1000, height: 700)]
+        for dark in [true, false] {
+            let suffix = dark ? "dark" : "light"
+            for size in sizes {
+                for page in [AppPage.home, .remote, .worktrees] {
+                    window.go(to: page)
+                    try render(shell(window, page: page), size: size, dark: dark,
+                               to: out.appendingPathComponent("chrome-window-\(page.rawValue)-\(Int(size.width))-\(suffix).png"))
+                }
+            }
+        }
+        // Collapsed by choice at full width, after a jump (the back pill), and the full sidebar alone.
+        window.go(to: .today)
+        window.page = .timeline
+        window.sidebarCollapsed = true
+        try render(shell(window, page: .home), size: sizes[0], dark: true, to: out.appendingPathComponent("chrome-window-rail-timeline-1440-dark.png"))
+        window.sidebarCollapsed = false
+        window.go(to: .remote)
+        for dark in [true, false] {
+            try render(Sidebar(store: window, collapsed: false, toggle: {}).frame(width: SidebarLayout.fullWidth), size: CGSize(width: SidebarLayout.fullWidth, height: 900),
+                       dark: dark, to: out.appendingPathComponent("chrome-sidebar-\(dark ? "dark" : "light").png"))
+        }
+        // The crew empty, and longer than its cap ("Show all N in Chats"), full and as a rail.
+        let quiet = try makeStore([])
+        try render(shell(quiet, page: .home), size: sizes[0], dark: false, to: out.appendingPathComponent("chrome-window-crew-empty-1440-light.png"))
+        let crowd = try makeStore(sessions + (1...9).map { index in
+            chat("codex:9\(index)999999-9999-4999-8999-99999999999\(index)", "Background task \(index): long running migration step", index % 2 == 0 ? .codex : .claude,
+                 .working, folder: "focustown", minutesAgo: Double(index * 7))
+        })
+        try render(Sidebar(store: crowd, collapsed: false, toggle: {}).frame(width: SidebarLayout.fullWidth), size: CGSize(width: SidebarLayout.fullWidth, height: 900),
+                   dark: true, to: out.appendingPathComponent("chrome-sidebar-crew-long-dark.png"))
+        try render(Sidebar(store: crowd, collapsed: true, toggle: {}).frame(width: SidebarLayout.railWidth), size: CGSize(width: SidebarLayout.railWidth, height: 900),
+                   dark: true, to: out.appendingPathComponent("chrome-rail-crew-long-dark.png"))
 
         // Expanded: needs you + working, then working only, then nothing but results to read.
         try renderExpanded(store, name: "chrome-notch-expanded", out: out)
@@ -88,6 +128,81 @@ import XCTest
                            background: Color(white: 0.55), to: out.appendingPathComponent("chrome-notch-compact-\(name)-\(safeTop > 0 ? "notch" : "flat").png"))
             }
         }
+    }
+
+    private var worktrees: [Worktree] {
+        func tree(_ repo: String, _ branch: String, state: AgentState?, changed: Int = 0, hoursAgo: Double, primary: Bool = false) -> Worktree {
+            let path = "/sample/\(repo)/\(branch.replacingOccurrences(of: "/", with: "-"))"
+            var facts = GitFacts()
+            facts.base = "origin/main"; facts.changed = changed; facts.merged = changed == 0; facts.lastCommit = now.addingTimeInterval(-hoursAgo * 3600)
+            let agents = state.map { [AgentSession(id: UUID().uuidString, provider: .claude, title: branch, cwd: path, state: $0,
+                                                   updatedAt: now.addingTimeInterval(-hoursAgo * 3600), evidence: "fixture")] } ?? []
+            return Worktree(path: path, repository: repo, repositoryPath: "/sample/\(repo)/main", branch: branch,
+                            head: String(repeating: "c", count: 40), isPrimary: primary, isLocked: false, isMissing: false,
+                            isPrunable: false, facts: facts, agents: agents, processes: [], protectedByUser: false,
+                            assessment: Assessment(level: .keep, reasons: []))
+        }
+        return [tree("lighthouse", "main", state: nil, hoursAgo: 30, primary: true),
+                tree("lighthouse", "feat/tide-tables", state: .working, changed: 6, hoursAgo: 0.2),
+                tree("lighthouse", "fix/lamp-flicker", state: .idle, changed: 2, hoursAgo: 3),
+                tree("lighthouse", "release/2.4-notes", state: .waiting, hoursAgo: 1),
+                tree("ledger", "main", state: nil, hoursAgo: 50, primary: true),
+                tree("ledger", "feat/csv-import", state: nil, hoursAgo: 96)]
+    }
+
+    /// AppShell around a page that starts nothing, with stand-in traffic lights.
+    private func shell(_ store: AppStore, page: AppPage) -> some View {
+        AppShell(store: store) {
+            switch page {
+            case .remote: ChatsView(store: store)
+            case .worktrees: WorktreeListView(store: store)
+            default: self.homeStandIn(store)
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            HStack(spacing: 8) { ForEach(0..<3, id: \.self) { _ in Circle().fill(Color.gray.opacity(0.7)).frame(width: 12, height: 12) } }
+                .padding(.leading, 14).padding(.top, 10)
+        }
+        .modifier(AppTheme())
+    }
+
+    /// Home's cover and chat sections from plain values over the aquarium, laid out as HomeView does
+    /// (HomeView itself would check Claude chats and read the Orchestrator's history).
+    private func homeStandIn(_ store: AppStore) -> some View {
+        let summary = store.homeSummary
+        let fish = AquariumFish.school(running: summary.running, waiting: summary.needsYou, scheduled: summary.scheduled, today: summary.today)
+        let board = HomeBoardData(
+            needsYou: [HomeNeedsCardData(id: "a", title: "Streak ladder config", tags: ["This Mac · focustown", "Codex · gpt-5.5"],
+                                         when: "asked 4 min ago", message: "Merge #412 into staging now that CI is green, or wait for the device check?",
+                                         draft: HomeDraftData(text: "Merge it now, then run the device check on staging.", label: "Draft", sendHelp: "Send"),
+                                         handOff: nil, dismissable: true),
+                       HomeNeedsCardData(id: "b", title: "Support dashboard alerts", tags: ["This Mac · support-console", "Claude · Opus 5.5"],
+                                         when: "waiting 1 min", message: "Waiting for your approval", draft: nil, handOff: "Open in Claude", dismissable: false)],
+            needsTotal: 2,
+            working: [HomeWorkingCardData(id: "w1", title: "iOS hang on resume", state: "Working in focustown", machine: "This Mac", time: "turn 18 min", stop: .stop),
+                      HomeWorkingCardData(id: "w2", title: "Godot shader warm-up", state: "Working in autumn-scene", machine: "This Mac", time: "turn 41 min", stop: .stop),
+                      HomeWorkingCardData(id: "w3", title: "Android 2.2.24 release notes", state: "Working in focustown", machine: "This Mac", time: "turn 1 min", stop: .stop)],
+            workingTotal: 3,
+            toRead: [HomeReadRowData(id: "r1", title: "Twitter link setup", outcome: "Opened PR #1412, tests pass.", time: "21:17"),
+                     HomeReadRowData(id: "r2", title: "Study with friends layout", outcome: "Three layout options written up.", time: "20:20")],
+            toReadTotal: 2)
+        return GeometryReader { geometry in
+            ZStack(alignment: .top) {
+                CoverBackdrop(running: summary.counts.running, waiting: summary.counts.waiting, fish: fish, hover: AquariumHover(), animate: false)
+                let wide = geometry.size.width >= HomeView.twoColumnWidth
+                let left = (min(geometry.size.width, 1220) - 56) - (wide ? HomeView.sideWidth + 28 : 0)
+                HStack(alignment: .top, spacing: 28) {
+                    VStack(alignment: .leading, spacing: 26) {
+                        HomeCover(sentence: HomeBoard.sentence(needsYou: 2, working: 3, toRead: 2), now: self.now)
+                        HomeBoardContent(data: board, actions: HomeBoardActions(), columns: left >= 780 ? 3 : left >= 460 ? 2 : 1)
+                    }
+                    if wide { Color.clear.frame(width: HomeView.sideWidth, height: 1) }
+                }
+                .padding(.horizontal, 28).padding(.top, 34)
+                .frame(maxWidth: 1220).frame(maxWidth: .infinity)
+            }
+        }
+        .background(AppAppearance.background)
     }
 
     private func notchView(_ store: AppStore, _ presentation: NotchPresentation, compact: Bool) -> NotchView {

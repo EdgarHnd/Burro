@@ -1,7 +1,7 @@
 // Back and Forward between pages. Every change of `page` is recorded, wherever it comes from;
-// changes made through `go(to:)` (the top bar, ⌘1–⌘8, the menu bar) count as chosen directly,
-// and anything else (opening a chat from Today, a Home tile) counts as a jump, so the top bar
-// can offer a way back to where the jump started.
+// changes made through `go(to:)` (the sidebar, ⌘1–⌘8, the menu bar) count as chosen directly,
+// and anything else (opening a chat from Today, a Home tile) counts as a jump, so the strip above
+// the page can offer a way back to where the jump started.
 import BurroCore
 
 extension AppStore {
@@ -17,7 +17,7 @@ extension AppStore {
     }
     func goBack() { if let target = pageHistory.back() { go(to: target) } }
     func goForward() { if let target = pageHistory.forward() { go(to: target) } }
-    /// The page the top bar's back pill returns to: Today from the Timeline, otherwise where a jump started.
+    /// The page the strip's back pill returns to: Today from the Timeline, otherwise where a jump started.
     var backPillTarget: AppPage? {
         if page == .timeline { return .today }
         return pageHistory.jumpOrigin

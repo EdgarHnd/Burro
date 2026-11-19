@@ -240,8 +240,9 @@ private struct ChatDetail: View {
                             ? ChatHandoff.card(plan: plan, hasURL: session.chatURL != nil).action : nil,
                          onSent: afterSend, echo: { loader.echo($0) })
             }
-            // The details panel, when there's room for it beside the conversation.
-            if showInspector && geometry.size.width > 900 {
+            // The details panel, when there's room for it beside the conversation (a 1440-point
+            // window with the full sidebar leaves this column about 890).
+            if showInspector && geometry.size.width > 860 {
                 ChatInspector(store: store, session: session, transcript: loader.transcript)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }

@@ -1,7 +1,8 @@
 // What Burro's menu-bar item says at a glance, and the chats its menu lists. Idle shows the icon
 // alone; while agents run it shows how many; while a chat is waiting on you it switches to a
 // "needs you" glyph with the number waiting (no colour: menu-bar items are monochrome). The menu
-// lists the newest chats waiting on you, skipping remote ones whose machine has gone quiet.
+// lists the newest chats waiting on you, skipping remote ones whose machine has gone quiet. The
+// window sidebar shows the same state as a line under its name (`summary`).
 import Foundation
 
 public enum MenuBarStatus: Equatable, Sendable {
@@ -31,6 +32,16 @@ public enum MenuBarStatus: Equatable, Sendable {
         case .running(let running): return "Burro: \(running) running"
         case .needsYou(let waiting, let running):
             return "Burro: \(waiting) need\(waiting == 1 ? "s" : "") you" + (running > 0 ? ", \(running) running" : "")
+        }
+    }
+
+    /// The same state in one short line, for the window sidebar's subtitle under "Burro".
+    public var summary: String {
+        switch self {
+        case .idle: return "All quiet"
+        case .running(let running): return "\(running) working"
+        case .needsYou(let waiting, let running):
+            return "\(waiting) need\(waiting == 1 ? "s" : "") you" + (running > 0 ? " · \(running) working" : "")
         }
     }
 

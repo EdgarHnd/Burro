@@ -8,7 +8,7 @@
 // through the ticked rows there. Sizes and repository health are measured by WorktreeInsightsStore
 // only while this page is on screen; "Run git gc" asks first and never runs by itself.
 // Home's repository and bench links (store.filter) scope the page, as does the scope menu beside
-// the sort menu (All repositories, a bench, a repository); the top bar's search filters it. Other
+// the sort menu (All repositories, a bench, a repository); the search field in the strip above the page filters it. Other
 // pages' status filters become this page's chips (Protected included).
 import AppKit
 import SwiftUI
@@ -97,7 +97,7 @@ struct WorktreeListView: View {
                     AppEmptyState(title: store.cleaningWorktree ? "Cleanup is running" : "No worktrees match",
                                   symbol: "line.3.horizontal.decrease.circle",
                                   detail: store.cleaningWorktree ? "You can keep browsing while Burro rechecks and moves the selected folders."
-                                    : "Try another filter, or clear the search in the top bar.") {
+                                    : "Try another filter, or clear the search above the page.") {
                         if filter != .all { Button("Show all") { filter = .all } }
                     }
                     .frame(minHeight: 220).modifier(AppCardSurface())
@@ -162,7 +162,7 @@ struct WorktreeListView: View {
             Button("Show every repository") { store.filter = .all }.buttonStyle(.link).font(.system(size: 13))
         }
     }
-    /// Status filters other pages set (the top bar's cleanup button) become this page's chips.
+    /// Status filters other pages set (the strip's cleanup button) become this page's chips.
     private func adoptStoreFilter() {
         switch store.filter {
         case .cleanup, .candidates: filter = .safe; store.filter = .all

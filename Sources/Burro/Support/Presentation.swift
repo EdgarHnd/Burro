@@ -2,12 +2,12 @@
 import SwiftUI
 import BurroCore
 
-/// Top-level destinations. Home is the landing page; the others open from it, the top bar or ⌘1–⌘8
+/// Top-level destinations. Home is the landing page; the others open from it, the sidebar or ⌘1–⌘8
 /// (Timeline has no shortcut: it opens from Today's Shipped section).
 enum AppPage: String, CaseIterable, Identifiable, Hashable {
     case home, orchestrator, today, worktrees, machines, usage, health, remote, timeline
     var id: String { rawValue }
-    /// Pages in the top bar, in ⌘1–⌘8 order.
+    /// Pages in the sidebar, in ⌘1–⌘8 order (SidebarLayout.groups splits them into sections).
     static let navigable: [AppPage] = [.home, .orchestrator, .today, .remote, .worktrees, .machines, .usage, .health]
     var title: String {
         switch self {

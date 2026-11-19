@@ -1,14 +1,14 @@
 // A browser-style list of the pages the window has shown, for Back (⌘[) and Forward (⌘]).
 // Visiting the page already on screen changes nothing; visiting a new page drops anything ahead
 // of the current position. Each entry remembers whether it was reached by a jump from inside a
-// page (opening a chat from Today, say) rather than from the top bar, so the bar can offer a
-// way back to where that jump started. The list keeps at most `limit` entries.
+// page (opening a chat from Today, say) rather than from the sidebar, so the strip above the page can
+// offer a way back to where that jump started. The list keeps at most `limit` entries.
 import Foundation
 
 public struct PageHistory<Page: Hashable & Sendable>: Equatable, Sendable {
     public struct Entry: Equatable, Sendable {
         public var page: Page
-        /// Reached from a link inside a page rather than from the top bar, a shortcut or Back.
+        /// Reached from a link inside a page rather than from the sidebar, a shortcut or Back.
         public var jump: Bool
     }
     public private(set) var entries: [Entry]

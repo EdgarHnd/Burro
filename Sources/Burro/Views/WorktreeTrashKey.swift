@@ -1,6 +1,6 @@
 // ⌘⌫ for the Worktrees bulk bar's "Move to Trash…", without a window-wide key equivalent: a local
 // key monitor, installed only while the bulk bar is in a window, acts on ⌘⌫ in that window only
-// when no text field or text editor is being edited (the top bar's search, a sheet's field, the
+// when no text field or text editor is being edited (the strip's search, a sheet's field, the
 // inspector). Otherwise the key goes on to the field as usual. It only opens the existing
 // confirmation; nothing is moved without confirming there.
 import AppKit
